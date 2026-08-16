@@ -26,7 +26,11 @@ class LinuxStartupSmokeTests(unittest.TestCase):
         worker_lock.release = MagicMock()
         worker_lock.is_alive.return_value = True
 
-        with patch.object(app_main.argparse.ArgumentParser, "parse_args",
+        with patch.dict(os.environ, {
+            "TELEGRAM_BOT_TOKEN": "linux-smoke-test-token",
+            "TELEGRAM_CHAT_ID": "linux-smoke-test-chat",
+        }), \
+             patch.object(app_main.argparse.ArgumentParser, "parse_args",
                           return_value=SimpleNamespace(market="US")), \
              patch.object(app_main, "load_accounts", return_value=[ctx]), \
              patch.object(app_main, "TelegramController", return_value=telegram), \
