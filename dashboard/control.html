@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Kiwoom Autotrade Controller</title>
+<style>body{font:15px system-ui;margin:28px;max-width:680px}button,select{font:inherit;padding:7px 10px;margin:4px 0}select{width:100%;min-height:92px}#state{font-weight:600}a{color:#2563eb}</style>
+<h1>Kiwoom Autotrade</h1>
+<p>Select one or both paper accounts. Korean and US engines run independently; real accounts remain blocked unless explicitly allowed in the server environment.</p>
+<label for="accounts">Accounts</label>
+<select id="accounts" multiple></select><br>
+<button onclick="start()">Start selected accounts</button>
+<button id="stopButton" onclick="stopSelected()">Stop selected accounts</button>
+<button onclick="refresh()">Refresh status</button>
+<p id="state">Loading…</p>
+<p><a href="/dashboard/index.html">Open trading dashboard</a></p>
+<script>
+const accounts=document.getElementById('accounts'), state=document.getElementById('state');
+async function call(url, options={}){const r=await fetch(url,options); const x=await r.json(); await refresh(); if(!r.ok) throw new Error(x.error||x.reason||'Request failed'); return x}
+async function loadAccounts(){const x=await (await fetch('/api/accounts')).json(); accounts.innerHTML=(x.accounts||[]).map(a=>`<option value="${a.id}" ${a.defaultAccounts?.includes(a.id)?'selected':''}>${a.id} — ${a.market} ${a.mode}</option>`).join('')}
+async function start(){const selected=[...accounts.selectedOptions].map(o=>o.value); const x=await call('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:selected})}); if(x.error) alert(x.error)}
+async function stopSelected(){
+  const selected=[...accounts.selectedOptions].map(o=>o.value);
+  if(!selected.length){alert('Select at least one account to stop.'); return;}
+  const button=document.getElementById('stopButton');
+  button.disabled=true; button.textContent='Stopping...'; state.textContent='Stopping selected account(s)...';
+  try{
+    const x=await call('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accounts:selected})});
+    const failed=(x.stops||[]).filter(item=>!item.stopped);
+    state.textContent=failed.length ? `Stop incomplete: ${failed.map(item=>item.account).join(', ')}` : 'Stopped: '+selected.join(', ');
+  }catch(error){
+    state.textContent='Stop failed: '+error.message;
+  }finally{
+    button.disabled=false; button.textContent='Stop selected accounts';
+  }
+}
+async function refresh(){const x=await (await fetch('/api/status')).json(); state.textContent=(x.running?'Running':'Stopped')+' · accounts: '+((x.accounts||[]).join(', ')||'none')}
+// Status is refreshed after Start/Stop and by this explicit control.  The
+// controller never needs a background status-polling timer.
+loadAccounts().then(refresh);
+</script>

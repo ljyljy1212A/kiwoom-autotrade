@@ -1,0 +1,2253 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>키움 무한매수 자동매매 대시보드</title>
+<style>
+  :root{
+    --win-bg:#f2f3f5; --panel:#ffffff; --panel-head:#eef0f3; --line:#d6d9de; --line-strong:#b9bec6;
+    --text:#1f2328; --dim:#6b7280; --blue:#2f6fed; --blue-dark:#1d4fc4;
+    --buy:#d92d3f; --buy-bg:#fff3f4; --sell:#2563eb; --sell-bg:#eef4ff;
+    --green:#16a34a; --gray-btn:#eef0f3; --titlebar:#e9ebee;
+    --mono:'Consolas','D2Coding','Malgun Gothic',monospace;
+    --sans:'Malgun Gothic','Apple SD Gothic Neo','Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--win-bg);color:var(--text);font-family:var(--sans);font-size:13px;}
+  a{color:var(--blue);}
+  .desktop{padding:18px 18px 64px; min-height:100vh;}
+
+  /* ---------- generic "window" chrome ---------- */
+  .app-window{background:var(--panel); border:1px solid var(--line-strong); border-radius:4px;
+    box-shadow:0 6px 22px rgba(20,24,33,.10); margin:0 auto 18px; max-width:1180px; overflow:hidden; display:none;}
+  .app-window.active{display:block;}
+  .win-titlebar{display:flex; align-items:center; justify-content:space-between; background:var(--titlebar);
+    border-bottom:1px solid var(--line-strong); padding:0 8px 0 10px; height:30px;}
+  .win-titlebar .t-left{display:flex; align-items:center; gap:6px; font-size:12.5px; color:#333;}
+  .win-titlebar .t-left .num{display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+    background:#4a5568; color:#fff; font-size:10px; border-radius:2px;}
+  .win-controls{display:flex; gap:2px;}
+  .win-controls button{width:26px; height:22px; border:none; background:transparent; color:#555; font-size:11px; cursor:pointer; border-radius:2px;}
+  .win-controls button:hover{background:#dde1e6;}
+  .win-controls button.close:hover{background:#e5484d; color:#fff;}
+
+  .tabbar{display:flex; border-bottom:1px solid var(--line-strong); background:#f7f8fa; overflow-x:auto;}
+  .tabbar .tab{padding:9px 16px; font-size:12.5px; color:#555; cursor:pointer; white-space:nowrap; border-right:1px solid var(--line); border-bottom:2px solid transparent;}
+  .tabbar .tab.active{background:#fff; color:var(--blue); font-weight:700; border-bottom:2px solid var(--blue);}
+  .tabbar .tab:hover:not(.active){background:#eef0f3;}
+
+  .infobar{background:#fbf6e3; border-bottom:1px solid #ecdfa0; padding:9px 14px; font-size:12px; color:#5a4d18; line-height:1.6;}
+  .infobar b{color:#2f6fed;}
+
+  .win-body{padding:12px 14px;}
+  .win-actions-bottom{display:flex; justify-content:flex-end; gap:8px; padding:10px 14px; border-top:1px solid var(--line); background:#f7f8fa;}
+
+  button{font-family:var(--sans); cursor:pointer;}
+  .btn{border:1px solid var(--line-strong); background:var(--gray-btn); color:#333; font-size:12.5px; padding:6px 14px; border-radius:3px;}
+  .btn:hover{background:#e2e5ea;}
+  .btn-primary{background:var(--blue); border-color:var(--blue-dark); color:#fff;}
+  .btn-primary:hover{background:var(--blue-dark);}
+  .btn-sm{padding:3px 9px; font-size:11.5px;}
+
+  /* ---------- WIN1 : 자동전략 설정 ---------- */
+  .split{display:grid; grid-template-columns:230px 1fr; gap:12px;}
+  .list-panel{border:1px solid var(--line); border-radius:3px; overflow:hidden;}
+  .list-panel .cap{background:var(--panel-head); border-bottom:1px solid var(--line); padding:7px 10px; font-size:12px; font-weight:700;}
+  .list-table{width:100%; border-collapse:collapse; font-size:12px;}
+  .list-table th{background:#f7f8fa; color:var(--dim); font-weight:600; text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:11px;}
+  .list-table td{padding:6px 8px; border-bottom:1px solid #eef0f2; cursor:pointer;}
+  .list-table tr.selected td{background:#e8f0ff;}
+  .list-table tr:hover td{background:#f2f6fc;}
+  .list-empty{padding:16px 10px; color:var(--dim); font-size:11.5px; text-align:center;}
+  .list-toolbar{display:flex; gap:6px; padding:8px; border-top:1px solid var(--line); background:#f7f8fa; flex-wrap:wrap;}
+  .holdings-picker{margin-top:12px; border-top:1px solid var(--line); padding-top:10px;}
+  .holdings-picker .cap{font-size:12px;font-weight:700;margin-bottom:6px;}
+  .holdings-picker button{width:100%;text-align:left;border:1px solid var(--line);background:#fff;padding:7px 8px;margin:3px 0;border-radius:3px;cursor:pointer;}
+  .holdings-picker button:hover,.holdings-picker button.selected{background:#e8f0ff;border-color:#9dbcf3;}
+  .ticker-badge{font-family:var(--mono);font-weight:700;color:var(--blue);background:#e8f0ff;border:1px solid #c8dcfa;border-radius:12px;padding:3px 8px;}
+
+  .preview-panel{border:1px solid var(--line); border-radius:3px;}
+  .preview-head{display:flex; align-items:center; justify-content:space-between; background:var(--panel-head);
+    border-bottom:1px solid var(--line); padding:7px 10px;}
+  .preview-head .cap{font-size:12px; font-weight:700;}
+  .preview-head .sym-tag{font-family:var(--mono); font-size:11.5px; color:var(--dim); margin-left:8px;}
+  .preview-body{padding:12px;}
+
+  .leg-block{border:1px solid var(--line); border-radius:3px; margin-bottom:10px;}
+  .leg-row{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 10px; background:#fafbfc;}
+  .leg-row .cb{display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:700; cursor:pointer;}
+  .leg-row .cb input{width:15px; height:15px; cursor:pointer;}
+  .leg-row select{border:1px solid var(--line-strong); border-radius:3px; padding:5px 6px; font-size:12px; background:#fff;}
+  .leg-row .auto-link{font-size:11.5px; text-decoration:underline; cursor:pointer;}
+  .leg-row .status-pill{margin-left:auto; font-family:var(--mono); font-size:11px; padding:3px 9px; border-radius:20px; background:#eee; color:#888; display:flex; align-items:center; gap:5px;}
+  .leg-row .status-pill .dot{width:7px; height:7px; border-radius:50%; background:#9aa0a8;}
+  .leg-row .status-pill.on{background:#e7f8ee; color:var(--green);}
+  .leg-row .status-pill.on .dot{background:var(--green); box-shadow:0 0 6px var(--green);}
+
+  .steps-toolbar{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 2px 10px;}
+  .steps-toolbar .count-badge{font-size:12px; background:#f1f3f6; border:1px solid var(--line); border-radius:20px; padding:4px 12px; font-weight:700; color:#333;}
+  .steps-toolbar .spacer{flex:1;}
+  .steps-toolbar input[type=number]{width:64px; border:1px solid var(--line-strong); border-radius:3px; padding:5px 6px; font-size:12px;}
+
+  table.steps-table{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px;}
+  .steps-table thead th{text-align:left; color:var(--dim); font-weight:600; font-size:11px; padding:7px 6px; border-bottom:1px solid var(--line-strong); background:#f7f8fa;}
+  .steps-table tbody td{padding:5px 6px; border-bottom:1px solid #eef0f2; vertical-align:middle;}
+  .steps-table tbody tr:hover td{background:#f9fbff;}
+  .steps-table .manual-row td{background:#f5f6f8; font-weight:700;}
+  .step-badge{display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:22px; padding:0 4px;
+    border-radius:5px; background:#eef0f3; border:1px solid var(--line); font-size:11px;}
+  .manual-pill{display:inline-block; background:#dfe3e8; color:#444; font-size:11px; padding:4px 12px; border-radius:3px; font-weight:700;}
+  .cell-buy, .cell-sell{display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+  .num-box{border:1.4px solid var(--buy); border-radius:3px; padding:4px 6px; width:64px; font-family:var(--mono); font-size:12px; background:var(--buy-bg); color:#333;}
+  .num-box.sell{border-color:var(--sell); background:var(--sell-bg);}
+  .amt-box{border:1px solid var(--line-strong); border-radius:3px; padding:4px 6px; width:92px; font-family:var(--mono); font-size:12px;}
+  .arrow-txt{color:#444; font-size:11.5px;}
+  .row-del{border:1px solid var(--line-strong); background:#fff; color:#999; width:22px; height:22px; border-radius:3px; font-size:11px; line-height:1;}
+  .row-del:hover{background:var(--buy); color:#fff; border-color:var(--buy);}
+
+  .pagination{display:flex; align-items:center; justify-content:center; gap:4px; padding:12px 0 4px; flex-wrap:wrap;}
+  .pagination button{border:1px solid var(--line-strong); background:#fff; min-width:26px; height:26px; border-radius:3px; font-size:11.5px; color:#444;}
+  .pagination button.active{background:var(--blue); color:#fff; border-color:var(--blue-dark); font-weight:700;}
+  .pagination button:disabled{opacity:.4; cursor:default;}
+  .pagination .pg-count{font-family:var(--mono); font-size:11.5px; color:var(--dim); margin:0 8px;}
+
+  .hint{font-size:11.5px; color:var(--dim); line-height:1.6; margin-top:6px; padding:0 2px;}
+
+  .booster-fields{display:flex; gap:12px; flex-wrap:wrap; padding:10px;}
+  .booster-fields .field{display:flex; flex-direction:column; gap:5px; min-width:120px;}
+  .booster-fields label{font-size:11px; color:var(--dim);}
+  .booster-fields input, .booster-fields select{border:1px solid var(--line-strong); border-radius:3px; padding:6px 8px; font-family:var(--mono); font-size:12.5px;}
+  .switch{position:relative; width:36px; height:19px; display:inline-block;}
+  .switch input{opacity:0; width:0; height:0;}
+  .slider{position:absolute; inset:0; background:#ccd0d6; border-radius:20px; cursor:pointer; transition:.15s;}
+  .slider:before{content:""; position:absolute; width:15px; height:15px; left:2px; top:2px; background:#fff; border-radius:50%; transition:.15s;}
+  .switch input:checked + .slider{background:var(--green);}
+  .switch input:checked + .slider:before{transform:translateX(17px);}
+
+  .toast{position:fixed; bottom:64px; right:22px; background:#22262c; color:#fff; padding:10px 16px; border-radius:6px;
+    font-size:12.5px; opacity:0; transform:translateY(8px); transition:all .2s ease; pointer-events:none; z-index:999;}
+  .toast.show{opacity:1; transform:translateY(0);}
+
+  /* ---------- WIN2 : 실시간잔고 / 매매내역 ---------- */
+  .win2-grid{display:grid; grid-template-columns:1fr; gap:12px;}
+  #win-2 .win2-grid > div:nth-child(2){display:none;}
+  #win-2 #balanceBody td:first-child, #win-2 #balanceBody th:first-child,
+  #win-2 #balanceBody td:nth-child(n+12), #win-2 #balanceBody th:nth-child(n+12){display:none;}
+  .stat-strip{display:flex; border:1px solid var(--line); border-radius:3px; overflow:hidden; margin-bottom:10px; font-family:var(--mono);}
+  .stat-strip .cell{flex:1; padding:8px 10px; border-right:1px solid var(--line); text-align:center;}
+  .stat-strip .cell:last-child{border-right:none;}
+  .stat-strip .cell .l{font-size:10.5px; color:var(--dim);}
+  .stat-strip .cell .v{font-size:13px; font-weight:700; margin-top:3px;}
+  .radio-row{display:flex; align-items:center; gap:14px; font-size:11.5px; padding:4px 2px 10px; color:#555;}
+  .radio-row label{display:flex; align-items:center; gap:4px; cursor:pointer;}
+  table.mini{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:11px;}
+  table.mini th{background:#f7f8fa; color:var(--dim); font-weight:600; padding:6px 4px; border:1px solid var(--line); font-size:10.5px; text-align:center;}
+  table.mini td{padding:6px 4px; border:1px solid #eef0f2; text-align:center;}
+  .mini-empty{padding:26px 4px; text-align:center; color:var(--dim); font-size:11.5px;}
+  .auto-tag{display:inline-block; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:10px; background:#eee; color:#888;}
+  .auto-tag.on{background:#efe1fb; color:#9b4fd6;}
+  .win2-toolbar{display:flex; gap:6px; padding:8px 0; flex-wrap:wrap;}
+  .win2-toolbar .btn.active{background:var(--buy); color:#fff; border-color:var(--buy);}
+  .footer-status{display:flex; gap:14px; padding:6px 2px 0; font-size:11px; color:var(--dim);}
+
+  /* ---------- WIN3 : 매매내역 상세(예제) ---------- */
+  .win3-title{text-align:center; font-size:14px; font-weight:700; padding:14px 0 4px;}
+  .win3-sub{text-align:center; font-size:11px; color:var(--dim); margin-bottom:10px;}
+  .win3-summary{display:flex; justify-content:flex-end; gap:22px; padding:6px 16px 12px; font-family:var(--mono);}
+  .win3-summary .l{font-size:11px; color:var(--dim);}
+  .win3-summary .v{font-size:15px; font-weight:700;}
+  .win3-summary .v.pos{color:var(--buy);}
+
+  /* ---------- WIN4 : 일별손익 (모바일) ---------- */
+  .mobile-shell{max-width:380px; margin:0 auto; background:#fff;}
+  .date-nav{display:flex; align-items:center; justify-content:center; gap:14px; padding:16px 0 10px; font-size:15px; font-weight:600;}
+  .date-nav button{border:none; background:none; font-size:16px; color:#333;}
+  .m-summary{padding:2px 24px 16px;}
+  .m-summary .row{display:flex; justify-content:space-between; padding:4px 0; font-size:14px;}
+  .m-summary .row .l{color:#666;}
+  .m-summary .row .v{font-weight:700; font-family:var(--mono);}
+  .m-summary .row .v.pos{color:var(--buy);}
+  .m-summary .count{font-size:12.5px; color:#888; margin-top:4px;}
+  table.m-table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  table.m-table th{padding:8px 6px; color:#8a8a8a; font-weight:600; font-size:11px; border-bottom:1px solid #eee;}
+  table.m-table td{padding:9px 6px; text-align:center; border-bottom:1px solid #f2f2f2;}
+  table.m-table tr.sell-row{background:#fffdf0;}
+  .m-gain{color:var(--buy); font-weight:700;}
+
+  /* ---------- WIN5 : 차수 현황 (모바일 그리드) ---------- */
+  .m5-shell{max-width:820px; margin:0 auto;}
+  .m5-block{margin:0 0 40px; overflow:hidden;}
+  table.m5-table{width:100%; border-collapse:collapse; font-size:17px; text-align:center; table-layout:fixed;}
+  .m5-table thead th{background:#e8e8e8; color:#444; font-weight:700; padding:14px 5px; border-right:1px solid #fff; border-bottom:1px solid #d1d1d1; white-space:nowrap;}
+  .m5-table thead th:first-child{width:116px;}
+  .m5-table thead th:nth-child(2){width:48px;}
+  .m5-table thead th:nth-child(3){width:44px;}
+  .m5-table tbody td{height:73px; padding:0 5px; color:#3472bb; background:#fff1f1; border-right:1px solid #fff; border-bottom:1px solid #d8d8d8; font-family:var(--sans); font-weight:600;}
+  .m5-table tbody tr td:first-child{text-align:left; padding:0 12px; color:#222; background:#fff; font-weight:600; line-height:1.45;}
+  .m5-table tbody td.updown{background:#f7f7f7; color:#3472bb; font-size:14px;}
+  .m5-table tbody td.autotag{background:#edffea;}
+  .m5-table tbody td.autotag span{display:inline-flex; width:24px; height:24px; align-items:center; justify-content:center; border-radius:50%; background:#dc7cec; color:#fff; font-size:15px; font-weight:700;}
+  .m5-table tbody td.empty{background:#effbff; color:transparent;}
+  .m5-more{text-align:center; padding:0 10px 10px; color:var(--dim); font-size:12px;}
+
+  /* ---------- taskbar / launcher ---------- */
+  .taskbar{position:fixed; left:0; right:0; bottom:0; height:46px; background:#1f2430; display:flex; align-items:center;
+    padding:0 12px; gap:6px; z-index:50; box-shadow:0 -2px 10px rgba(0,0,0,.15);}
+  .taskbar .brand{color:#8891a5; font-size:11.5px; font-family:var(--mono); margin-right:10px;}
+  .taskbar .win-btn{background:#2a3040; color:#c7ccd6; border:1px solid #39404f; border-radius:4px; padding:7px 14px; font-size:12px;}
+  .taskbar .win-btn.active{background:var(--blue); color:#fff; border-color:var(--blue-dark);}
+  .taskbar .win-btn:hover:not(.active){background:#353c4d;}
+
+  .reopen-chip{position:fixed; top:14px; right:14px; background:#22262c; color:#fff; padding:8px 14px; border-radius:20px; font-size:12px; display:none; cursor:pointer; z-index:60;}
+</style>
+</head>
+<body>
+
+<div class="desktop">
+
+  <!-- ========================= WIN1 : 자동전략 설정 ========================= -->
+  <div class="app-window active" id="win-1">
+    <div class="win-titlebar">
+      <div class="t-left"><span class="num">1</span> 자동전략 설정</div>
+      <div class="win-controls">
+        <button title="최소화">─</button>
+        <button title="최대화">□</button>
+        <button class="close" title="닫기" onclick="closeWindow('win-1')">✕</button>
+      </div>
+    </div>
+    <div class="tabbar">
+      <div class="tab">기본매매 설정</div>
+      <div class="tab active">매매설정 관리</div>
+    </div>
+    <div class="infobar">
+      <b>매매설정 관리</b><br/>
+      - 여러 유형의 매매 설정 파일을 관리할 수 있습니다.<br/>
+      - 예를 들어 소형주와 대형주의 수익실현 %를 다르게 저장한 후
+      <a href="#" onclick="return false;">종목매매설정 탭에서 불러오기</a>로 매매설정을 불러올 수 있습니다.
+    </div>
+
+    <div class="win-body">
+      <div class="split">
+        <!-- 매매설정 리스트 -->
+        <div class="list-panel">
+          <div class="cap">매매설정 리스트</div>
+          <table class="list-table">
+            <thead><tr><th style="width:38px;">번호</th><th>자동매매 / 파일이름</th></tr></thead>
+            <tbody id="profileListBody"></tbody>
+          </table>
+          <div id="profileEmpty" class="list-empty" style="display:none;">저장된 매매설정이 없습니다</div>
+          <div class="list-toolbar">
+            <button class="btn btn-sm" onclick="refreshProfiles()">새로고침</button>
+            <button class="btn btn-sm" onclick="addProfile()">추가</button>
+            <button class="btn btn-sm" onclick="renameProfile()">변경</button>
+            <button class="btn btn-sm" onclick="deleteProfile()">삭제</button>
+          </div>
+        </div>
+
+        <!-- 매매설정 미리보기 -->
+        <div class="preview-panel">
+          <div class="preview-head">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <span class="cap">매매설정 미리보기</span>
+              <span class="sym-tag">종목코드
+                <input id="symbolInput" value="SOXL" style="width:70px;border:1px solid var(--line-strong);border-radius:3px;padding:2px 5px;font-family:var(--mono);font-size:11.5px;" onchange="state.symbol=this.value.toUpperCase();renderAll();"/></span>
+              <span class="sym-tag">시장
+                <select id="marketSelect" style="font-size:11.5px;" onchange="changeMarket(this.value)">
+                  <option value="US">해외주식(US)</option>
+                  <option value="KR">국내주식(KRX)</option>
+                </select></span>
+              <span class="sym-tag">환경
+                <select id="modeSelect" style="font-size:11.5px;" onchange="changeMode(this.value)">
+                  <option value="mock">모의투자</option>
+                  <option value="real">실계좌</option>
+                </select></span>
+              <span class="status-pill" id="modePill"><span class="dot"></span>모의투자</span>
+              <span class="status-pill" id="workerIdentity">Worker: unavailable</span>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="btn btn-sm" onclick="openWindow('win-2')">실시간 잔고·매매내역</button>
+            </div>
+          </div>
+          <div class="preview-body">
+
+            <!-- 자동매수 -->
+            <div class="leg-block">
+              <div class="leg-row">
+                <label class="cb"><input type="checkbox" id="autoBuyChk" onchange="toggleAutoBuy(this.checked)"> 자동매수 (분할매수)</label>
+                <span style="font-size:11.5px;color:var(--dim);">주문방식</span>
+                <select id="autoBuyOrderType" onchange="state.autoBuy.orderType=this.value">
+                  <option value="00">지정가</option>
+                  <option value="03">시장가</option>
+                  <option value="30">LOC</option>
+                  <option value="33">MOC</option>
+                </select>
+                <a class="auto-link" href="#" onclick="autoFillSteps();return false;">자동입력</a>
+                <span class="status-pill" id="autoBuyStatus"><span class="dot"></span>정지됨</span>
+              </div>
+            </div>
+
+            <!-- 자동매도 -->
+            <div class="leg-block">
+              <div class="leg-row">
+                <label class="cb"><input type="checkbox" id="autoSellChk" onchange="toggleAutoSell(this.checked)"> 자동매도 (이익청산)</label>
+                <span style="font-size:11.5px;color:var(--dim);">주문방식</span>
+                <select id="autoSellOrderType" onchange="state.autoSell.orderType=this.value">
+                  <option value="00">지정가</option>
+                  <option value="03">시장가</option>
+                  <option value="30">LOC</option>
+                  <option value="33">MOC</option>
+                </select>
+                <a class="auto-link" href="#" onclick="autoFillSell();return false;">자동입력</a>
+                <span class="status-pill" id="autoSellStatus"><span class="dot"></span>정지됨</span>
+              </div>
+            </div>
+
+            <!-- 1차 수동진입 -->
+            <table class="steps-table" style="margin-bottom:2px;">
+              <tbody>
+                <tr class="manual-row">
+                  <td style="width:52px;"><span class="step-badge">1차</span></td>
+                  <td colspan="2">매수 <span class="manual-pill">수동진입</span>
+                    금액 <span class="ccy-sym">$</span><input class="amt-box" type="number" id="firstBuyAmt" value="100" onchange="state.steps[0].amount=parseFloat(this.value)||0;"/>
+                  </td>
+                  <td>1차 매수 시점부터 아래 표의 그리드가 시작됩니다</td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <!-- 차수 툴바 -->
+            <div class="steps-toolbar">
+              <span class="count-badge" id="stepCountBadge">총 10차 매수 설정됨</span>
+              <button class="btn btn-sm" onclick="addStep()">+ 차수 추가</button>
+              <button class="btn btn-sm" onclick="removeLastStep()">- 마지막 차수 삭제</button>
+              <span class="spacer"></span>
+              <span style="font-size:11px;font-weight:700;color:var(--dim);">공통 적용</span>
+              <label style="font-size:11px;">하락률 <input type="number" id="commonDropRate" step="1" max="0" value="-5" style="width:52px;">%</label>
+              <label style="font-size:11px;">수익률 <input type="number" id="commonProfitRate" step="1" min="0" value="5" style="width:52px;">%</label>
+              <label style="font-size:11px;">매수금액 <input type="number" id="commonBuyAmount" min="0" step="1" value="100" style="width:68px;"></label>
+              <button class="btn btn-sm btn-primary" onclick="applyCommonTrancheSettings()">전체 차수에 적용</button>
+              <span class="spacer"></span>
+              <span style="font-size:11.5px;color:var(--dim);">목표 차수까지 일괄 추가</span>
+              <input type="number" id="bulkTarget" value="200" min="2"/>
+              <button class="btn btn-sm btn-primary" onclick="bulkAddTo()">일괄 추가</button>
+            </div>
+
+            <table class="steps-table">
+              <thead>
+                <tr>
+                  <th style="width:52px;">차수</th>
+                  <th>하락률 → N차 매수</th>
+                  <th style="width:80px;"></th>
+                  <th>수익률 → N차 이익청산</th>
+                  <th style="width:32px;"></th>
+                </tr>
+              </thead>
+              <tbody id="stepsBody"></tbody>
+            </table>
+
+            <div class="pagination" id="pagination"></div>
+            <div class="hint">예: 1차 매수 후 -3% 하락 시 2차 매수, 2차 매수가 대비 -4% 하락 시 3차 매수 …
+              해당 차수 매수가 대비 목표 수익률 도달 시 그 차수 물량만 매도합니다 (무한 그리드).
+              차수는 <b>+ 차수 추가 / 일괄 추가</b> 버튼으로 200차수 이상까지 제한 없이 늘릴 수 있고,
+              행의 <b>✕</b> 버튼으로 개별 삭제할 수 있습니다.</div>
+
+            <!-- 수익부스터 -->
+            <div class="leg-block" style="margin-top:14px;">
+              <div class="leg-row">
+                <span class="switch"><input type="checkbox" id="boosterEnabled" onchange="state.booster.enabled=this.checked"><span class="slider"></span></span>
+                <b style="font-size:12.5px;">수익부스터</b>
+                <span style="font-size:11px;color:var(--dim);">사용 시 이익청산 후 추가 하락을 감시해 재매수합니다</span>
+              </div>
+              <div class="booster-fields">
+                <div class="field"><label>1차 수익 후 하락률(%)</label><input type="number" id="boosterDrop" value="-5" onchange="state.booster.drop_pct=parseFloat(this.value)||0"></div>
+                <div class="field"><label>재매수 금액(<span class="ccy-sym">$</span>)</label><input type="number" id="boosterAmount" value="100" onchange="state.booster.amount=parseFloat(this.value)||0"></div>
+                <div class="field"><label>주문방식</label>
+                  <select id="boosterOrderType" onchange="state.booster.order_type=this.value">
+                    <option value="00">지정가</option>
+                    <option value="03" selected>시장가</option>
+                    <option value="30">LOC</option>
+                    <option value="33">MOC</option>
+                  </select>
+                </div>
+                <div class="field"><label>감시 시간(분)</label><input type="number" id="boosterWatch" value="20" onchange="state.booster.watch_minutes=parseFloat(this.value)||0"></div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="win-actions-bottom">
+      <button class="btn" onclick="downloadConfig()">JSON 다운로드</button>
+      <button class="btn" onclick="loadConfigFromStorage()">불러오기</button>
+      <button class="btn" onclick="closeWindow('win-1')">취소</button>
+    </div>
+  </div>
+
+  <!-- ========================= WIN2 : 실시간잔고 / 매매내역 ========================= -->
+  <div class="app-window" id="win-2">
+    <div class="win-titlebar">
+      <div class="t-left"><span class="num">2</span> [3001] 실시간 잔고 &nbsp;|&nbsp; [3003] 매매내역</div>
+      <div class="win-controls">
+        <button title="최소화">─</button><button title="최대화">□</button>
+        <button class="close" onclick="closeWindow('win-2')">✕</button>
+      </div>
+    </div>
+    <div class="infobar" style="background:#eef4ff;border-bottom-color:#c8dcfa;color:#2b4a7e;">
+      <b>체결 기반 잔고 · 매매내역</b> — 매수/매도 체결의 실제 날짜·수량·단가를 차수별로 연결해 표시합니다.
+      현재가와 전일종가는 실시간 시세 연동 전 미리보기용 입력값입니다. 연결 시 <code>setRealtimeQuote()</code>로 갱신합니다.
+      &nbsp; 전일종가 <span class="ccy-sym">$</span><input id="simPrevClose" type="number" step="0.01" value="24.60" style="width:74px;font-family:var(--mono);" onchange="updateSim()">
+      &nbsp; 현재가 <span class="ccy-sym">$</span><input id="simCurrent" type="number" step="0.01" value="24.15" style="width:74px;font-family:var(--mono);" onchange="updateSim()">
+    </div>
+    <div class="win-body">
+      <div class="win2-grid">
+        <!-- 실시간 잔고 -->
+        <div>
+          <div style="font-size:12px;font-weight:700;margin-bottom:6px;">실시간 잔고 &nbsp;<span style="font-family:var(--mono);color:var(--dim);font-weight:400;" id="win2Account">4462932011</span></div>
+          <div class="stat-strip">
+            <div class="cell"><div class="l">예수금</div><div class="v" id="bal-cash">—</div></div>
+            <div class="cell"><div class="l">예수금 D+2</div><div class="v" id="bal-cashd2">—</div></div>
+            <div class="cell"><div class="l">총매입금액</div><div class="v" id="bal-cost">$0.00</div></div>
+            <div class="cell"><div class="l">총평가금액</div><div class="v" id="bal-value">$0.00</div></div>
+            <div class="cell"><div class="l">총평가손익</div><div class="v" id="bal-pnl">$0.00</div></div>
+            <div class="cell"><div class="l">수익률(%)</div><div class="v" id="bal-pnlpct">0.00%</div></div>
+            <div class="cell"><div class="l">추정자산</div><div class="v" id="bal-asset">$0.00</div></div>
+          </div>
+          <div class="radio-row">
+            <span>차수보기설정</span>
+            <label><input type="radio" name="viewmode"> 차수</label>
+            <label><input type="radio" name="viewmode"> 날짜</label>
+            <label><input type="radio" name="viewmode"> 수량</label>
+            <label><input type="radio" name="viewmode" checked> 수익률</label>
+          </div>
+          <div style="overflow-x:auto;">
+          <table class="mini">
+            <thead>
+              <tr>
+                <th>확장</th><th>종목명</th><th>등락</th><th>수량</th><th>매입가</th><th>현재가</th>
+                <th>평가손익</th><th>수익률</th><th>매입금액</th><th>평가금액</th><th>자동</th>
+                <th>1차</th><th>2차</th><th>3차</th><th>4차</th><th>5차</th><th>6차</th><th>7차</th><th>8차</th><th>9차</th><th>10차</th>
+              </tr>
+            </thead>
+            <tbody id="balanceBody"><tr><td colspan="21" class="mini-empty">보유 종목이 없습니다 — 자동매수를 시작하면 여기에 표시됩니다</td></tr></tbody>
+          </table>
+          </div>
+          <div class="footer-status" id="win2Footer">종목수 0개 &nbsp; 수동 0 &nbsp; 자동 0</div>
+        </div>
+
+        <!-- 매매내역 -->
+        <div>
+          <div style="font-size:12px;font-weight:700;margin-bottom:6px;" id="win2SelectedSymbolTitle">매매내역</div>
+          <div class="win2-toolbar">
+            <button class="btn btn-sm active" data-trade-filter="all" onclick="setTradeFilter('all')">전체보기</button>
+            <button class="btn btn-sm" data-trade-filter="open" onclick="setTradeFilter('open')">진행중인 매매 보기</button>
+            <button class="btn btn-sm" data-trade-filter="closed" onclick="setTradeFilter('closed')">종료된 매매 보기</button>
+            <button class="btn btn-sm" onclick="openWindow('win-1')">⚙ 자동매매 설정</button>
+            <button class="btn btn-sm">종목메모</button>
+          </div>
+          <div style="padding:10px 0 4px;color:var(--dim);font-size:12px;" id="win2SelectedSymbol">선택된 종목이 없습니다</div>
+          <table class="mini">
+            <thead><tr><th>매매건수</th><th>매입금액</th><th>평가/매도금액</th><th>손익액</th><th>손익률</th></tr></thead>
+            <tbody id="win2SummaryBody"><tr><td colspan="5" class="mini-empty">대기중</td></tr></tbody>
+          </table>
+          <div style="overflow-x:auto;margin-top:8px;">
+          <table class="mini">
+            <thead><tr><th>차수</th><th>날짜</th><th>수량</th><th>단가</th><th>금액</th><th>매매구분</th><th>현재가</th><th>평가손익</th><th>수익률</th></tr></thead>
+            <tbody id="win2TradeBody"><tr><td colspan="9" class="mini-empty">매매내역이 없습니다</td></tr></tbody>
+          </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================= WIN3 : 매매내역 상세(예제) ========================= -->
+  <div class="app-window" id="win-3">
+    <div class="win-titlebar">
+      <div class="t-left"><span class="num">3</span> [3003] 매매내역 — 매직스플릿 예제</div>
+      <div class="win-controls">
+        <button title="최소화">─</button><button title="최대화">□</button>
+        <button class="close" onclick="closeWindow('win-3')">✕</button>
+      </div>
+    </div>
+    <div class="win-body">
+      <div class="win3-title">휴젤(145020) 종목의 매직스플릿 매매내역 (예제)</div>
+      <div class="win3-sub">차수 그리드가 실제로 어떻게 기록되는지 보여주는 참고 예시입니다</div>
+      <div class="win2-toolbar" style="padding-left:2px;">
+        <button class="btn btn-sm active">전체보기</button>
+        <button class="btn btn-sm">진행중인 매매 보기</button>
+        <button class="btn btn-sm">종료된 매매 보기</button>
+        <button class="btn btn-sm">자동매매 설정</button>
+        <button class="btn btn-sm">종목메모</button>
+      </div>
+      <div class="win3-summary">
+        <div><div class="l">매매건수</div><div class="v">5 건</div></div>
+        <div><div class="l">매입금액</div><div class="v">4,786,000</div></div>
+        <div><div class="l">평가/매도금액</div><div class="v">4,950,500</div></div>
+        <div><div class="l">손익액</div><div class="v pos">119,044</div></div>
+        <div><div class="l">수익률(%)</div><div class="v pos">2.49</div></div>
+      </div>
+      <table class="mini">
+        <thead><tr><th>차수</th><th>날짜</th><th>수량</th><th>단가</th><th>금액</th><th>매매구분</th><th>현재가</th><th>평가손익</th><th>수익률</th></tr></thead>
+        <tbody>
+          <tr><td>1차</td><td>2022.08.31</td><td>8</td><td>120,500</td><td>964,000</td><td>매수</td><td>117,000</td><td style="color:var(--sell)">-36,792</td><td style="color:var(--sell)">-3.82</td></tr>
+          <tr><td>2차</td><td>2022.09.07</td><td>8</td><td>115,200</td><td>921,600</td><td>매수</td><td>117,000</td><td class="m-gain">5,758</td><td class="m-gain">0.62</td></tr>
+          <tr><td>3차</td><td>2022.09.20</td><td>9</td><td>110,500</td><td>994,500</td><td>매수</td><td>117,000</td><td class="m-gain">48,919</td><td class="m-gain">4.92</td></tr>
+          <tr><td>4차</td><td>2022.09.26</td><td>9</td><td>105,800</td><td>952,200</td><td>매수</td><td>-</td><td>-</td><td>-</td></tr>
+          <tr class="sell-row"><td>4차</td><td>2022.10.05</td><td>9</td><td>112,756</td><td>1,014,800</td><td>매도</td><td>-</td><td class="m-gain">53,386</td><td class="m-gain">5.61</td></tr>
+          <tr><td>4차</td><td>2022.10.11</td><td>9</td><td>105,967</td><td>953,700</td><td>매수</td><td>-</td><td>-</td><td>-</td></tr>
+          <tr class="sell-row"><td>4차</td><td>2022.10.14</td><td>9</td><td>112,300</td><td>1,010,700</td><td>매도</td><td>-</td><td class="m-gain">47,816</td><td class="m-gain">5.01</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ========================= WIN4 : 일별 손익 (모바일) ========================= -->
+  <div class="app-window" id="win-4">
+    <div class="win-titlebar">
+      <div class="t-left"><span class="num">4</span> 일별 손익 (모바일)</div>
+      <div class="win-controls">
+        <button title="최소화">─</button><button title="최대화">□</button>
+        <button class="close" onclick="closeWindow('win-4')">✕</button>
+      </div>
+    </div>
+    <div class="win-body">
+      <div class="mobile-shell">
+        <div class="date-nav">
+          <button>&lt;</button>
+          <span id="m4y">2026</span> ▾ &nbsp; <span id="m4m">08</span> ▾ &nbsp; <span id="m4d">10 (월)</span> ▾
+          <button>&gt;</button>
+        </div>
+        <div class="m-summary">
+          <div class="row"><span class="l">총 매입금액</span><span class="v">3,886,110원</span></div>
+          <div class="row"><span class="l">총 평가금액</span><span class="v">3,937,582원</span></div>
+          <div class="row"><span class="l">총 평가손익</span><span class="v pos">42,427원</span></div>
+          <div class="row"><span class="l">수익률(%)</span><span class="v pos">1.09%</span></div>
+          <div class="count">(총 매매 41건)</div>
+        </div>
+        <table class="m-table">
+          <thead><tr><th>차수</th><th>날짜</th><th>종목명</th><th>수량</th><th>구분</th><th>손익</th><th>수익률</th></tr></thead>
+          <tbody>
+            <tr><td>14차</td><td>26.08.10</td><td>KODEX 코스닥150레버리지</td><td>13</td><td>매수</td><td>-</td><td>-</td></tr>
+            <tr class="sell-row"><td>14차</td><td>26.08.10(월)</td><td>KODEX 코스닥150레버리지</td><td>13</td><td>매도</td><td class="m-gain">949</td><td class="m-gain">0.95</td></tr>
+            <tr><td>15차</td><td>26.08.10</td><td>KODEX 코스닥150레버리지</td><td>13</td><td>매수</td><td>-</td><td>-</td></tr>
+            <tr class="sell-row"><td>15차</td><td>26.08.10(월)</td><td>KODEX 코스닥150레버리지</td><td>13</td><td>매도</td><td class="m-gain">950</td><td class="m-gain">0.96</td></tr>
+            <tr><td>16차</td><td>26.08.10</td><td>KODEX 코스닥150</td><td>6</td><td>매수</td><td>-</td><td>-</td></tr>
+            <tr class="sell-row"><td>16차</td><td>26.08.10(월)</td><td>KODEX 코스닥150</td><td>6</td><td>매도</td><td class="m-gain">824</td><td class="m-gain">0.94</td></tr>
+            <tr><td>15차</td><td>26.08.10</td><td>KODEX 코스닥150레버리지</td><td>13</td><td>매수</td><td>-</td><td>-</td></tr>
+            <tr class="sell-row"><td>15차</td><td>26.08.10(월)</td><td>KODEX 코스닥150레버리지</td><td>13</td><td>매도</td><td class="m-gain">885</td><td class="m-gain">0.89</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================= WIN5 : 차수 현황 (모바일 그리드) ========================= -->
+  <div class="app-window" id="win-5">
+    <div class="win-titlebar">
+      <div class="t-left"><span class="num">5</span> 차수 현황 (모바일)</div>
+      <div class="win-controls">
+        <button title="최소화">─</button><button title="최대화">□</button>
+        <button class="close" onclick="closeWindow('win-5')">✕</button>
+      </div>
+    </div>
+    <div class="win-body">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><button class="btn btn-sm btn-primary" onclick="refreshTrancheViews()">Refresh Tranche Data</button></div>
+      <div class="m5-shell" id="m5Shell"></div>
+      <div class="m5-more" id="m5More"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="reopen-chip" id="reopenChip" onclick="reopenLast()">닫은 창 다시 열기 ↺</div>
+
+<div class="taskbar">
+  <span class="brand">KIWOOM · AUTOTRADE</span>
+  <button class="win-btn active" data-w="win-1" onclick="openWindow('win-1')">1 자동전략 설정</button>
+  <button class="win-btn" data-w="win-2" onclick="openWindow('win-2')">2 실시간잔고/매매내역</button>
+  <button class="win-btn" data-w="win-3" onclick="openWindow('win-3')">3 매매내역 상세</button>
+  <button class="win-btn" data-w="win-4" onclick="openWindow('win-4')">4 일별손익</button>
+  <button class="win-btn" data-w="win-5" onclick="openWindow('win-5')">5 차수현황</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const STORAGE_KEY = 'kiwoom_strategy_profiles';
+const BROKER_SELECTION_KEY = 'kiwoom_broker_balance_selection';
+const COMMISSION_RATE_KEY = 'kiwoom_commission_rate';
+const PAGE_SIZE = 9;
+const ORDER_LABEL = {'00':'지정가','03':'시장가','30':'LOC','33':'MOC'};
+
+function defaultSteps(){
+  const steps = [{step:1, drop_pct:null, amount:100, profit_pct:5}];
+  const drops = [-3,-4,-5,-5,-5,-5,-5,-5,-5];
+  for(let i=2;i<=10;i++){
+    steps.push({step:i, drop_pct:drops[i-2], amount:100, profit_pct:5});
+  }
+  return steps;
+}
+
+let state = {
+  symbol:'SOXL',
+  market:'US',   // 'US'(해외주식) | 'KR'(국내주식/KRX) — 종목코드 형식과 통화 표시(₩/$)에 사용
+  mode:'mock',   // 'mock'(모의투자) | 'real'(실계좌) — 화면 표시/확인용. 실제 계좌 분기는 서버 accounts.yaml 의 mode 값을 따른다
+  autoBuy:{enabled:false, orderType:'00'},
+  autoSell:{enabled:false, orderType:'00'},
+  steps: defaultSteps(),
+  selectedHolding:null,
+  // 시세 연동 전에는 화면 입력값을 사용합니다. WebSocket 시세 수신 시 setRealtimeQuote()를 호출합니다.
+  sim: { currentPrice: 24.15, prevClose: 24.60 },
+  fees: { commissionRate: Number(localStorage.getItem(COMMISSION_RATE_KEY)) || 0.015 },
+  // 체결 원장: 증권사 체결값만 저장한다. sell.buyId가 어떤 매수 체결을 청산했는지 연결한다.
+  // 실제 API 연동 시 setTradeLedger(apiFilledOrders)를 호출해 이 예시 원장을 교체한다.
+  tradeLedger: [
+    {id:'B-1001', type:'buy',  step:1, filledAt:'2026-08-01', qty:4, price:28.40},
+    {id:'B-1002', type:'buy',  step:2, filledAt:'2026-08-04', qty:4, price:27.55},
+    {id:'B-1003', type:'buy',  step:3, filledAt:'2026-08-07', qty:4, price:26.45},
+    {id:'S-1003', type:'sell', step:3, filledAt:'2026-08-12', qty:4, price:27.80, buyId:'B-1003'},
+    {id:'B-1004', type:'buy',  step:2, filledAt:'2026-08-18', qty:4, price:25.90}
+  ]
+};
+let currentPage = 1;
+// WIN2 is broker-balance-only: remove the sample execution ledger, preview
+// quote inputs, D+2 deposit field, and sequence-view controls from the UI.
+state.tradeLedger = [];
+document.querySelector('#simPrevClose')?.closest('.infobar')?.replaceChildren(
+  Object.assign(document.createElement('b'), {textContent: 'Broker real-time balance'}),
+  document.createTextNode(' — totals and return are net of commission. Commission (%) '),
+  Object.assign(document.createElement('input'), {id:'commissionRate', type:'number', min:'0', step:'0.001', value:state.fees.commissionRate, style:'width:68px;font-family:var(--mono);', onchange:e=>setCommissionRate(e.target.value)})
+);
+document.getElementById('bal-cash')?.closest('.cell')?.remove();
+document.getElementById('bal-cashd2')?.closest('.cell')?.remove();
+document.querySelector('#win-2 .radio-row')?.remove();
+document.getElementById('balanceBody')?.closest('table')?.querySelectorAll('th:nth-child(n+12)').forEach(el=>el.remove());
+document.getElementById('balanceBody')?.closest('table')?.querySelectorAll('thead th:first-child, tbody td:first-child').forEach(el=>el.style.display='none');
+document.getElementById('win-3')?.remove();
+document.querySelector('.win-btn[data-w="win-3"]')?.remove();
+document.querySelector('#win-1 .tabbar .tab')?.remove();
+document.getElementById('marketSelect')?.closest('.sym-tag')?.remove();
+document.getElementById('modeSelect')?.closest('.sym-tag')?.remove();
+document.getElementById('modePill')?.remove();
+document.querySelector('#win-1 button[onclick="openWindow(\'win-2\')"]')?.remove();
+document.querySelector('#win-1 .win-actions-bottom button[onclick="loadConfigFromStorage()"]')?.remove();
+document.querySelector('#win-1 .win-actions-bottom button[onclick="closeWindow(\'win-1\')"]')?.remove();
+document.querySelector('#win-1 .win-actions-bottom button[onclick="saveConfig()"]')?.remove();
+const balanceTitle=document.querySelector('#win-2 .t-left');
+if(balanceTitle) balanceTitle.innerHTML='<span class="num">2</span> Holdings & Balance';
+const balanceControls=document.querySelector('#win-2 .win-controls');
+if(balanceControls){
+  const refreshButton=document.createElement('button');
+  refreshButton.id='balanceRefresh'; refreshButton.className='btn btn-sm'; refreshButton.type='button';
+  refreshButton.style.cssText='width:auto;height:auto;margin-right:6px;';
+  refreshButton.textContent='Refresh'; refreshButton.title='Refresh Holdings & Balance';
+  refreshButton.onclick=()=>refreshDashboardData();
+  balanceControls.before(refreshButton);
+}
+const balanceTab=document.querySelector('.win-btn[data-w="win-2"]');
+if(balanceTab) balanceTab.textContent='2 Holdings & Balance';
+const previewCap=document.querySelector('#win-1 .preview-head .cap');
+if(previewCap){
+  const badge=document.createElement('span'); badge.id='previewTickerBadge'; badge.className='ticker-badge';
+  previewCap.after(badge);
+  const settingsRefresh=document.createElement('button');
+  settingsRefresh.id='settingsRefresh'; settingsRefresh.className='btn btn-sm'; settingsRefresh.type='button';
+  settingsRefresh.textContent='Refresh'; settingsRefresh.title='Refresh Auto Strategy Settings and Holdings';
+  settingsRefresh.onclick=()=>refreshDashboardData();
+  previewCap.parentElement.append(settingsRefresh);
+}
+const settingsList=document.querySelector('#win-1 .list-panel');
+let autoRemoveClosedPositions=true;
+document.getElementById('boosterEnabled')?.closest('.leg-block')?.remove();
+// The configuration-management explanation is no longer part of the UI.
+document.querySelector('#win-1 .infobar')?.remove();
+const holdingsPanel=document.querySelector('#win-2 .win2-grid > div:first-child');
+if(holdingsPanel){
+  const history=document.createElement('section');
+  history.id='executionHistoryPanel';
+  history.style.cssText='margin-top:14px;border-top:1px solid var(--line);padding-top:10px;';
+  history.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;"><div style="font-size:12px;font-weight:700;">Execution History</div><button id="executionHistoryRefresh" class="btn btn-sm" type="button" onclick="refreshExecutionHistory()">Refresh</button></div><div style="overflow-x:auto;"><table class="mini"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Step</th><th>Qty</th><th>Price</th></tr></thead><tbody id="executionHistoryBody"><tr><td colspan="6" class="mini-empty">No confirmed executions</td></tr></tbody></table></div>';
+  holdingsPanel.append(history);
+}
+if(settingsList){
+  // The user-facing global profile list is replaced by per-symbol cards.
+  settingsList.querySelector('table.list-table')?.remove();
+  settingsList.querySelector('#profileEmpty')?.remove();
+  settingsList.querySelector('.list-toolbar')?.remove();
+  settingsList.querySelector('.cap')?.remove();
+  settingsList.style.cssText='width:100%;border:0;padding:0;';
+  const picker=document.createElement('div'); picker.id='settingsHoldingsPicker'; picker.className='holdings-picker';
+  picker.innerHTML='<div class="cap">Holdings</div><div id="settingsHoldingsBody" class="list-empty">Waiting for broker balance…</div>';
+  settingsList.append(picker);
+  const removeClosed=document.createElement('label');
+  removeClosed.style.cssText='display:block;margin:7px 0;font-size:11px;color:var(--dim);';
+  removeClosed.innerHTML='<input id="removeClosedPositions" type="checkbox" checked> Remove Trade Settings after a confirmed position close';
+  picker.prepend(removeClosed);
+  document.getElementById('removeClosedPositions')?.addEventListener('change', async event=>{
+    autoRemoveClosedPositions=event.target.checked;
+    try{ await persistProfilesToServer(loadProfiles()); }
+    catch(error){ event.target.checked=!autoRemoveClosedPositions; autoRemoveClosedPositions=!autoRemoveClosedPositions; showToast(error.message); }
+  });
+}
+
+
+function setCommissionRate(value){
+  state.fees.commissionRate=Math.max(0, Number(value)||0);
+  window.realizedTradeCache=null;
+  window.realizedPeriodCache=null;
+  localStorage.setItem(COMMISSION_RATE_KEY, String(state.fees.commissionRate));
+  const input=document.getElementById('commissionRate');
+  if(input) input.value=state.fees.commissionRate;
+  renderBalancePanel();
+}
+const firstBuyInput=document.getElementById('firstBuyAmt');
+if(firstBuyInput){
+  const firstBuyCell=firstBuyInput.parentElement;
+  firstBuyInput.previousElementSibling?.remove();
+  for(const node of firstBuyCell.childNodes){
+    if(node.nodeType===Node.TEXT_NODE) node.textContent=node.textContent.replace(/\s*\uAE08\uC561\s*/g, ' ');
+  }
+  firstBuyInput.remove();
+  const editor=document.createElement('span');
+  editor.style.cssText='margin-left:10px;font-size:11.5px;color:var(--dim);';
+  editor.innerHTML='1st tranche exit target (%) <input id="firstTrancheExitTarget" type="number" step="1" min="0" style="width:58px;" onchange="state.steps[0].profit_pct=Math.max(0,Number(this.value)||0);renderStepStatusGrid();">';
+  firstBuyCell?.append(editor);
+}
+let selectedProfileId = null;
+let selectedProfileEnabled = true;
+let lastClosed = null;
+let tradeFilter = 'all';
+
+/* ---------------- window switching ---------------- */
+function openWindow(id){
+  document.querySelectorAll('.app-window').forEach(w=>w.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('.win-btn').forEach(b=>b.classList.toggle('active', b.dataset.w===id));
+  document.getElementById('reopenChip').style.display='none';
+  if(id==='win-4') renderDailyPnl();
+  if(id==='win-5') renderStepStatusGrid();
+  if(id==='win-2') renderBalancePanel();
+}
+
+function reconciledTrancheRows(holding, summaries){
+  const brokerQty=Math.max(0,Number(holding.qty)||0);
+  // `/api/trades.tranches` is the authoritative *net-open* ledger view. Do
+  // not rebuild it from `payload.trades`: that stream deliberately includes
+  // historical BUY rows, including lots already closed by a linked SELL.
+  // Re-adding those historical BUYs caused Line 2 to render 66 (= 3 x 22)
+  // for 333430 even though the API correctly reported one open 22-share lot.
+  // Group only duplicate summary rows (for example split open fills), using a
+  // weighted basis, and keep the net quantity supplied by the backend.
+  const byStep=new Map();
+  summaries.filter(t=>t.symbol===holding.symbol).forEach(t=>{
+    const step=Number(t.step), qty=Math.max(0,Number(t.qty)||0), price=Number(t.avgPrice)||0;
+    if(!(step>0) || !(qty>0)) return;
+    const existing=byStep.get(step);
+    if(existing){
+      const combinedQty=existing.qty+qty;
+      existing.price=combinedQty>0 ? ((existing.price*existing.qty)+(price*qty))/combinedQty : 0;
+      existing.qty=combinedQty;
+    } else {
+      byStep.set(step,{step,qty,price,source:'confirmed'});
+    }
+  });
+  const rows=[...byStep.values()];
+  const trackedQty=rows.reduce((sum,row)=>sum+row.qty,0);
+  // The saved base is useful only while the local tranche map still agrees
+  // with the broker. If the ledger contains more shares than the broker does,
+  // it belongs to an older position; the live broker basis is the only valid
+  // source for the remaining position.
+  const liveBrokerPrice=Number(holding.avgPrice)||0;
+  // A manually adopted lifecycle basis is immutable and takes precedence
+  // over the legacy tranche-base cache, which may contain a broker average.
+  const savedBasePrice=Number((window.brokerManualTrancheBases||{})[holding.symbol])||Number((window.brokerTrancheBases||{})[holding.symbol])||0;
+  const basePrice=savedBasePrice||liveBrokerPrice;
+  // A ledger/broker mismatch cannot safely be attributed to an older tranche.
+  // The live broker quantity and average cost win. Historical local fills can
+  // belong to a now-closed position, so never relabel a broker-held remainder
+  // as the newest stale program fill.
+  if(trackedQty>brokerQty+1e-9){
+    // If only one broker share remains after a prior cycle was closed, it is
+    // the current manual/HTS holding. Its broker average is authoritative;
+    // never reuse an old automated tranche-1 fill price.
+    if(brokerQty<=1+1e-9){
+      return brokerQty>0 ? [{step:1,qty:brokerQty,price:liveBrokerPrice,source:'current-broker-single-share'}] : [];
+    }
+    const rebuilt=[];
+    let remaining=brokerQty;
+    if(remaining>0 && !rows.some(row=>row.step===1)){
+      rebuilt.push({step:1,qty:1,price:basePrice||liveBrokerPrice,source:'manual-broker-remainder'});
+      remaining-=1;
+    }
+    rows.sort((a,b)=>a.step-b.step).forEach(row=>{
+      if(remaining<=0) return;
+      const qty=Math.min(row.qty,remaining);
+      if(qty>0) rebuilt.push({...row,qty,source:'confirmed-reconciled'});
+      remaining-=qty;
+    });
+    return rebuilt;
+  }
+  if(trackedQty<brokerQty-1e-9){
+    const first=rows.find(row=>row.step===1);
+    // Do not merge an unrecorded broker remainder into a confirmed fill: the
+    // combined number would no longer be an executed price for either lot.
+    const remainder=brokerQty-trackedQty;
+    const hasCurrentStepOneFill=rows.some(row=>row.step===1);
+    if(first && hasCurrentStepOneFill){
+      first.qty+=remainder;
+      first.source='mixed';
+    }
+    else {
+      // A manual Tranche 1 can have a durable, lifecycle-validated basis even
+      // though it has no local execution row.  Keep that recorded basis: a
+      // broker holding's average includes the other open tranches and cannot
+      // be algebraically reversed after partial tranche sells.
+      if(savedBasePrice>0){
+        const manualRow={step:1,qty:Math.min(brokerQty,Math.max(0,Number((window.brokerManualTrancheQty||{})[holding.symbol])||1)),price:savedBasePrice,source:'manual-recorded-basis'};
+        if(first) Object.assign(first,manualRow);
+        else rows.unshift(manualRow);
+        return rows.sort((a,b)=>a.step-b.step);
+      }
+      // Infer an unrecorded/manual lot from the broker's blended cost after
+      // subtracting confirmed current tranche costs. This preserves the
+      // actual manual fill (e.g. 1 @ 9300 alongside 10 @ 9200) instead of
+      // copying an obsolete saved base price.
+      const brokerCost=brokerQty*liveBrokerPrice;
+      const confirmedCost=rows.reduce((sum,row)=>sum+row.qty*row.price,0);
+      const inferredPrice=remainder>0 ? (brokerCost-confirmedCost)/remainder : 0;
+      // Korean broker averages are commonly truncated to whole won. Round
+      // the reconstructed manual price upward to the executable KR tick so
+      // 11 shares at 9,209 with 10 at 9,200 reconstructs as 9,300.
+      const reconstructedPrice=inferredPrice>0 && holding.currency!=='USD' ? Math.round(inferredPrice/5)*5 : inferredPrice;
+      if(first){
+        first.qty=remainder;
+        first.price=reconstructedPrice>0?reconstructedPrice:basePrice;
+        first.source='broker-inferred';
+      } else {
+        rows.unshift({step:1,qty:remainder,price:reconstructedPrice>0?reconstructedPrice:basePrice,source:'broker-inferred'});
+      }
+    }
+  }
+  return rows.sort((a,b)=>a.step-b.step);
+}
+function strategyTrancheBasis(holding, summaries){
+  const rows=reconciledTrancheRows(holding,summaries);
+  const qty=rows.reduce((sum,row)=>sum+(Number(row.qty)||0),0);
+  const brokerQty=Math.max(0,Number(holding.qty)||0);
+  const fullyAttributed=Math.abs(qty-brokerQty)<1e-9 && rows.every(row=>row.source!=='mixed');
+  if(!(qty>0) || !fullyAttributed) return null;
+  const cost=rows.reduce((sum,row)=>sum+(Number(row.qty)||0)*(Number(row.price)||0),0);
+  return {qty, cost, basis:cost/qty};
+}
+function fmtStrategyBasis(n, holding){
+  n=Number(n)||0;
+  if(String(holding?.currency||'').toUpperCase()==='USD') return fmtHoldingMoney(n,holding);
+  return '₩'+n.toLocaleString('ko-KR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+async function refreshTrancheViews(){
+  const buttons=document.querySelectorAll('#win-5 button[onclick="refreshTrancheViews()"]');
+  buttons.forEach(button=>{button.disabled=true; button.textContent='Refreshing...';});
+  try{
+    await refreshBrokerBalance();
+    await refreshTradeHistory();
+    renderStepStatusGrid();
+    showToast('Tranche Status refreshed');
+  }catch(error){
+    showToast('Tranche refresh failed: ' + error.message);
+  }finally{
+    buttons.forEach(button=>{button.disabled=false; button.textContent='Refresh Tranche Data';});
+  }
+}
+function tranchePriceLabel(row, holding){
+  const price=fmtHoldingMoney(row.price,holding);
+  if(row.source==='confirmed') return price;
+  if(row.source==='mixed') return `<span title="This tranche combines a confirmed fill with broker quantity that has no matching local execution record">— (mixed lots)</span>`;
+  if(row.source==='manual-recorded-basis') return `${price} <span title="Recorded manual Tranche 1 strategy basis">(manual strategy basis)</span>`;
+  if(row.source==='broker-inferred') return `${price} <span title="Inferred from the live broker moving-average cost after confirmed tranche costs">(broker-inferred strategy basis)</span>`;
+  return `${price} <span title="Recovered from the broker holding; this is not an execution-history fill">(broker-derived strategy basis)</span>`;
+}
+function netSellTarget(buyPrice, profitPct, commissionRate){
+  const fee=Math.max(0,Number(commissionRate)||0);
+  const denominator=1-fee;
+  if(!(buyPrice>0) || denominator<=0) return 0;
+  return buyPrice*(1+fee)*(1+(Number(profitPct)||0)/100)/denominator;
+}
+function renderTrancheDetails(){
+  const shell=document.getElementById('trancheDetailShell'); if(!shell) return;
+  const holdings=window.brokerHoldings||[];
+  const summaries=window.brokerTrancheSummaries||[];
+  if(!holdings.length){ shell.innerHTML='<div class="list-empty">No broker holdings</div>'; return; }
+  shell.innerHTML=holdings.map(holding=>{
+    const current=Number(holding.currentPrice)||Number(holding.avgPrice)||0;
+    const rows=reconciledTrancheRows(holding,summaries);
+    const body=rows.map(r=>{const mixed=r.source==='mixed',cost=r.qty*r.price,value=r.qty*current,pnl=value-cost,ret=cost?100*pnl/cost:0;return `<tr><td>Tranche ${r.step}</td><td>${r.qty}</td><td>${tranchePriceLabel(r,holding)}</td><td>${mixed?'-':fmtHoldingMoney(pnl,holding)}</td><td>${mixed?'-':fmtPct(ret)+'%'}</td><td>${mixed?'-':fmtHoldingMoney(cost,holding)}</td><td>${fmtHoldingMoney(value,holding)}</td></tr>`;}).join('');
+    const strategy=strategyTrancheBasis(holding,summaries);
+    const basisNote=strategy?`<div style="margin:0 0 6px;color:var(--dim);font-size:12px;">Broker moving-average cost: ${fmtHoldingMoney(holding.avgPrice,holding)} · Strategy tranche-weighted basis: ${fmtStrategyBasis(strategy.basis,holding)} (${strategy.qty} shares)</div>`:`<div style="margin:0 0 6px;color:var(--dim);font-size:12px;">Broker moving-average cost: ${fmtHoldingMoney(holding.avgPrice,holding)} · Strategy tranche-weighted basis: awaiting complete tranche attribution</div>`;
+    return `<section style="margin-bottom:18px;"><div style="font-weight:700;margin-bottom:6px;">${escapeHtml(holding.symbol)} ${escapeHtml(holding.name||'')} · Current ${fmtUsd(current)}</div>${basisNote}<div style="overflow-x:auto;"><table class="mini"><thead><tr><th>Tranche</th><th>Qty</th><th>Strategy tranche cost basis</th><th>Valuation P/L</th><th>Return</th><th>Purchase Amount</th><th>Valuation Amount</th></tr></thead><tbody>${body||'<tr><td colspan="7" class="mini-empty">No tranche data</td></tr>'}</tbody></table></div></section>`;
+  }).join('');
+}
+function closeWindow(id){
+  lastClosed = id;
+  document.getElementById(id).classList.remove('active');
+  const chip = document.getElementById('reopenChip');
+  chip.style.display='block';
+  // fall back to window 1 if nothing else visible
+  if(![...document.querySelectorAll('.app-window')].some(w=>w.classList.contains('active'))){
+    document.getElementById('win-1').classList.add('active');
+    document.querySelectorAll('.win-btn').forEach(b=>b.classList.toggle('active', b.dataset.w==='win-1'));
+  }
+}
+function reopenLast(){ if(lastClosed) openWindow(lastClosed); }
+
+/* ---------------- toast ---------------- */
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._tm);
+  showToast._tm = setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+/* ---------------- auto buy / sell engine toggle ---------------- */
+async function toggleAutoBuy(checked){
+  state.autoBuy.enabled = checked;
+  const pill = document.getElementById('autoBuyStatus');
+  pill.classList.toggle('on', checked);
+  pill.innerHTML = '<span class="dot"></span>' + (checked ? '자동매수 실행중' : '정지됨');
+  try{
+    // 실제 배포 환경에서는 서버의 엔진 제어 API를 호출합니다.
+    // await fetch(`/api/engine/${state.symbol}/auto-buy`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:checked, order_type: state.autoBuy.orderType})});
+    showToast(checked ? `▶ ${state.symbol} 자동매수 시작` : `⏸ ${state.symbol} 자동매수 정지`);
+  }catch(e){
+    showToast('⚠️ 엔진 제어 실패: ' + e.message);
+  }
+}
+async function toggleAutoSell(checked){
+  state.autoSell.enabled = checked;
+  const pill = document.getElementById('autoSellStatus');
+  pill.classList.toggle('on', checked);
+  pill.innerHTML = '<span class="dot"></span>' + (checked ? '자동매도 실행중' : '정지됨');
+  try{
+    // await fetch(`/api/engine/${state.symbol}/auto-sell`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:checked, order_type: state.autoSell.orderType})});
+    showToast(checked ? `▶ ${state.symbol} 자동매도 시작` : `⏸ ${state.symbol} 자동매도 정지`);
+  }catch(e){
+    showToast('⚠️ 엔진 제어 실패: ' + e.message);
+  }
+}
+
+async function syncEngineControl(){
+  const response=await fetch('/api/control', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+    symbol:state.symbol, auto_buy:selectedProfileEnabled && state.autoBuy.enabled, auto_sell:selectedProfileEnabled && state.autoSell.enabled, config:stateToConfig()
+  })});
+  if(!response.ok) throw new Error((await response.json()).error || 'Engine control update failed');
+}
+
+// These controls are an explicit opt-in sent to the local running engine.
+async function toggleAutoBuy(checked){
+  await saveSymbolSideAutomation('buy', checked);
+}
+
+async function toggleAutoSell(checked){
+  await saveSymbolSideAutomation('sell', checked);
+}
+
+async function saveSymbolSideAutomation(side, checked){
+  const symbol=String(state.symbol||'').toUpperCase();
+  if(!symbol) return;
+  const previous=JSON.stringify(loadProfiles());
+  if(side==='buy') state.autoBuy.enabled=!!checked;
+  else state.autoSell.enabled=!!checked;
+  const profiles=loadProfiles();
+  let profile=profiles.find(p=>p.config?.symbol===symbol && p.config?.market===state.market);
+  const config=stateToConfig();
+  if(!profile){ profile={id:'p_'+Date.now(), name:`${symbol} settings`, config, enabled:false}; profiles.push(profile); }
+  else profile.config=config;
+  profile.enabled=!!(config.auto_buy.enabled || config.auto_sell.enabled);
+  selectedProfileId=profile.id;
+  selectedProfileEnabled=profile.enabled;
+  persistProfiles(profiles);
+  try{
+    await persistProfilesToServer(profiles);
+    await syncEngineControl();
+    renderSettingsHoldings();
+    showToast(`${symbol} Auto ${side==='buy'?'Buy':'Sell'} ${checked?'enabled':'stopped'}`);
+  }catch(error){
+    persistProfiles(JSON.parse(previous));
+    if(side==='buy') state.autoBuy.enabled=!checked; else state.autoSell.enabled=!checked;
+    renderAll();
+    showToast(error.message);
+  }
+}
+
+function autoFillSteps(){
+  const last = state.steps[state.steps.length-1];
+  for(let i=1;i<state.steps.length;i++){ state.steps[i].drop_pct = -5; }
+  renderAll();
+  showToast('하락률을 -5%로 자동입력했습니다');
+}
+function autoFillSell(){
+  for(let i=0;i<state.steps.length;i++){ state.steps[i].profit_pct = 5; }
+  renderAll();
+  showToast('수익률을 5%로 자동입력했습니다');
+}
+
+/* ---------------- step add / delete (unlimited, e.g. 200+) ---------------- */
+function addStep(){
+  const last = state.steps[state.steps.length-1];
+  state.steps.push({step: state.steps.length+1, drop_pct: last.drop_pct ?? -5, amount: last.amount, profit_pct: last.profit_pct});
+  currentPage = totalPages();
+  renderAll();
+}
+function removeLastStep(){
+  if(state.steps.length <= 2){ showToast('최소 1개의 차수는 유지해야 합니다'); return; }
+  state.steps.pop();
+  currentPage = Math.min(currentPage, totalPages());
+  renderAll();
+}
+function deleteStep(idx){
+  if(state.steps.length <= 2){ showToast('최소 1개의 차수는 유지해야 합니다'); return; }
+  state.steps.splice(idx,1);
+  for(let i=1;i<state.steps.length;i++){ state.steps[i].step = i+1; }
+  currentPage = Math.min(currentPage, totalPages());
+  renderAll();
+}
+function bulkAddTo(){
+  const target = parseInt(document.getElementById('bulkTarget').value, 10);
+  if(!target || target < state.steps.length){ showToast('현재보다 큰 목표 차수를 입력하세요'); return; }
+  const last = state.steps[state.steps.length-1];
+  while(state.steps.length < target){
+    state.steps.push({step: state.steps.length+1, drop_pct: last.drop_pct ?? -5, amount: last.amount, profit_pct: last.profit_pct});
+  }
+  currentPage = totalPages();
+  renderAll();
+  showToast(`총 ${target}차 매수까지 일괄 추가했습니다`);
+}
+function updateStepField(idx, key, value){
+  const numeric=Math.abs(parseFloat(value) || 0);
+  state.steps[idx][key] = key==='drop_pct' ? -numeric : (key==='profit_pct' ? numeric : numeric);
+  if(key==='drop_pct' || key==='profit_pct') renderStepsTable();
+}
+
+function applyCommonTrancheSettings(){
+  const drop=Math.abs(Number(document.getElementById('commonDropRate')?.value)||0);
+  const profit=Math.max(0,Number(document.getElementById('commonProfitRate')?.value)||0);
+  const amount=Math.max(0,Number(document.getElementById('commonBuyAmount')?.value)||0);
+  // Tranche 1 is a separately configured manual entry/exit. Preserve its
+  // amount and take-profit target; shared grid settings begin at tranche 2.
+  state.steps.forEach((step,index)=>{
+    if(index>0){
+      step.amount=amount;
+      step.profit_pct=profit;
+      step.drop_pct=-drop;
+    }
+  });
+  renderAll();
+  showToast('Common settings applied to tranches 2 and onward; tranche 1 target preserved');
+}
+
+/* ---------------- pagination ---------------- */
+function totalPages(){ return Math.max(1, Math.ceil((state.steps.length-1) / PAGE_SIZE)); }
+
+function renderPagination(){
+  const tp = totalPages();
+  if(currentPage>tp) currentPage=tp;
+  const el = document.getElementById('pagination');
+  let html = `<button ${currentPage===1?'disabled':''} onclick="gotoPage(1)">«</button>`;
+  html += `<button ${currentPage===1?'disabled':''} onclick="gotoPage(currentPage-1)">‹</button>`;
+  let start = Math.max(1, currentPage-2), end = Math.min(tp, start+4);
+  start = Math.max(1, end-4);
+  for(let p=start;p<=end;p++){
+    html += `<button class="${p===currentPage?'active':''}" onclick="gotoPage(${p})">${p}</button>`;
+  }
+  html += `<button ${currentPage===tp?'disabled':''} onclick="gotoPage(currentPage+1)">›</button>`;
+  html += `<button ${currentPage===tp?'disabled':''} onclick="gotoPage(${tp})">»</button>`;
+  html += `<span class="pg-count">${currentPage} / ${tp}</span>`;
+  el.innerHTML = html;
+}
+function gotoPage(p){ currentPage = Math.max(1, Math.min(totalPages(), p)); renderAll(); }
+
+/* ---------------- render: steps table ---------------- */
+function renderStepsTable(){
+  const body = document.getElementById('stepsBody');
+  const startIdx = (currentPage-1)*PAGE_SIZE + 1;
+  const endIdx = Math.min(state.steps.length-1, startIdx + PAGE_SIZE - 1);
+  let html = '';
+  for(let idx=startIdx; idx<=endIdx; idx++){
+    const s = state.steps[idx];
+    html += `<tr data-idx="${idx}">
+      <td><span class="step-badge">${idx}차</span></td>
+      <td><div class="cell-buy">
+        <input class="num-box" type="number" step="1" min="-100" max="0" value="${s.drop_pct}" onchange="updateStepField(${idx},'drop_pct',this.value)">
+        <span class="arrow-txt">% 하락시 → ${idx+1}차 매수</span>
+      </div></td>
+      <td><span class="ccy-sym">${ccySym()}</span><input class="amt-box" type="number" value="${s.amount}" onchange="updateStepField(${idx},'amount',this.value)" style="width:76px;"></td>
+      <td><div class="cell-sell">
+        <input class="num-box sell" type="number" step="1" min="0" value="${s.profit_pct}" onchange="updateStepField(${idx},'profit_pct',this.value)">
+        <span class="arrow-txt">% 수익시 → ${idx}차 이익청산</span>
+      </div></td>
+      <td><button class="row-del" onclick="deleteStep(${idx})" title="이 차수 삭제">✕</button></td>
+    </tr>`;
+  }
+  body.innerHTML = html;
+  // The first manual buy is the baseline; display subsequent rows as
+  // 2nd -> 3rd buy / 2nd profit exit, then 3rd -> 4th / 3rd exit.
+  body.querySelectorAll('tr[data-idx]').forEach(row=>{
+    const stage=Number(row.dataset.idx)+1;
+    const arrows=row.querySelectorAll('.arrow-txt');
+    const badge=row.querySelector('.step-badge');
+    if(badge) badge.textContent=`${stage}\uCC28`;
+    if(arrows[0]) arrows[0].textContent=`% \uD558\uB77D\uC2DC \u2192 ${stage+1}\uCC28 \uB9E4\uC218`;
+    if(arrows[1]) arrows[1].textContent=`% \uC218\uC775\uC2DC \u2192 ${stage}\uCC28 \uC774\uC775\uCCAD\uC0B0`;
+  });
+  document.getElementById('stepCountBadge').textContent = `총 ${state.steps.length}차 매수 설정됨`;
+  const firstBuyAmount=document.getElementById('firstBuyAmt');
+  if(firstBuyAmount) firstBuyAmount.value = state.steps[0].amount;
+  const commonDrop=document.getElementById('commonDropRate');
+  const commonProfit=document.getElementById('commonProfitRate');
+  const commonAmount=document.getElementById('commonBuyAmount');
+  if(commonDrop) commonDrop.value = Math.abs(Number(state.steps.find(s=>s.drop_pct!=null)?.drop_pct)||0);
+  if(commonProfit) commonProfit.value = Number(state.steps[0]?.profit_pct)||0;
+  if(commonAmount) commonAmount.value = Number(state.steps[0]?.amount)||0;
+}
+
+function renderLegs(){
+  document.getElementById('autoBuyChk').checked = state.autoBuy.enabled;
+  document.getElementById('autoBuyOrderType').value = state.autoBuy.orderType;
+  const bp = document.getElementById('autoBuyStatus');
+  bp.classList.toggle('on', state.autoBuy.enabled);
+  bp.innerHTML = '<span class="dot"></span>' + (state.autoBuy.enabled ? '자동매수 실행중' : '정지됨');
+
+  document.getElementById('autoSellChk').checked = state.autoSell.enabled;
+  document.getElementById('autoSellOrderType').value = state.autoSell.orderType;
+  const sp = document.getElementById('autoSellStatus');
+  sp.classList.toggle('on', state.autoSell.enabled);
+  sp.innerHTML = '<span class="dot"></span>' + (state.autoSell.enabled ? '자동매도 실행중' : '정지됨');
+
+  document.getElementById('symbolInput').value = state.symbol;
+  const firstExit=document.getElementById('firstTrancheExitTarget');
+  if(firstExit) firstExit.value=state.steps[0]?.profit_pct ?? 5;
+}
+
+function renderAll(){
+  renderLegs();
+  renderStepsTable();
+  renderPagination();
+  updateMarketModeUI();
+  updatePreviewTicker();
+}
+
+/* ---------------- WIN2/WIN5 공용 : 체결 원장 기반 포지션 계산 ----------------
+   매수 체결을 기준 행으로 하고, sell.buyId로 연결된 매도 체결을 바로 아래에 붙인다.
+   따라서 수익률은 설정값/추정값이 아니라 실제 체결 단가와 수량으로만 계산된다.
+----------------------------------------------------------------------------- */
+function getTradeGroups(){
+  const cacheKey=`${window.tradeLedgerSignature||''}|${state.sim.currentPrice}`;
+  if(window.tradeGroupsCache?.key===cacheKey) return window.tradeGroupsCache.groups;
+  const buys = state.tradeLedger.filter(x=>x.type==='buy').sort((a,b)=>a.filledAt.localeCompare(b.filledAt));
+  const groups=buys.map(buy=>{
+    const sells = state.tradeLedger.filter(x=>x.type==='sell' && x.buyId===buy.id)
+      .sort((a,b)=>a.filledAt.localeCompare(b.filledAt));
+    const soldQty = sells.reduce((sum,s)=>sum+s.qty,0);
+    const openQty = Math.max(0, buy.qty-soldQty);
+    const realizedPnl = sells.reduce((sum,s)=>sum+(s.price-buy.price)*s.qty,0);
+    const openPnl = (state.sim.currentPrice-buy.price)*openQty;
+    return {...buy, sells, soldQty, openQty, realizedPnl, openPnl, pnl:realizedPnl+openPnl,
+      cost:buy.qty*buy.price, evaluatedValue:sells.reduce((sum,s)=>sum+s.qty*s.price,0)+openQty*state.sim.currentPrice};
+  });
+  window.tradeGroupsCache={key:cacheKey,groups};
+  return groups;
+}
+
+function computePositions(){
+  const groups = getTradeGroups();
+  return Array.from({length:state.steps.length},(_,idx)=>{
+    const step=idx+1, lots=groups.filter(g=>g.step===step && g.openQty>0);
+    const qty=lots.reduce((s,g)=>s+g.openQty,0), cost=lots.reduce((s,g)=>s+g.openQty*g.price,0);
+    const value=qty*state.sim.currentPrice, pnl=value-cost;
+    return {step, triggered:lots.length>0, held:qty>0, qty, cost, value, pnl,
+      pnlPct:cost>0 ? pnl/cost*100 : 0, buyPrice:qty?cost/qty:0};
+  });
+}
+
+function computeBalanceStats(){
+  const commissionRate=(Number(state.fees?.commissionRate)||0)/100;
+  const brokerHoldings=window.brokerHoldings || [];
+  if(brokerHoldings.length){
+    const grossCost=brokerHoldings.reduce((sum,h)=>sum+(Number(h.qty)||0)*(Number(h.avgPrice)||0),0);
+    const grossValue=brokerHoldings.reduce((sum,h)=>sum+(Number(h.qty)||0)*(Number(h.currentPrice)||0),0);
+    const cost=grossCost*(1+commissionRate), value=grossValue*(1-commissionRate), pnl=value-cost;
+    const qty=brokerHoldings.reduce((sum,h)=>sum+(Number(h.qty)||0),0);
+    return {positions:[], groups:[], held:brokerHoldings, cost, value, qty, pnl,
+      pnlPct:cost>0 ? pnl/cost*100 : 0, avgPrice:qty>0 ? grossCost/qty : 0};
+  }
+  if(window.brokerBalance && window.brokerBalance.symbol===state.symbol){
+    const qty=Number(window.brokerBalance.qty)||0;
+    const avgPrice=Number(window.brokerBalance.avgPrice)||0;
+    const value=qty*state.sim.currentPrice*(1-commissionRate), cost=qty*avgPrice*(1+commissionRate), pnl=value-cost;
+    return {positions:[], groups:[], held:[], cost, value, qty, pnl,
+      pnlPct:cost>0 ? pnl/cost*100 : 0, avgPrice};
+  }
+  const groups=getTradeGroups();
+  const held=groups.filter(g=>g.openQty>0);
+  const cost=held.reduce((s,g)=>s+g.openQty*g.price,0);
+  const value=held.reduce((s,g)=>s+g.openQty*state.sim.currentPrice,0);
+  const qty=held.reduce((s,g)=>s+g.openQty,0), pnl=value-cost;
+  return {positions:computePositions(), groups, held, cost, value, qty, pnl,
+    pnlPct:cost>0 ? pnl/cost*100 : 0, avgPrice:qty>0 ? cost/qty : 0};
+}
+
+function ccySym(){ return state.market==='KR' ? '₩' : '$'; }
+function fmtUsd(n){
+  n = n||0;
+  const sign = n<0 ? '-' : '';
+  if(state.market==='KR'){
+    // 국내주식은 원 단위(정수) 표기, 소수점 없음
+    return sign + '₩' + Math.round(Math.abs(n)).toLocaleString('ko-KR');
+  }
+  return sign + '$' + Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function fmtHoldingMoney(n, holding){
+  n=Number(n)||0;
+  const sign=n<0?'-':'';
+  if(String(holding?.currency||'').toUpperCase()==='USD'){
+    return sign+'$'+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
+  }
+  return sign+'₩'+Math.round(Math.abs(n)).toLocaleString('ko-KR');
+}
+function fmtPct(n){ n = n||0; return (n>0?'+':'') + n.toFixed(2); }
+function pnlColor(n){ return n>0 ? 'var(--buy)' : (n<0 ? 'var(--sell)' : 'inherit'); }
+
+/* ---------------- 시장(해외/국내) · 환경(실계좌/모의투자) 전환 ----------------
+   실제 연동 시에는 accounts.yaml 의 market/mode 값과 화면 선택값을 일치시켜서
+   AccountManager 가 그 계좌에 맞는 KiwoomClient(REAL_DOMAIN/MOCK_DOMAIN, KR/US TR)로 라우팅하도록 한다. */
+function changeMarket(v){
+  const prevMarket = state.market;
+  state.market = v;
+  // 시장 전환 시 사용자가 아직 종목코드를 직접 바꾸지 않은 기본값이면, 보기 쉽게 예시값도 같이 바꿔준다.
+  if(v==='KR' && state.symbol==='SOXL'){
+    state.symbol = '005930';
+    state.sim.currentPrice = 71500; state.sim.prevClose = 70800;
+  } else if(v==='US' && state.symbol==='005930'){
+    state.symbol = 'SOXL';
+    state.sim.currentPrice = 24.15; state.sim.prevClose = 24.60;
+  }
+  document.getElementById('simCurrent').value = state.sim.currentPrice;
+  document.getElementById('simPrevClose').value = state.sim.prevClose;
+  updateMarketModeUI();
+  renderAll();
+  renderBalancePanel();
+  if(document.getElementById('win-5').classList.contains('active')) renderStepStatusGrid();
+  showToast(v==='KR' ? '국내주식(KRX) 모드로 전환했습니다' : '해외주식(US) 모드로 전환했습니다');
+}
+function changeMode(v){
+  state.mode = v;
+  updateMarketModeUI();
+  showToast(v==='real' ? '⚠️ 실계좌 모드입니다. 주문이 실제 체결됩니다.' : '모의투자 모드입니다.');
+}
+function updateMarketModeUI(){
+  const sym = ccySym();
+  document.querySelectorAll('.ccy-sym').forEach(el=>el.textContent=sym);
+  const step = state.market==='KR' ? '1' : '0.01';
+  const sc=document.getElementById('simCurrent'), sp=document.getElementById('simPrevClose');
+  if(sc) sc.step = step;
+  if(sp) sp.step = step;
+  const ms = document.getElementById('marketSelect'); if(ms) ms.value = state.market;
+  const modeSel = document.getElementById('modeSelect'); if(modeSel) modeSel.value = state.mode;
+  const pill = document.getElementById('modePill');
+  if(pill){
+    pill.classList.toggle('on', state.mode==='real');
+    pill.innerHTML = '<span class="dot"></span>' + (state.mode==='real' ? '실계좌' : '모의투자');
+    pill.style.color = state.mode==='real' ? 'var(--sell)' : '';
+  }
+}
+
+function updateSim(){
+  state.sim.prevClose = parseFloat(document.getElementById('simPrevClose').value)||0;
+  state.sim.currentPrice = parseFloat(document.getElementById('simCurrent').value)||0;
+  renderBalancePanel();
+  if(document.getElementById('win-5').classList.contains('active')) renderStepStatusGrid();
+}
+
+// WebSocket(시세) 수신부에서 호출할 공개 함수. 화면의 수동 입력은 연동 후 제거하면 된다.
+function setRealtimeQuote({currentPrice, prevClose}){
+  // Removed: WIN2 no longer uses preview or execution-ledger quote updates.
+}
+
+// API 체결 목록은 {id,type:'buy'|'sell',step,filledAt,qty,price,buyId?} 형식으로 전달한다.
+function setTradeLedger(filledOrders){
+  const next=Array.isArray(filledOrders) ? filledOrders : [];
+  const signature=next.map(row=>`${row.id}|${row.createdAt||row.filledAt}|${row.qty}|${row.price}`).join('\n');
+  if(window.tradeLedgerSignature===signature) return false;
+  window.tradeLedgerSignature=signature;
+  state.tradeLedger=next;
+  window.realizedTradeCache=null;
+  window.realizedPeriodCache=null;
+  window.tradeGroupsCache=null;
+  renderExecutionHistory();
+  return true;
+}
+
+function renderExecutionHistory(){
+  const body=document.getElementById('executionHistoryBody');
+  if(!body) return;
+  const rows=(state.tradeLedger||[]).slice(0,100);
+  if(!rows.length){ body.innerHTML='<tr><td colspan="6" class="mini-empty">No confirmed executions</td></tr>'; return; }
+  body.innerHTML=rows.map(row=>`<tr><td>${escapeHtml(String(row.filledAt||'-').replace('T',' ').slice(0,19))}</td><td>${escapeHtml(row.symbol||state.symbol||'-')}</td><td>${escapeHtml(String(row.type||'-').toUpperCase())}</td><td>${row.step??'-'}</td><td>${row.qty??'-'}</td><td>${fmtUsd(Number(row.price)||0)}</td></tr>`).join('');
+}
+
+async function refreshTradeHistory(){
+  try{
+    const response=await fetch('/api/trades');
+    if(!response.ok) return false;
+    const payload=await response.json();
+    window.brokerTrancheSummaries=payload.tranches||[];
+    window.brokerTrancheFills=payload.trades||[];
+    setTradeLedger(payload.trades);
+    return true;
+  }catch(_error){ return false; }
+}
+
+// Execution history deliberately has no timer.  It is populated at dashboard
+// initialization/account changes and otherwise only by this explicit control.
+async function refreshExecutionHistory(){
+  const button=document.getElementById('executionHistoryRefresh');
+  if(button){ button.disabled=true; button.textContent='Refreshing...'; }
+  try{
+    const refreshed=await refreshTradeHistory();
+    showToast(refreshed ? 'Execution History refreshed' : 'Execution History is temporarily unavailable');
+  }finally{
+    if(button){ button.disabled=false; button.textContent='Refresh'; }
+  }
+}
+
+// Local dashboard controller API. Broker balances take precedence over the
+// sample ledger so HTS/manual positions appear in WIN2 as soon as REST syncs.
+function setBrokerBalance(balance){
+  if(!balance || !balance.symbol) return;
+  const incoming=Array.isArray(balance.holdings) ? balance.holdings : [];
+  const signature=JSON.stringify({updatedAt:balance.updatedAt, holdings:incoming, trancheBases:balance.trancheBases||{}});
+  if(window.brokerBalanceSignature===signature) return false;
+  window.brokerBalanceSignature=signature;
+  const previous=new Map((window.brokerHoldings||[]).map(h=>[h.symbol, h]));
+  const isInitial=!window.brokerHoldingsInitialized;
+  const newHoldings=incoming.filter(h=>!previous.has(h.symbol));
+  window.brokerHoldingsInitialized=true;
+  if(isInitial && incoming.length && !state.selectedHolding){
+    const savedSymbol=localStorage.getItem(BROKER_SELECTION_KEY);
+    applyHoldingToSettings(incoming.find(h=>h.symbol===savedSymbol) || incoming[0]);
+  }else if(!isInitial && newHoldings.length){
+    applyHoldingToSettings(newHoldings[0], true);
+    showToast(`New HTS holding detected: ${newHoldings[0].symbol}. Trade Settings updated.`);
+  }
+  window.brokerHoldings=incoming;
+  window.brokerBalance=balance;
+  window.brokerTrancheBases=balance.trancheBases || window.brokerTrancheBases || {};
+  window.brokerManualTrancheQty=balance.manualTrancheQty || window.brokerManualTrancheQty || {};
+  window.brokerManualTrancheBases=balance.manualTrancheBases || window.brokerManualTrancheBases || {};
+  // Broker holdings are a snapshot, not the Trade Settings allow-list.  A
+  // startup/partial snapshot may temporarily omit a symbol, and settings must
+  // remain available for future entries even after a position is closed.
+  renderSettingsHoldings();
+  renderBalancePanel();
+  // Keep Tranche Status synchronized with the same broker snapshot, including
+  // after-hours balance changes where the current quote itself is unchanged.
+  if(document.getElementById('win-5')?.classList.contains('active')) renderStepStatusGrid();
+  return true;
+}
+
+function applyHoldingToSettings(holding, openSettings=false){
+  if(!holding || !holding.symbol) return;
+  // Selecting a balance row must restore its own settings, never leave the
+  // previously selected stock's parameters on screen.
+  const holdingMarket=String(holding.currency||'').toUpperCase()==='USD' ? 'US' : 'KR';
+  const profile=loadProfiles().find(p=>p.config?.symbol===String(holding.symbol).toUpperCase() && p.config?.market===holdingMarket);
+  if(profile){
+    selectedProfileId=profile.id;
+    selectedProfileEnabled=profile.enabled!==false;
+    configToState(profile.config);
+    // Keep the saved automation state active when navigation switches from a
+    // preview/holding row to the Trade Settings List.
+    syncEngineControl().catch(error=>showToast(error.message));
+  }else{
+    // This ticker has no saved profile. Do not leave another ticker selected:
+    // doing so made Save overwrite the wrong Trade Settings List entry.
+    selectedProfileId=null;
+    // Start every newly adopted HTS position from a clean default grid. This
+    // prevents the Tranche Status from borrowing drop/profit rates from the
+    // previously selected symbol before its own configuration is saved.
+    state.steps=defaultSteps();
+    state.autoBuy={enabled:false, orderType:'00'};
+    state.autoSell={enabled:false, orderType:'00'};
+    // A newly discovered HTS holding has no saved per-symbol configuration.
+    // Do not leave checked boxes from the previously selected symbol.
+    document.getElementById('autoBuyChk').checked=false;
+    document.getElementById('autoSellChk').checked=false;
+  }
+  state.selectedHolding=holding;
+  state.symbol=String(holding.symbol).toUpperCase();
+  localStorage.setItem(BROKER_SELECTION_KEY, state.symbol);
+  state.market=holdingMarket; state.mode=(accountCatalog.find(a=>a.id===activeAccount)||{}).mode || 'mock';
+  updateMarketModeUI();
+  const symbolInput=document.getElementById('symbolInput');
+  if(symbolInput) symbolInput.value=state.symbol;
+  // configToState updates the selected symbol's in-memory grid. Render after
+  // every holding selection so persisted settings (for example SOXL's -1% /
+  // +1% grid) replace any reset values that were previously displayed.
+  renderAll();
+  updatePreviewTicker();
+  renderSettingsHoldings();
+  renderHtsSyncNotice();
+  if(openSettings) openWindow('win-1');
+}
+
+function renderHtsSyncNotice(){
+  const holding=state.selectedHolding;
+  let notice=document.getElementById('htsHoldingNotice');
+  if(!holding){ notice?.remove(); return; }
+  if(!notice){
+    notice=document.createElement('div'); notice.id='htsHoldingNotice';
+    notice.style.cssText='margin:8px 10px;padding:7px 9px;border:1px solid #c8dcfa;background:#eef4ff;color:#2b4a7e;border-radius:3px;font-size:11.5px;';
+    document.querySelector('#win-1 .win-body')?.prepend(notice);
+  }
+  notice.textContent=`HTS holding synced: ${holding.symbol} ${holding.name||''} · ${holding.qty} shares · set strategy parameters before enabling automation.`;
+}
+
+function updatePreviewTicker(){
+  const badge=document.getElementById('previewTickerBadge');
+  if(badge) badge.textContent=`Ticker: ${state.symbol || '—'}`;
+}
+
+function renderSettingsHoldings(){
+  const body=document.getElementById('settingsHoldingsBody');
+  if(!body) return;
+  const holdings=window.brokerHoldings || [];
+  if(!holdings.length){
+    body.className='list-empty'; body.textContent='No broker holdings'; return;
+  }
+  body.className='';
+  const profiles=loadProfiles();
+  body.innerHTML=holdings.map((h,index)=>{
+    const market=String(h.currency||'').toUpperCase()==='USD'?'US':'KR';
+    const profile=profiles.find(p=>p.config?.symbol===String(h.symbol).toUpperCase() && p.config?.market===market);
+    const enabled=!!profile && profile.enabled!==false;
+    return `<div class="symbol-automation-card ${state.symbol===h.symbol?'selected':''}">
+      <button class="symbol-configure" onclick="applyHoldingToSettings(window.brokerHoldings[${index}],true)"><b>${escapeHtml(h.symbol)}</b> ${escapeHtml(h.name||'')}<span class="symbol-meta">${h.qty} shares · ${market}</span></button>
+      <span class="symbol-meta">${profile ? ((profile.config?.auto_buy?.enabled?'Buy ':'')+(profile.config?.auto_sell?.enabled?'Sell':'') || 'Stopped') : 'Not configured'}</span>
+    </div>`;
+  }).join('');
+}
+
+async function toggleHoldingAutomation(index, enabled){
+  const holding=(window.brokerHoldings||[])[index];
+  if(!holding) return;
+  const market=String(holding.currency||'').toUpperCase()==='USD'?'US':'KR';
+  const profiles=loadProfiles();
+  let profile=profiles.find(p=>p.config?.symbol===String(holding.symbol).toUpperCase() && p.config?.market===market);
+  const previousProfiles=JSON.stringify(profiles);
+  // The checkbox is the commit boundary for the complete symbol config.
+  if(state.symbol!==String(holding.symbol).toUpperCase()) applyHoldingToSettings(holding,false);
+  const config=stateToConfig();
+  // The per-symbol checkbox is the single automation switch. Keep the
+  // profile-level enabled flag and both execution flags synchronized so the
+  // engine cannot see an enabled profile with disabled order sides.
+  config.auto_buy.enabled=!!enabled;
+  config.auto_sell.enabled=!!enabled;
+  if(!Array.isArray(config.buy_steps) || !Array.isArray(config.sell_steps) || config.buy_steps.length<1){
+    showToast('Invalid tranche settings; automation was not changed');
+    renderSettingsHoldings();
+    return;
+  }
+  if(!profile){
+    profile={id:'p_'+Date.now(), name:`${holding.symbol} settings`, config, enabled:!!enabled};
+    profiles.push(profile);
+  }else{
+    profile.config=config;
+    profile.enabled=!!enabled;
+  }
+  selectedProfileId=profile.id;
+  persistProfiles(profiles);
+  try{
+    await persistProfilesToServer(profiles);
+    await syncEngineControl();
+    renderSettingsHoldings();
+    showToast(`${holding.symbol} settings saved and automation ${enabled?'started':'stopped'}`);
+  }catch(error){
+    persistProfiles(JSON.parse(previousProfiles));
+    renderSettingsHoldings();
+    showToast(error.message);
+  }
+}
+
+function escapeHtml(value){
+  const el=document.createElement('span'); el.textContent=String(value??''); return el.innerHTML;
+}
+async function refreshBrokerBalance(){
+  try{
+    const response=await fetch('/api/balance');
+    if(!response.ok) return false;
+    return setBrokerBalance(await response.json());
+  }catch(_ignored){ return false; }
+}
+// Dashboard data is refreshed explicitly and after confirmed-fill events.
+async function refreshDashboardData(){
+  const button=document.getElementById('balanceRefresh');
+  const settingsButton=document.getElementById('settingsRefresh');
+  if(button){ button.disabled=true; button.textContent='Refreshing...'; }
+  if(settingsButton){ settingsButton.disabled=true; settingsButton.textContent='Refreshing...'; }
+  try{
+    const [profiles, balance, trades, worker]=await Promise.all([
+      loadProfilesFromServer(), refreshBrokerBalance(), refreshTradeHistory(), refreshWorkerIdentity(),
+    ]);
+    if(document.getElementById('win-5')?.classList.contains('active')) renderStepStatusGrid();
+    showToast((balance || trades || profiles!==false) ? 'Dashboard data refreshed' : 'Dashboard data is temporarily unavailable');
+  }finally{
+    if(button){ button.disabled=false; button.textContent='Refresh'; }
+    if(settingsButton){ settingsButton.disabled=false; settingsButton.textContent='Refresh'; }
+  }
+}
+
+// The worker writes local broker/ledger snapshots.  SSE is the fast path, but
+// this bounded fallback keeps Tranche Status current if a browser reconnect or
+// a local SSE response is interrupted.  It never invokes a broker API.
+let dashboardRealtimeRefreshInFlight=false;
+async function refreshDashboardRealtimeData(){
+  if(!activeAccount || dashboardRealtimeRefreshInFlight || document.hidden) return;
+  dashboardRealtimeRefreshInFlight=true;
+  try{
+    await Promise.all([refreshBrokerBalance(), refreshTradeHistory(), refreshWorkerIdentity()]);
+    if(document.getElementById('win-5')?.classList.contains('active')) renderStepStatusGrid();
+  }catch(error){
+    console.warn('Dashboard realtime refresh failed', error);
+  }finally{
+    dashboardRealtimeRefreshInFlight=false;
+  }
+}
+
+async function refreshWorkerIdentity(){
+  const target=document.getElementById('workerIdentity'); if(!target) return;
+  try{
+    const payload=await (await nativeFetch('/api/status')).json();
+    const worker=(payload.workers||[]).find(item=>item.account===activeAccount);
+    if(!worker){ target.textContent='Worker: offline'; target.classList.remove('on'); return; }
+    const instance=String(worker.instanceId||'legacy').slice(0,8);
+    const started=worker.startedAt ? new Date(worker.startedAt).toLocaleTimeString() : '-';
+    target.textContent=`Worker ${worker.pid} · ${instance} · since ${started}`;
+    target.classList.add('on');
+  }catch(_ignored){ target.textContent='Worker: unavailable'; target.classList.remove('on'); }
+}
+
+/* ---------------- WIN2 : 실시간 잔고 렌더링 ---------------- */
+function renderBalancePanel(){
+  const stats = computeBalanceStats();
+  const brokerCostHeader=document.querySelector('#balanceBody')?.closest('table')?.querySelector('thead th:nth-child(5)');
+  if(brokerCostHeader){
+    brokerCostHeader.textContent='Broker moving-average cost';
+    brokerCostHeader.title='Broker account accounting; not the strategy tranche basis';
+  }
+  document.getElementById('bal-cost').textContent = fmtUsd(stats.cost);
+  document.getElementById('bal-value').textContent = fmtUsd(stats.value);
+  const pnlEl = document.getElementById('bal-pnl');
+  pnlEl.textContent = (stats.pnl>=0?'+':'') + fmtUsd(stats.pnl);
+  pnlEl.style.color = pnlColor(stats.pnl);
+  const pctEl = document.getElementById('bal-pnlpct');
+  pctEl.textContent = fmtPct(stats.pnlPct) + '%';
+  pctEl.style.color = pnlColor(stats.pnlPct);
+  document.getElementById('bal-asset').textContent = fmtUsd(stats.value);
+
+  const body = document.getElementById('balanceBody');
+  const autoOn = state.autoBuy.enabled || state.autoSell.enabled;
+  const brokerHoldings=window.brokerHoldings || [];
+  if(brokerHoldings.length){
+    body.innerHTML=brokerHoldings.map(h=>{
+      const price=Number(h.currentPrice)||Number(h.avgPrice)||0;
+      const fee=(Number(state.fees?.commissionRate)||0)/100;
+      const cost=Number(h.qty)*Number(h.avgPrice)*(1+fee), value=Number(h.qty)*price*(1-fee), pnl=value-cost;
+      const pct=cost>0 ? pnl/cost*100 : 0;
+      return `<tr role="button" tabindex="0" title="Open Trade Settings" onclick="applyHoldingToSettings(window.brokerHoldings[${brokerHoldings.indexOf(h)}],true)" onkeydown="if(event.key==='Enter')applyHoldingToSettings(window.brokerHoldings[${brokerHoldings.indexOf(h)}],true)" style="cursor:pointer;"><td><input type="checkbox" onclick="event.stopPropagation()"></td><td style="text-align:left;font-weight:700;">${escapeHtml(h.symbol)} ${escapeHtml(h.name||'')}</td><td>-</td><td>${h.qty}</td><td title="Broker moving-average cost; not the strategy tranche basis">${fmtUsd(h.avgPrice)}</td><td>${fmtUsd(price)}</td><td style="color:${pnlColor(pnl)};">${(pnl>=0?'+':'')+fmtUsd(pnl)}</td><td style="color:${pnlColor(pct)};">${fmtPct(pct)}</td><td>${fmtUsd(cost)}</td><td>${fmtUsd(value)}</td><td><span class="auto-tag">HTS</span></td>${'<td style="color:var(--dim);">-</td>'.repeat(10)}</tr>`;
+    }).join('');
+    document.getElementById('win2Footer').textContent=`Broker holdings ${brokerHoldings.length} · Balance costs use the broker moving-average cost; strategy tranche cost basis is shown separately in Per-Tranche Holdings.`;
+    return;
+  }
+  if(stats.qty===0){
+    body.innerHTML = `<tr><td colspan="21" class="mini-empty">보유 종목이 없습니다 — 자동매수를 시작하면 여기에 표시됩니다</td></tr>`;
+  }else{
+    const chg = state.sim.prevClose>0 ? ((state.sim.currentPrice-state.sim.prevClose)/state.sim.prevClose)*100 : 0;
+    let stepCells = '';
+    for(let j=1;j<=10;j++){
+      const p = stats.positions[j-1];
+      if(p && p.triggered){
+        stepCells += `<td style="color:${pnlColor(p.pnlPct)};font-weight:600;">${fmtPct(p.pnlPct)}</td>`;
+      }else{
+        stepCells += `<td style="color:var(--dim);">-</td>`;
+      }
+    }
+    body.innerHTML = `<tr>
+      <td><input type="checkbox"></td>
+      <td style="text-align:left;font-weight:700;">${state.symbol}</td>
+      <td style="color:${pnlColor(chg)};">${fmtPct(chg)}%</td>
+      <td>${stats.qty}</td>
+      <td>${fmtUsd(stats.avgPrice)}</td>
+      <td>${fmtUsd(state.sim.currentPrice)}</td>
+      <td style="color:${pnlColor(stats.pnl)};">${(stats.pnl>=0?'+':'')+fmtUsd(stats.pnl)}</td>
+      <td style="color:${pnlColor(stats.pnlPct)};">${fmtPct(stats.pnlPct)}</td>
+      <td>${fmtUsd(stats.cost)}</td>
+      <td>${fmtUsd(stats.value)}</td>
+      <td><span class="auto-tag ${autoOn?'on':''}">${autoOn?'자동':'수동'}</span></td>
+      ${stepCells}
+    </tr>`;
+  }
+  document.getElementById('win2Footer').textContent =
+    `종목수 ${stats.qty>0?1:0}개   수동 ${(!autoOn && stats.qty>0)?1:0}   자동 ${(autoOn && stats.qty>0)?1:0}`;
+
+  renderTradeHistory(stats);
+}
+
+/* ---------------- WIN2 : 매매내역 렌더링 (날짜 = 매수한 날짜) ---------------- */
+function renderTradeHistory(stats){
+  stats = stats || computeBalanceStats();
+  const groups = stats.groups;
+  const titleEl = document.getElementById('win2SelectedSymbolTitle');
+  const subEl = document.getElementById('win2SelectedSymbol');
+  const summaryBody = document.getElementById('win2SummaryBody');
+  const tradeBody = document.getElementById('win2TradeBody');
+
+  if(groups.length===0){
+    titleEl.textContent = '매매내역';
+    subEl.textContent = '선택된 종목이 없습니다';
+    summaryBody.innerHTML = `<tr><td colspan="5" class="mini-empty">대기중</td></tr>`;
+    tradeBody.innerHTML = `<tr><td colspan="9" class="mini-empty">매매내역이 없습니다</td></tr>`;
+    return;
+  }
+
+  titleEl.textContent = `매매내역 — ${state.symbol}`;
+  const visibleGroups=groups.filter(g=>tradeFilter==='all' || (tradeFilter==='open' ? g.openQty>0 : g.openQty===0));
+  subEl.textContent = `${state.symbol} (${groups.length}건 · ${tradeFilter==='all'?'전체':tradeFilter==='open'?'진행중':'종료'})`;
+
+  let totalCost=0, totalValue=0;
+  groups.forEach(g=>{ totalCost+=g.cost; totalValue+=g.evaluatedValue; });
+  const totalPnl = totalValue-totalCost;
+  const totalPnlPct = totalCost>0 ? (totalPnl/totalCost)*100 : 0;
+  summaryBody.innerHTML = `<tr>
+    <td>${positions.length}건</td>
+    <td>${fmtUsd(totalCost)}</td>
+    <td>${fmtUsd(totalValue)}</td>
+    <td style="color:${pnlColor(totalPnl)};">${(totalPnl>=0?'+':'')+fmtUsd(totalPnl)}</td>
+    <td style="color:${pnlColor(totalPnlPct)};">${fmtPct(totalPnlPct)}</td>
+  </tr>`;
+
+  let rows = '';
+  visibleGroups.forEach(g=>{
+    const dstr=g.filledAt.replace(/-/g,'.');
+    const pnl=g.pnl, pnlPct=g.cost>0 ? pnl/g.cost*100 : 0;
+    rows += `<tr>
+      <td>${g.step}차</td><td>${dstr}</td><td>${g.qty}</td><td>${fmtUsd(g.price)}</td>
+      <td>${fmtUsd(g.cost)}</td><td>매수</td>
+      <td>${g.openQty ? fmtUsd(state.sim.currentPrice) : '-'}</td>
+      <td style="color:${pnlColor(pnl)};">${(pnl>=0?'+':'')+fmtUsd(pnl)}</td>
+      <td style="color:${pnlColor(pnlPct)};">${fmtPct(pnlPct)}</td>
+    </tr>`;
+    g.sells.forEach(s=>{
+      const sellPnl=(s.price-g.price)*s.qty, sellPct=g.price>0 ? sellPnl/(g.price*s.qty)*100 : 0;
+      rows += `<tr class="sell-row">
+        <td>${g.step}차</td><td>${s.filledAt.replace(/-/g,'.')}</td><td>${s.qty}</td><td>${fmtUsd(s.price)}</td>
+        <td>${fmtUsd(s.qty*s.price)}</td><td>매도</td><td>-</td>
+        <td style="color:${pnlColor(sellPnl)};">${(sellPnl>=0?'+':'')+fmtUsd(sellPnl)}</td>
+        <td style="color:${pnlColor(sellPct)};">${fmtPct(sellPct)}</td>
+      </tr>`;
+    });
+  });
+  tradeBody.innerHTML = rows || `<tr><td colspan="9" class="mini-empty">선택한 조건의 매매내역이 없습니다</td></tr>`;
+}
+
+function setTradeFilter(filter){
+  tradeFilter=filter;
+  document.querySelectorAll('[data-trade-filter]').forEach(b=>b.classList.toggle('active',b.dataset.tradeFilter===filter));
+  renderTradeHistory();
+}
+
+/* ---------------- WIN5 : 차수 현황 그리드 (시세 시뮬레이터 기반 실제 계산) ---------------- */
+function renderStepStatusGrid(){
+  const shell = document.getElementById('m5Shell');
+  const COLS = 7;
+  const MAX_BLOCKS = 12; // 화면 성능을 위해 최대 12블록(84차)까지만 미리 렌더링
+  const N = state.steps.length;
+  const positions = computePositions();
+  const blocks = Math.min(MAX_BLOCKS, Math.ceil(N / COLS));
+  const chg = state.sim.prevClose>0 ? ((state.sim.currentPrice-state.sim.prevClose)/state.sim.prevClose)*100 : 0;
+  const autoOn = state.autoBuy.enabled || state.autoSell.enabled;
+  let html = '';
+  for(let b=0;b<blocks;b++){
+    const from = b*COLS+1, to = Math.min(N, from+COLS-1);
+    let heads='', vals='';
+    for(let c=from;c<=to;c++){
+      heads += `<th>${c}차</th>`;
+      const p = positions[c-1];
+      vals += (p && p.triggered) ? `<td>${fmtPct(p.pnlPct)}</td>` : `<td>-</td>`;
+    }
+    html += `<div class="m5-block"><table class="m5-table">
+      <thead><tr><th>종목명(1)</th><th>등락</th><th>자동</th>${heads}</tr></thead>
+      <tbody><tr><td>${state.symbol}</td><td class="updown">${fmtPct(chg)}</td><td class="autotag"><span>${autoOn?'A':'M'}</span></td>${vals}</tr></tbody>
+    </table></div>`;
+  }
+  shell.innerHTML = html;
+  const more = document.getElementById('m5More');
+  const remain = N - blocks*COLS;
+  more.textContent = remain>0 ? `외 ${remain}차수 더 있음 (총 ${N}차 매수 설정됨)` : `총 ${N}차 매수 설정됨`;
+}
+
+/* ---------------- profile list (매매설정 리스트) ---------------- */
+function loadProfiles(){
+  try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }catch(e){ return []; }
+}
+function persistProfiles(list){ localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); }
+async function persistProfilesToServer(list){
+  const response=await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profiles:list, selected_profile_id:selectedProfileId, auto_remove_closed_positions:autoRemoveClosedPositions})});
+  if(!response.ok) throw new Error('Could not permanently save Trade Settings');
+}
+async function loadProfilesFromServer(){
+  try{
+    const response=await fetch('/api/settings'); if(!response.ok) return false;
+    const payload=await response.json(); if(!Array.isArray(payload.profiles)) return false;
+    autoRemoveClosedPositions=payload.auto_remove_closed_positions !== false;
+    const removeClosed=document.getElementById('removeClosedPositions');
+    if(removeClosed) removeClosed.checked=autoRemoveClosedPositions;
+    // The server response is already scoped to the active account. Do not
+    // merge the browser's shared legacy cache, which can contain profiles from
+    // another market/account (for example KR profiles appearing in US).
+    const activeInfo=accountCatalog.find(account=>account.id===activeAccount);
+    const accountMarket=activeInfo?.market;
+    // Repair legacy profiles saved under the wrong market after switching
+    // accounts. Settings are account-scoped, so the active account market is
+    // authoritative; this does not change the enabled/disabled checkbox.
+    const merged=payload.profiles.map(profile=>{
+      if(accountMarket && profile?.config && profile.config.market!==accountMarket){
+        return {...profile, config:{...profile.config, market:accountMarket}};
+      }
+      return profile;
+    });
+    persistProfiles(merged); renderProfileList(); renderSettingsHoldings();
+    if(JSON.stringify(merged)!==JSON.stringify(payload.profiles)){
+      persistProfilesToServer(merged).catch(()=>{});
+    }
+    return true;
+  }catch(_error){ return false; /* localStorage remains the offline fallback */ }
+}
+
+function stateToConfig(){
+  return {
+    symbol: state.symbol,
+    market: state.market,   // 'US' | 'KR'
+    mode: state.mode,       // 'real' | 'mock' — 화면 표시용. 실제 계좌 분기는 accounts.yaml 기준
+    // The UI stores this as a percent (for example 0.015), while the engine
+    // uses a decimal per-side commission rate.
+    commission_rate: (Number(state.fees?.commissionRate)||0)/100,
+    auto_buy: { enabled: state.autoBuy.enabled, order_type: state.autoBuy.orderType },
+    auto_sell: { enabled: state.autoSell.enabled, order_type: state.autoSell.orderType },
+    first_buy: { mode:'manual', amount: state.steps[0].amount },
+    buy_steps: state.steps.slice(1).map(s=>({step:s.step, drop_pct:s.drop_pct, amount:s.amount})),
+    sell_steps: state.steps.map(s=>({step:s.step, profit_pct:s.profit_pct})),
+    risk: { max_position_amount: null, max_cycles: null }
+  };
+}
+function configToState(cfg){
+  state.symbol = cfg.symbol || 'SOXL';
+  // The running account is authoritative. A profile saved while another
+  // account was selected must not turn a US dashboard into KR formatting.
+  const activeInfo=accountCatalog.find(account=>account.id===activeAccount);
+  state.market = activeInfo?.market || cfg.market || 'US';
+  state.mode = cfg.mode || 'mock';
+  if(Number.isFinite(Number(cfg.commission_rate))) state.fees.commissionRate=Math.max(0,Number(cfg.commission_rate)*100);
+  state.autoBuy = { enabled: !!cfg.auto_buy?.enabled, orderType: cfg.auto_buy?.order_type || '00' };
+  state.autoSell = { enabled: !!cfg.auto_sell?.enabled, orderType: cfg.auto_sell?.order_type || '00' };
+  const steps = [{step:1, drop_pct:null, amount:cfg.first_buy?.amount ?? 100, profit_pct: Math.abs(cfg.sell_steps?.[0]?.profit_pct ?? 5)}];
+  (cfg.buy_steps || []).forEach((b,i)=>{
+    steps.push({step:b.step, drop_pct:-Math.abs(b.drop_pct ?? 0), amount:b.amount, profit_pct: Math.abs(cfg.sell_steps?.[i+1]?.profit_pct ?? 5)});
+  });
+  state.steps = steps.length>1 ? steps : defaultSteps();
+  currentPage = 1;
+}
+
+function renderProfileList(){
+  // Legacy renderer retained only for compatibility with saved local data;
+  // the global Trading Settings list is no longer part of the UI.
+  if(!document.getElementById('profileListBody')) return;
+  const list = loadProfiles();
+  const body = document.getElementById('profileListBody');
+  const empty = document.getElementById('profileEmpty');
+  if(list.length===0){
+    body.innerHTML=''; empty.style.display='block'; return;
+  }
+  empty.style.display='none';
+  body.innerHTML = list.map((p,i)=>`<tr class="${p.id===selectedProfileId?'selected':''}" onclick="selectProfile('${p.id}')">
+      <td>${i+1}</td><td><input type="checkbox" title="Start/stop automation" ${p.enabled!==false?'checked':''} onclick="event.stopPropagation();toggleProfileEnabled('${p.id}',this.checked)"> ${escapeHtml(p.name)}</td></tr>`).join('');
+}
+function selectProfile(id){
+  selectedProfileId = id;
+  const list = loadProfiles();
+  const p = list.find(x=>x.id===id);
+  if(p){
+    selectedProfileEnabled = p.enabled !== false;
+    configToState(p.config);
+    renderAll();
+  }
+  renderProfileList();
+}
+async function toggleProfileEnabled(id, enabled){
+  const list=loadProfiles();
+  const profile=list.find(item=>item.id===id);
+  if(!profile) return;
+  const previous=profile.enabled !== false;
+  profile.enabled=!!enabled;
+  selectedProfileId=id;
+  selectedProfileEnabled=!!enabled;
+  try{
+    persistProfiles(list);
+    await persistProfilesToServer(list);
+    selectProfile(id);
+    await syncEngineControl();
+    showToast(`${profile.config?.symbol||profile.name} automation ${enabled?'started':'stopped'}`);
+  }catch(error){
+    profile.enabled=previous;
+    persistProfiles(list);
+    renderProfileList();
+    showToast('Automation state was not saved: '+error.message);
+  }
+}
+function refreshProfiles(){ renderProfileList(); showToast('목록을 새로고침했습니다'); }
+async function addProfile(){
+  const name = prompt('저장할 매매설정 파일 이름을 입력하세요', state.symbol + '_설정');
+  if(!name) return;
+  const list = loadProfiles();
+  const id = 'p_' + Date.now();
+  list.push({id, name, config: stateToConfig()});
+  persistProfiles(list);
+  selectedProfileId = id;
+  renderProfileList();
+  try{ await persistProfilesToServer(list); }
+  catch(error){ showToast(`Add was not saved: ${error.message}`); return; }
+  showToast('매매설정을 저장했습니다');
+}
+async function renameProfile(){
+  if(!selectedProfileId){ showToast('변경할 매매설정을 목록에서 먼저 선택하세요'); return; }
+  const list = loadProfiles();
+  const p = list.find(x=>x.id===selectedProfileId);
+  if(!p) return;
+  const name = prompt('새 이름 또는 현재 설정으로 덮어쓰려면 그대로 확인을 누르세요', p.name);
+  if(name===null) return;
+  p.name = name; p.config = stateToConfig();
+  persistProfiles(list);
+  renderProfileList();
+  try{ await persistProfilesToServer(list); }
+  catch(error){ showToast(`Rename was not saved: ${error.message}`); return; }
+  showToast('매매설정을 변경했습니다');
+}
+async function deleteProfile(){
+  if(!selectedProfileId){ showToast('삭제할 매매설정을 목록에서 먼저 선택하세요'); return; }
+  let list = loadProfiles();
+  const previousProfiles = list;
+  const p = list.find(x=>x.id===selectedProfileId);
+  if(!p) return;
+  if(!confirm(`"${p.name}" 설정을 삭제할까요?`)) return;
+  list = list.filter(x=>x.id!==selectedProfileId);
+  persistProfiles(list);
+  selectedProfileId = null;
+  renderProfileList();
+  try{
+    await persistProfilesToServer(list);
+  }catch(error){
+    persistProfiles(previousProfiles);
+    selectedProfileId=p.id;
+    renderProfileList();
+    showToast(`Delete was not saved: ${error.message}`);
+    return;
+  }
+  showToast('삭제했습니다');
+}
+
+/* ---------------- save / load / download ---------------- */
+async function saveConfig(){
+  const json = stateToConfig();
+  try{
+    localStorage.setItem('kiwoom_strategy_config_current', JSON.stringify(json));
+    const profiles=loadProfiles();
+    const selected=profiles.find(p=>p.id===selectedProfileId);
+    // A selected row is usable only when it belongs to this exact ticker.
+    // Otherwise create/find the ticker's own row instead of overwriting it.
+    let profile=(selected && selected.config?.symbol===state.symbol && selected.config?.market===state.market)
+      ? selected
+      : profiles.find(p=>p.config?.symbol===state.symbol && p.config?.market===state.market);
+  if(profile){
+    profile.config=json;
+    profile.enabled=true;
+  }else{
+      profile={id:'p_'+Date.now(), name:`${state.symbol} settings`, config:json, enabled:true};
+      profiles.push(profile);
+    }
+    selectedProfileId=profile.id;
+    selectedProfileEnabled=true;
+    persistProfiles(profiles);
+    // Update the visible list immediately, then verify durable persistence.
+    renderProfileList();
+    await persistProfilesToServer(profiles);
+    await syncEngineControl();
+    // 실제 배포 환경에서는 아래 fetch가 서버의 /api/strategy-config 엔드포인트를 호출해
+    // config/strategy_config.json 을 갱신하고 실행 중인 AccountEngine이 핫리로드하도록 연결합니다.
+    // await fetch('/api/strategy-config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(json)});
+    showToast('✅ 저장되었습니다');
+  }catch(e){ showToast('⚠️ 저장 실패: ' + e.message); }
+}
+function loadConfigFromStorage(){
+  const raw = localStorage.getItem('kiwoom_strategy_config_current');
+  if(!raw){ showToast('저장된 설정이 없습니다'); return; }
+  configToState(JSON.parse(raw));
+  renderAll();
+  showToast('불러왔습니다');
+}
+function downloadConfig(){
+  const json = stateToConfig();
+  const blob = new Blob([JSON.stringify(json, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'strategy_config.json';
+  a.click();
+}
+
+/* ---------------- init ---------------- */
+// Replace the old static sample views with broker/ledger-backed views.
+function renderDailyPnl(){
+  const shell=document.querySelector('#win-4 .mobile-shell');
+  if(!shell) return;
+  const trades=state.tradeLedger||[];
+  const buys=new Map(trades.filter(t=>t.type==='buy').map(t=>[t.id,t]));
+  const sells=trades.filter(t=>t.type==='sell');
+  const realized=sells.reduce((sum,s)=>sum+((s.price-(buys.get(s.buyId)?.price||s.price))*s.qty),0);
+  const proceeds=sells.reduce((sum,s)=>sum+s.price*s.qty,0);
+  const cost=sells.reduce((sum,s)=>sum+(buys.get(s.buyId)?.price||0)*s.qty,0);
+  const pct=cost>0 ? realized/cost*100 : 0;
+  shell.innerHTML=`<div class="date-nav"><span>Daily Profit & Loss</span></div><div class="m-summary"><div class="row"><span class="l">Confirmed sell proceeds</span><span class="v">${fmtUsd(proceeds)}</span></div><div class="row"><span class="l">Confirmed realized P&L</span><span class="v" style="color:${pnlColor(realized)}">${fmtUsd(realized)}</span></div><div class="row"><span class="l">Return</span><span class="v" style="color:${pnlColor(pct)}">${fmtPct(pct)}%</span></div><div class="count">Confirmed sell executions: ${sells.length}</div></div><table class="m-table"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Realized P&L</th></tr></thead><tbody>${trades.length?trades.map(t=>{const p=t.type==='sell'?((t.price-(buys.get(t.buyId)?.price||t.price))*t.qty):0;return `<tr><td>${escapeHtml(String(t.filledAt||'-').slice(0,10))}</td><td>${escapeHtml(t.symbol||state.symbol)}</td><td>${escapeHtml(String(t.type).toUpperCase())}</td><td>${t.qty}</td><td style="color:${pnlColor(p)}">${t.type==='sell'?fmtUsd(p):'-'}</td></tr>`}).join(''):'<tr><td colspan="5" class="mini-empty">No confirmed executions</td></tr>'}</tbody></table>`;
+}
+
+function renderStepStatusGrid(){
+  const shell=document.getElementById('m5Shell'); if(!shell) return;
+  const holding=(window.brokerHoldings||[]).find(h=>h.symbol===state.symbol) || state.selectedHolding;
+  const price=Number(holding?.currentPrice)||0, average=Number(holding?.avgPrice)||0, qty=Number(holding?.qty)||0;
+  const firstTarget=average*(1+(Number(state.steps[0]?.profit_pct)||0)/100);
+  const rows=state.steps.map((step,index)=>{const base=index===0?average:0; const target=index===0?firstTarget:0; const status=index===0?(qty>0?(price>=target?'Sell target reached':'Holding'):'No holding'):'Waiting for prior tranche'; return `<tr><td>${step.step}</td><td>${index===0?qty:'-'}</td><td>${index===0?fmtUsd(base):'-'}</td><td>${index===0?fmtUsd(target):'-'}</td><td>${index===0?fmtPct(average?((price-average)/average*100):0)+'%':'-'}</td><td>${status}</td></tr>`;}).join('');
+  shell.innerHTML=`<div style="font-size:12px;margin-bottom:8px;">${escapeHtml(state.symbol)} · Auto Buy ${state.autoBuy.enabled?'ON':'OFF'} · Auto Sell ${state.autoSell.enabled?'ON':'OFF'}</div><table class="m5-table"><thead><tr><th>Tranche</th><th>Qty</th><th>Base</th><th>Sell target</th><th>Return</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
+  document.getElementById('m5More').textContent='Broker balance and saved profile settings';
+}
+
+// Reference-style tranche status: seven tranches per horizontal block.
+function renderStepStatusGrid(){
+  const shell=document.getElementById('m5Shell'); if(!shell) return;
+  const holding=(window.brokerHoldings||[]).find(h=>h.symbol===state.symbol) || state.selectedHolding || {};
+  const current=Number(holding.currentPrice)||0;
+  const prevClose=Number(holding.prevClose)||0;
+  const dailyChange=prevClose>0 ? ((current-prevClose)/prevClose*100) : 0;
+  const buys=(state.tradeLedger||[]).filter(t=>t.type==='buy' && (!t.symbol || t.symbol===state.symbol));
+  const purchaseByStep=new Map();
+  buys.forEach(b=>purchaseByStep.set(Number(b.step), Number(b.price)));
+  if(Number(holding.avgPrice)>0 && !purchaseByStep.has(1)) purchaseByStep.set(1, Number(holding.avgPrice));
+  const blocks=[];
+  for(let start=1; start<=state.steps.length; start+=7){
+    const numbers=Array.from({length:7},(_,i)=>start+i).filter(n=>n<=state.steps.length);
+    const cells=numbers.map(n=>{
+      const purchase=purchaseByStep.get(n);
+      if(!purchase || !current) return '<td class="empty">-</td>';
+      return `<td>${fmtPct((current-purchase)/purchase*100)}</td>`;
+    }).join('');
+    const mode=(state.autoBuy.enabled || state.autoSell.enabled) ? '<span title="Auto">A</span>' : '<span title="Manual" style="background:#b7b7b7;">M</span>';
+    blocks.push(`<div class="m5-block"><table class="m5-table"><thead><tr><th>Stock (1)</th><th>Fluctuation</th><th>Auto</th>${numbers.map(n=>`<th>${n}th</th>`).join('')}</tr></thead><tbody><tr><td>${escapeHtml(holding.name || state.symbol || '-')}</td><td class="updown">${fmtPct(dailyChange)}</td><td class="autotag">${mode}</td>${cells}</tr></tbody></table></div>`);
+  }
+  shell.innerHTML=blocks.join('');
+  document.getElementById('m5More').textContent='Return = (current price − tranche purchase price) ÷ tranche purchase price × 100';
+}
+
+// Include every broker holding, using its saved profile when one exists.
+function renderStepStatusGrid(){
+  const shell=document.getElementById('m5Shell'); if(!shell) return;
+  const holdings=(window.brokerHoldings||[]).length ? window.brokerHoldings : (state.selectedHolding?[state.selectedHolding]:[]);
+  const profiles=loadProfiles();
+  const blocks=[];
+  holdings.forEach(holding=>{
+    const holdingMarket=String(holding.currency||'').toUpperCase()==='USD' ? 'US' : (state.market||'KR');
+    const cfg=profiles.find(p=>p.config?.symbol===holding.symbol && p.config?.market===holdingMarket)?.config || (holding.symbol===state.symbol?stateToConfig():null);
+    const steps=cfg ? [{step:1, profit_pct:cfg.sell_steps?.[0]?.profit_pct ?? 5}, ...(cfg.buy_steps||[]).map((b,i)=>({step:b.step ?? i+2, profit_pct:cfg.sell_steps?.[i+1]?.profit_pct ?? 5}))] : [{step:1, profit_pct:5}];
+    const current=Number(holding.currentPrice)||0, prevClose=Number(holding.prevClose)||0;
+    const daily=prevClose>0 ? (current-prevClose)/prevClose*100 : 0;
+    // Partial fills are one tranche: aggregate them by ticker and strategy
+    // step with a weighted-average cost, never by the latest fill price.
+    const purchase=new Map(reconciledTrancheRows(holding,window.brokerTrancheSummaries||[])
+      .map(t=>[Number(t.step),Number(t.price)]));
+    const auto=!!(cfg?.auto_buy?.enabled || cfg?.auto_sell?.enabled);
+    for(let start=1; start<=steps.length; start+=7){
+      const numbers=Array.from({length:7},(_,i)=>start+i).filter(n=>n<=steps.length);
+      const returns=numbers.map(n=>{const p=purchase.get(n); return p&&current?`<td>${fmtPct((current-p)/p*100)}</td>`:'<td class="empty">-</td>';}).join('');
+      blocks.push(`<div class="m5-block"><table class="m5-table"><thead><tr><th>Stock (1)</th><th>Fluctuation</th><th>Auto</th>${numbers.map(n=>`<th>${n}th</th>`).join('')}</tr></thead><tbody><tr><td>${escapeHtml(holding.name||holding.symbol)}</td><td class="updown">${fmtPct(daily)}</td><td class="autotag"><span title="${auto?'Auto':'Manual'}" style="background:${auto?'#dc7cec':'#b7b7b7'}">${auto?'A':'M'}</span></td>${returns}</tr></tbody></table></div>`);
+    }
+  });
+  shell.innerHTML=blocks.length?blocks.join(''):'<div class="list-empty">No broker holdings</div>';
+  document.getElementById('m5More').textContent='Return = (current price − tranche purchase price) ÷ tranche purchase price × 100';
+}
+
+// Final split-line status renderer.  It intentionally overrides the older
+// compact return-only renderer above so the dashboard follows the desktop
+// prototype's line/tranche workflow using confirmed, broker-reconciled fills.
+function renderStepStatusGrid(){
+  const shell=document.getElementById('m5Shell'); if(!shell) return;
+  const holdings=(window.brokerHoldings||[]).length ? window.brokerHoldings : (state.selectedHolding?[state.selectedHolding]:[]);
+  const profiles=loadProfiles();
+  const panels=[];
+  holdings.forEach(holding=>{
+    const holdingMarket=String(holding.currency||'').toUpperCase()==='USD' ? 'US' : (state.market||'KR');
+    const cfg=profiles.find(p=>p.config?.symbol===holding.symbol && p.config?.market===holdingMarket)?.config || (holding.symbol===state.symbol?stateToConfig():null);
+    if(!cfg) return;
+    const lines=[{step:1,drop:null,profit:Number(cfg.sell_steps?.[0]?.profit_pct)||0}]
+      .concat((cfg.buy_steps||[]).map((buy,index)=>({step:Number(buy.step)||index+2,drop:Number(buy.drop_pct)||0,profit:Number(cfg.sell_steps?.[index+1]?.profit_pct)||0})));
+    const current=Number(holding.currentPrice)||0;
+    const entries=new Map(reconciledTrancheRows(holding,window.brokerTrancheSummaries||[]).map(row=>[Number(row.step),row]));
+    const attributedQty=[...entries.values()].reduce((sum,row)=>sum+(Number(row.qty)||0),0);
+    const unattributedQty=Math.max(0,(Number(holding.qty)||0)-attributedQty);
+    const auto=!!(cfg.auto_buy?.enabled || cfg.auto_sell?.enabled);
+    const rows=lines.map((line,index)=>{
+      const entry=entries.get(line.step), base=entry?.source==='mixed'?0:(Number(entry?.price)||0), quantity=Number(entry?.qty)||0;
+      const prior=entries.get(lines[index-1]?.step);
+      const trigger=index===0 ? null : (Number(prior?.price)||0)*(1+line.drop/100);
+      const target=netSellTarget(base,line.profit,cfg.commission_rate);
+      const ret=base>0 && current>0 ? (current-base)/base*100 : null;
+      let status='Waiting for prior confirmed line';
+      if(quantity>0) status=current>=target ? 'Sell target reached' : 'Holding';
+      else if(index===0) status=auto ? 'Ready for initial buy' : 'Initial buy disabled';
+      else if(trigger>0 && current>0 && current<=trigger) status=auto ? 'Buy trigger reached' : 'Buy trigger reached (disabled)';
+      const triggerText=index===0 ? 'Initial buy' : (trigger>0 ? fmtHoldingMoney(trigger,holding) : 'Awaiting prior line');
+      const dropText=line.drop===null ? '-' : fmtPct(line.drop)+'%';
+      const profitText=fmtPct(line.profit)+'%';
+      return `<tr><td><b>Line ${line.step}</b></td><td>${dropText}</td><td>${profitText}</td><td>${quantity||'-'}</td><td>${base?tranchePriceLabel(entry,holding):'-'}</td><td>${triggerText}</td><td>${target?fmtHoldingMoney(target,holding):'-'}</td><td>${ret===null?'-':fmtPct(ret)+'%'}</td><td>${escapeHtml(status)}</td></tr>`;
+    }).join('');
+    const warning=unattributedQty>1e-9?`<div style="margin:0 0 7px;padding:7px 9px;border:1px solid #d92d3f;background:#fff3f4;color:#9f1239;">${unattributedQty} broker shares are not assigned to a tranche. Automation is paused; they are not added to Line 1.</div>`:'';
+    const strategy=strategyTrancheBasis(holding,window.brokerTrancheSummaries||[]);
+    const basisNote=strategy?`<div style="margin:0 0 7px;color:var(--dim);font-size:12px;">Broker moving-average cost: ${fmtHoldingMoney(holding.avgPrice,holding)} · Strategy tranche-weighted basis: ${fmtStrategyBasis(strategy.basis,holding)} (${strategy.qty} shares)</div>`:`<div style="margin:0 0 7px;color:var(--dim);font-size:12px;">Broker moving-average cost: ${fmtHoldingMoney(holding.avgPrice,holding)} · Strategy tranche-weighted basis: awaiting complete tranche attribution</div>`;
+    panels.push(`<section class="m5-block"><div style="padding:0 0 7px;font-size:13px;font-weight:700;">${escapeHtml(holding.name||holding.symbol)} · ${escapeHtml(holding.symbol)} · Current ${fmtHoldingMoney(current,holding)} · ${auto?'Auto':'Manual'}</div>${basisNote}${warning}<div style="overflow-x:auto;"><table class="mini"><thead><tr><th>Line</th><th>Confirmed Qty</th><th>Strategy tranche cost basis</th><th>Next Buy Trigger</th><th>Sell Target</th><th>Return</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div></section>`);
+  });
+  shell.innerHTML=panels.length?panels.join(''):'<div class="list-empty">No broker holdings</div>';
+  shell.querySelectorAll('table.mini thead tr').forEach(row=>{
+    const headers=[...row.children].map(cell=>cell.textContent);
+    if(headers.length===7 && headers[0]==='Line'){
+      row.innerHTML='<th>Line</th><th>Drop Rate</th><th>Profit Rate</th><th>Confirmed Qty</th><th>Strategy tranche cost basis</th><th>Next Buy Trigger</th><th>Sell Target</th><th>Return</th><th>Status</th>';
+    }
+  });
+  document.getElementById('m5More').textContent='Lines use confirmed fills; every next buy references the immediately preceding confirmed line price.';
+}
+
+let realizedPnlTab='trades';
+const expandedRealizedPeriods=new Set();
+
+function toggleRealizedPeriod(key){
+  if(expandedRealizedPeriods.has(key)) expandedRealizedPeriods.delete(key);
+  else expandedRealizedPeriods.add(key);
+  renderDailyPnl();
+}
+
+function realizedTrancheTrades(){
+  const feeSignature=loadProfiles().map(profile=>[
+    profile.config?.symbol||'', Number(profile.config?.commission_rate)||0,
+  ].join(':')).sort().join('|');
+  const sourceSignature=`${window.tradeLedgerSignature||''}|${feeSignature}`;
+  if(window.realizedTradeCache?.sourceSignature===sourceSignature) return window.realizedTradeCache.trades;
+  const rows=state.tradeLedger||[];
+  const buys=new Map(rows.filter(row=>String(row.type).toLowerCase()==='buy').map(row=>[row.id,row]));
+  const profiles=loadProfiles();
+  const trades=rows.filter(row=>String(row.type).toLowerCase()==='sell' && row.buyId && buys.has(row.buyId)).map(sell=>{
+    const buy=buys.get(sell.buyId);
+    const qty=Math.min(Number(sell.qty)||0,Number(buy.qty)||0);
+    const profile=profiles.find(p=>p.config?.symbol===sell.symbol);
+    const fee=Math.max(0,Number(profile?.config?.commission_rate)||0);
+    const cost=qty*(Number(buy.price)||0)*(1+fee);
+    const proceeds=qty*(Number(sell.price)||0)*(1-fee);
+    const profit=proceeds-cost;
+    const date=String(sell.filledAt||sell.createdAt||'').slice(0,10);
+    return {symbol:sell.symbol||'',step:Number(sell.step)||0,qty,buyPrice:Number(buy.price)||0,
+      sellPrice:Number(sell.price)||0,date,createdAt:String(sell.createdAt||sell.filledAt||''),cost,proceeds,profit,
+      returnPct:cost>0?profit/cost*100:0};
+  }).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+  window.realizedTradeCache={sourceSignature,trades};
+  return trades;
+}
+
+// Period and symbol breakdowns are derived only after the confirmed ledger
+// changes. Switching tabs or expanding a period reuses these dashboard-local
+// aggregates and never performs another SQLite query.
+function realizedPeriodGroups(period){
+  const trades=realizedTrancheTrades();
+  const sourceSignature=window.realizedTradeCache?.sourceSignature||'';
+  const cache=window.realizedPeriodCache;
+  if(cache?.sourceSignature===sourceSignature && cache.byPeriod?.[period]) return cache.byPeriod[period];
+  const nextCache=cache?.sourceSignature===sourceSignature ? cache : {sourceSignature,byPeriod:{}};
+  const keyFor=trade=>period==='day' ? trade.date : period==='month' ? trade.date.slice(0,7) : trade.date.slice(0,4);
+  const groups=new Map();
+  trades.forEach(trade=>{
+    const key=keyFor(trade)||'Unknown';
+    const item=groups.get(key)||{key,count:0,cost:0,profit:0,symbols:new Map()};
+    item.count++; item.cost+=trade.cost; item.profit+=trade.profit;
+    const symbol=item.symbols.get(trade.symbol)||{symbol:trade.symbol,count:0,cost:0,profit:0};
+    symbol.count++; symbol.cost+=trade.cost; symbol.profit+=trade.profit;
+    item.symbols.set(trade.symbol,symbol); groups.set(key,item);
+  });
+  nextCache.byPeriod[period]=[...groups.values()].sort((a,b)=>b.key.localeCompare(a.key));
+  window.realizedPeriodCache=nextCache;
+  return nextCache.byPeriod[period];
+}
+
+async function refreshRealizedPnlHistory(){
+  await refreshTradeHistory();
+  renderDailyPnl();
+}
+
+function renderDailyPnl(){
+  const shell=document.querySelector('#win-4 .mobile-shell'); if(!shell) return;
+  const trades=realizedTrancheTrades();
+  const tabButton=(key,label)=>`<button class="btn btn-sm ${realizedPnlTab===key?'btn-primary':''}" onclick="realizedPnlTab='${key}';renderDailyPnl()">${label}</button>`;
+  const tabs=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">${tabButton('trades','Individual Trades')}${tabButton('day','Daily')}${tabButton('month','Monthly')}${tabButton('year','Yearly')}<button class="btn btn-sm" onclick="refreshRealizedPnlHistory()">Refresh confirmed history</button></div>`;
+  if(realizedPnlTab==='trades'){
+    const body=trades.map((trade,index)=>`<tr><td>${index+1}</td><td>${escapeHtml(trade.date||'-')}</td><td>${escapeHtml(trade.symbol)}</td><td>${trade.step}</td><td>${trade.qty}</td><td>${fmtUsd(trade.buyPrice)}</td><td>${fmtUsd(trade.sellPrice)}</td><td style="color:${pnlColor(trade.profit)}">${fmtUsd(trade.profit)}</td><td style="color:${pnlColor(trade.returnPct)}">${fmtPct(trade.returnPct)}%</td></tr>`).join('');
+    shell.innerHTML=`${tabs}<div class="m-summary"><div class="row"><span class="l">Completed tranche trades</span><span class="v">${trades.length}</span></div><div class="row"><span class="l">Total realized P/L</span><span class="v" style="color:${pnlColor(trades.reduce((s,t)=>s+t.profit,0))}">${fmtUsd(trades.reduce((s,t)=>s+t.profit,0))}</span></div></div><div style="overflow-x:auto;"><table class="mini"><thead><tr><th>#</th><th>Sell Date</th><th>Symbol</th><th>Tranche</th><th>Qty</th><th>Buy</th><th>Sell</th><th>Profit</th><th>Return</th></tr></thead><tbody>${body||'<tr><td colspan="9" class="mini-empty">No completed tranche trades</td></tr>'}</tbody></table></div>`;
+    return;
+  }
+  const body=realizedPeriodGroups(realizedPnlTab).map(item=>{
+    const expanded=expandedRealizedPeriods.has(item.key);
+    const rate=item.cost?item.profit/item.cost*100:0;
+    const summary=`<tr style="cursor:pointer;" onclick="toggleRealizedPeriod('${escapeHtml(item.key)}')"><td><b>${expanded?'▾':'▸'} ${escapeHtml(item.key)}</b></td><td>${item.count}</td><td style="color:${pnlColor(item.profit)}">${fmtUsd(item.profit)}</td><td style="color:${pnlColor(rate)}">${fmtPct(rate)}%</td></tr>`;
+    if(!expanded) return summary;
+    const details=[...item.symbols.values()].sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(symbol=>{
+      const symbolRate=symbol.cost?symbol.profit/symbol.cost*100:0;
+      return `<tr style="background:rgba(255,255,255,.035);"><td style="padding-left:28px;">↳ ${escapeHtml(symbol.symbol||'-')}</td><td>${symbol.count}</td><td style="color:${pnlColor(symbol.profit)}">${fmtUsd(symbol.profit)}</td><td style="color:${pnlColor(symbolRate)}">${fmtPct(symbolRate)}%</td></tr>`;
+    }).join('');
+    return summary+details;
+  }).join('');
+  shell.innerHTML=`${tabs}<div class="m-summary"><div class="row"><span class="l">${realizedPnlTab==='day'?'Daily':realizedPnlTab==='month'?'Monthly':'Yearly'} realized P/L</span><span class="v">Click a period to show symbol totals</span></div></div><table class="mini"><thead><tr><th>Period / Symbol</th><th>Trades</th><th>Total Profit</th><th>Total Return</th></tr></thead><tbody>${body||'<tr><td colspan="4" class="mini-empty">No completed tranche trades</td></tr>'}</tbody></table>`;
+}
+
+const originalSetTradeLedger=setTradeLedger;
+setTradeLedger=function(rows){
+  const changed=originalSetTradeLedger(rows);
+  if(changed) renderDailyPnl();
+  if(changed && document.getElementById('win-5')?.classList.contains('active')) renderStepStatusGrid();
+  return changed;
+};
+
+// Each dashboard view is scoped to exactly one configured account.  The engine
+// can run KR and US accounts together, while the selected account determines
+// the balance, ledger, profiles, and control file used by this browser tab.
+const nativeFetch=window.fetch.bind(window);
+let activeAccount=localStorage.getItem('kiwoom_active_account') || '';
+let accountCatalog=[];
+let dashboardEventSource=null;
+let dashboardEventAccount='';
+
+function connectDashboardEvents(){
+  if(!activeAccount || (dashboardEventSource && dashboardEventAccount===activeAccount)) return;
+  dashboardEventSource?.close();
+  dashboardEventAccount=activeAccount;
+  dashboardEventSource=new EventSource(`/api/events?account=${encodeURIComponent(activeAccount)}`);
+  const handleConfirmedFillRefresh=async event=>{
+    try{
+      const fill=JSON.parse(event.data||'{}');
+      if(fill.account!==activeAccount) return;
+      await refreshDashboardRealtimeData();
+      showToast(`Confirmed ${(fill.type || 'trade').replace('-fill','').toUpperCase()} fill refreshed: ${fill.symbol || ''}`.trim());
+    }catch(error){
+      // A UI event failure must not affect the worker-confirmed fill, but it
+      // must be visible during diagnosis instead of being silently discarded.
+      console.warn('Confirmed-fill dashboard refresh failed', error);
+      showToast('Confirmed fill received; dashboard refresh will retry shortly.');
+    }
+  };
+  dashboardEventSource.addEventListener('sell-fill', handleConfirmedFillRefresh);
+  dashboardEventSource.addEventListener('buy-fill', handleConfirmedFillRefresh);
+  dashboardEventSource.onerror=()=>{
+    // EventSource retries itself.  The periodic local-snapshot refresh below
+    // covers the short reconnect window without creating duplicate streams.
+    console.warn('Dashboard fill event stream reconnecting');
+  };
+}
+window.fetch=function(input, init){
+  const raw=typeof input==='string'?input:input?.url;
+  if(raw && raw.startsWith('/api/') && !raw.startsWith('/api/accounts') && activeAccount){
+    const url=new URL(raw, window.location.origin);
+    if(!url.searchParams.has('account')) url.searchParams.set('account', activeAccount);
+    return nativeFetch(url.pathname+url.search, init);
+  }
+  return nativeFetch(input, init);
+};
+function renderAccountSelector(){
+  // Account selection remains internal; the account/environment dropdown is
+  // intentionally not exposed in the dashboard UI.
+  document.getElementById('dashboardAccountSelect')?.remove();
+}
+async function switchDashboardAccount(account){
+  const info=accountCatalog.find(a=>a.id===account); if(!info) return;
+  activeAccount=account; localStorage.setItem('kiwoom_active_account', account);
+  connectDashboardEvents();
+  state.market=info.market; state.mode=info.mode;
+  window.brokerHoldings=[]; window.brokerBalance=null; window.brokerBalanceSignature=null;
+  state.tradeLedger=[]; window.tradeLedgerSignature=null; window.tradeGroupsCache=null;
+  window.realizedTradeCache=null; window.realizedPeriodCache=null; selectedProfileId=null;
+  updateMarketModeUI(); renderAccountSelector();
+  await refreshDashboardData();
+  renderAll(); renderBalancePanel();
+}
+async function initializeAccounts(){
+  try{
+    const payload=await (await nativeFetch('/api/accounts')).json();
+    accountCatalog=payload.accounts||[];
+    // A previously selected account is stored in the browser.  Do not let that
+    // stale selection show an empty US/KR dashboard while the user has started
+    // exactly one different account engine from the controller.
+    const status=await (await nativeFetch('/api/status')).json();
+    const running=Array.isArray(status.accounts) ? status.accounts : [];
+    if(running.length===1 && accountCatalog.some(a=>a.id===running[0])){
+      activeAccount=running[0];
+      localStorage.setItem('kiwoom_active_account', activeAccount);
+    }
+    // Engines started directly (for example ACCOUNT_FILTER=kr_mock python -m
+    // src.main) are not controller-owned, so /api/status cannot name them.
+    // In that case select the most recently broker-synchronized account rather
+    // than retaining a stale US/KR browser selection.
+    if(!running.length){
+      const snapshots=await Promise.all(accountCatalog.map(async account=>{
+        try{
+          const response=await nativeFetch(`/api/balance?account=${encodeURIComponent(account.id)}`);
+          const balance=response.ok ? await response.json() : null;
+          const updated=Date.parse(balance?.updatedAt||'');
+          return {id:account.id, updated:Number.isFinite(updated)?updated:0};
+        }catch(_ignored){ return {id:account.id, updated:0}; }
+      }));
+      const freshest=snapshots.sort((a,b)=>b.updated-a.updated)[0];
+      // Only let a currently updated broker snapshot override the user's saved
+      // selection. Older files are historical state, not proof of a running
+      // engine.
+      if(freshest?.updated && Date.now()-freshest.updated < 120000){
+        activeAccount=freshest.id;
+        localStorage.setItem('kiwoom_active_account', activeAccount);
+      }
+    }
+    if(!activeAccount || !accountCatalog.some(a=>a.id===activeAccount)) activeAccount=(payload.defaultAccounts||[])[0] || accountCatalog[0]?.id || '';
+    const info=accountCatalog.find(a=>a.id===activeAccount);
+    if(info){ state.market=info.market; state.mode=info.mode; }
+    renderAccountSelector();
+    connectDashboardEvents();
+  }catch(_ignored){}
+}
+initializeAccounts().then(()=>{ refreshDashboardData(); });
+// Four seconds is short enough for a fill to appear promptly, while keeping
+// I/O bounded to local dashboard endpoints and pausing in hidden tabs.
+window.setInterval(refreshDashboardRealtimeData, 4000);
+renderProfileList();
+renderAll();
+renderBalancePanel();
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Only needed for the one-time Google Sheets migration tool; never needed at runtime.
+gspread>=6.1.2
+google-auth>=2.29.0

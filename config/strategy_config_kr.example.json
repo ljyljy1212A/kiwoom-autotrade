@@ -1,0 +1,46 @@
+{
+  "symbol": "005930",
+  "market": "KR",
+  "mode": "mock",
+  "auto_buy": { "enabled": false, "order_type": "00" },
+  "auto_sell": { "enabled": false, "order_type": "00" },
+  "first_buy": {
+    "mode": "manual",
+    "amount": 300000
+  },
+  "buy_steps": [
+    { "step": 2, "drop_pct": -3.0, "amount": 300000 },
+    { "step": 3, "drop_pct": -4.0, "amount": 300000 },
+    { "step": 4, "drop_pct": -5.0, "amount": 300000 },
+    { "step": 5, "drop_pct": -5.0, "amount": 300000 },
+    { "step": 6, "drop_pct": -5.0, "amount": 300000 },
+    { "step": 7, "drop_pct": -5.0, "amount": 300000 },
+    { "step": 8, "drop_pct": -5.0, "amount": 300000 },
+    { "step": 9, "drop_pct": -5.0, "amount": 300000 },
+    { "step": 10, "drop_pct": -5.0, "amount": 300000 }
+  ],
+  "sell_steps": [
+    { "step": 1, "profit_pct": 4.0 },
+    { "step": 2, "profit_pct": 5.0 },
+    { "step": 3, "profit_pct": 5.0 },
+    { "step": 4, "profit_pct": 5.0 },
+    { "step": 5, "profit_pct": 5.0 },
+    { "step": 6, "profit_pct": 5.0 },
+    { "step": 7, "profit_pct": 5.0 },
+    { "step": 8, "profit_pct": 5.0 },
+    { "step": 9, "profit_pct": 5.0 },
+    { "step": 10, "profit_pct": 5.0 }
+  ],
+  "risk": {
+    "max_position_amount": null,
+    "max_cycles": null
+  },
+  "cycle": {
+    "start_date": "2026-01-16",
+    "total_invest_target_amount": null
+  },
+  "_note": "국내주식은 원(KRW) 단위 정수 금액을 사용합니다. 주문가는 호가단위(price tick)에 맞아야 하며, 시장가 주문 시 order_type '03' 사용을 권장합니다.",
+  "_order_type_codes": {
+    "00": "지정가", "03": "시장가", "30": "LOC", "33": "MOC"
+  }
+}

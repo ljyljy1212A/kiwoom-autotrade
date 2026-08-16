@@ -1,0 +1,1869 @@
+"""Per-account trading loop with REST-authoritative order synchronization."""
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import os
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from src.calendar_utils.market_calendar import MarketCalendar
+from src.data.trade_ledger import PendingOrder, TradeLedgerStore
+from src.core.us_market import (
+    extract_us_fx_rate,
+    normalize_us_execution_rows,
+    normalize_us_holdings,
+    us_balance_recognized,
+)
+from src.core.orphan_cleanup import OrphanStateCleaner
+from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
+from src.strategy.infinite_grid import InfiniteGridStrategy
+from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, RetryableError
+
+
+class _AccountBalanceGate:
+    """One short-lived broker balance snapshot shared by an account's symbols."""
+
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.raw_balance: dict | None = None
+        self.received_at = 0.0
+        self.execution_lock = asyncio.Lock()
+        # All symbol engines for one account share this gate.  A buy decision
+        # must remain serial from its final duplicate check through pending
+        # order recording, otherwise two concurrent engines can both submit
+        # the same grid line before either sees the other's pending order.
+        self.order_locks: dict[str, asyncio.Lock] = {}
+        self.last_execution_request_at = 0.0
+        self.cancel_lock = asyncio.Lock()
+        self.last_cancel_request_at = 0.0
+        self.balance_not_before = 0.0
+        self.balance_backoff_sec = 5.0
+
+
+_ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
+_STARTUP_BACKUP_ACCOUNTS: set[str] = set()
+
+
+def _balance_gate(account_id: str) -> _AccountBalanceGate:
+    return _ACCOUNT_BALANCE_GATES.setdefault(account_id, _AccountBalanceGate())
+
+
+class AccountEngine:
+    def __init__(self, ctx, telegram, discord, report_store, price_feed, poll_interval_sec: int = 5,
+                 control_symbol: str | None = None, balance_only: bool = False):
+        self.ctx, self.telegram, self.discord = ctx, telegram, discord
+        self.report_store, self.price_feed, self.poll_interval_sec = report_store, price_feed, poll_interval_sec
+        self.calendar = MarketCalendar(market=ctx.client.market)
+        self._buying_paused = False
+        self._trading_paused = False
+        self._tranche_sell_paused = False
+        # Starting the program must be safe: monitoring/synchronization runs by
+        # default, but no strategy intent can reach the broker without opt-in.
+        self._auto_trading_enabled = os.environ.get("AUTO_TRADING_ENABLED", "false").lower() == "true"
+        self._dashboard_auto_buy = False
+        self._dashboard_auto_sell = False
+        self._dashboard_profile_allowed = False
+        self._last_allowlist_warning_symbol = ""
+        self._last_execution_unavailable_symbol = ""
+        self._last_auto_buy_price: dict[str, float] = {}
+        # A confirmed grid BUY changes the active tranche base and the broker
+        # balance can lag the execution feed briefly.  Prevent a new BUY until
+        # one normal reconciliation window has elapsed; SELLs are never gated.
+        self._buy_reentry_after: dict[str, float] = {}
+        # The balance endpoint can lag execution history immediately after a
+        # confirmed BUY.  Keep the locally confirmed tranche map authoritative
+        # until the broker snapshot has caught up to this minimum quantity.
+        # While it is behind, all automated intents are held: rebuilding from
+        # the stale lower broker quantity would lose a confirmed tranche, and
+        # selling against an unverified balance would be unsafe as well.
+        self._broker_fill_catchup_qty: dict[str, float] = {}
+        self._broker_fill_catchup_warned: set[str] = set()
+        # A deliberate paper-order safety block must not cause the strategy to
+        # retry and log the same intent on every quote tick.  This is only a
+        # local throttle; it never creates pending orders or changes positions.
+        self._blocked_order_until: dict[tuple[str, str], float] = {}
+        # Confirmed SELL fills wait for the accompanying account balance
+        # snapshot/closed-position cleanup before waking the dashboard.
+        # Confirmed fills wake the dashboard only after the corresponding
+        # broker-balance reconciliation has completed.
+        self._pending_dashboard_fills: list[tuple[PendingOrder, dict]] = []
+        self._dashboard_symbol = ""
+        # Symbols confirmed fully closed during the current runtime are kept
+        # blocked even before the dashboard profile-removal write is observed.
+        self._closed_symbols_blocked: set[str] = set()
+        self._dashboard_config_fingerprint = ""
+        self._dashboard_strategy_changed = False
+        self._dashboard_control_mtime_ns: int | None = None
+        self._control_symbol = str(control_symbol or "").upper().lstrip("A")
+        # A dashboard account must continue publishing its broker holdings even
+        # when it has no enabled automation profiles.  This mode deliberately
+        # stops after writing the account-wide snapshot, so it cannot adopt a
+        # default strategy symbol or submit/affect strategy orders.
+        self._balance_only = balance_only
+        # One account can have several independent symbol strategies, but the
+        # broker balance is account-wide. Share its fresh response so startup
+        # and normal ticks do not multiply kt00018/ust21070 requests.
+        self._balance_gate = _balance_gate(ctx.account_id)
+        # A passive account monitor publishes broker holdings only. It must not
+        # open, initialize, or mutate the confirmed-fill ledger.
+        self.ledger = None if balance_only else TradeLedgerStore(f"data/trades_{ctx.account_id}.db", ctx.account_id)
+        self._tranche_bases_path = Path(f"data/tranche_bases_{ctx.account_id}.json")
+        self._closure_absence_path = Path(f"data/closure_absence_{ctx.account_id}.json")
+        try:
+            raw_absence = json.loads(self._closure_absence_path.read_text(encoding="utf-8"))
+            self._closure_absence_confirmations = {
+                str(symbol).upper().lstrip("A"): int(count)
+                for symbol, count in raw_absence.items()
+                if int(count) > 0
+            } if isinstance(raw_absence, dict) else {}
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
+            self._closure_absence_confirmations: dict[str, int] = {}
+        try:
+            self._tranche_bases = json.loads(self._tranche_bases_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self._tranche_bases = {}
+        self._lifecycle_path = Path(f"data/symbol_lifecycles_{ctx.account_id}.json")
+        try:
+            raw_lifecycles = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
+            self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            self._symbol_lifecycles: dict[str, dict] = {}
+        self._lifecycle_pending_adoption = False
+        self._orphan_cleaner = OrphanStateCleaner(ctx.account_id, logger=ctx.logger)
+        self._sync_lock = asyncio.Lock()
+        self._sync_task: asyncio.Task | None = None
+        self._last_balance_reconciliation = 0.0
+        self._last_balance_request_at = 0.0
+        self._balance_sync_blocked = False
+        self._last_execution_query_at = 0.0
+        self._last_cancel_request_at = 0.0
+        self._last_fx_request_at = 0.0
+        self._fx_rate_krw: float | None = None
+        # Match the engine poll by default so manual/HTS trades are reflected
+        # promptly. Raise this only if the broker rate limit requires it.
+        self.balance_reconcile_sec = float(
+            os.environ.get("BALANCE_RECONCILE_SEC", str(max(poll_interval_sec, 10)))
+        )
+        self.balance_min_interval_sec = float(os.environ.get("KIWOOM_BALANCE_MIN_INTERVAL_SEC", "1.5"))
+        self.execution_query_min_interval_sec = float(os.environ.get("KIWOOM_EXECUTION_QUERY_MIN_INTERVAL_SEC", "1.5"))
+        self.pending_order_cancel_after_sec = float(
+            os.environ.get("PENDING_ORDER_CANCEL_AFTER_SEC", os.environ.get("PENDING_BUY_CANCEL_AFTER_SEC", "180"))
+        )
+        # A short reconciliation window prevents a second BUY from racing a
+        # just-confirmed fill, without holding a valid next-tranche trigger
+        # for the previous ten seconds.
+        self.buy_reentry_delay_sec = max(0.0, float(os.environ.get("GRID_BUY_REENTRY_DELAY_SEC", "5")))
+        feed_obj = getattr(ctx, "price_feed_obj", None)
+        if feed_obj and getattr(feed_obj, "realtime", None):
+            feed_obj.realtime.add_doorbell_callback(self.request_sync)
+            # Register even while monitor-only mode skips quote evaluation.  The
+            # account event types ride this subscription as REST-sync doorbells.
+            feed_obj.realtime.subscribe(ctx.strategy.symbol)
+        if self.ledger is not None:
+            self._prepare_lifecycle_scope(ctx.strategy.symbol)
+
+    async def run(self):
+        self._backup_ledger_at_startup()
+        self._restore_from_ledger()
+        # Dashboard controls are an explicit execution authority, independent
+        # of the worker-wide environment switch. Read them before reporting
+        # startup mode so the log cannot falsely claim submissions are off.
+        self._refresh_dashboard_controls()
+        if self._auto_trading_enabled:
+            mode = "worker-wide Auto Trading enabled"
+        elif self._dashboard_auto_buy or self._dashboard_auto_sell:
+            mode = "dashboard-controlled trading enabled (per-side controls will be refreshed before each intent)"
+        else:
+            mode = "monitoring only; no execution control is enabled"
+        self.ctx.logger.info(f"Engine started: {self.ctx.display_name} ({self.ctx.strategy.symbol}) — {mode}")
+        # Reconcile first, independently of the market-hours gate. This makes
+        # the dashboard reflect HTS/manual holdings immediately after restart,
+        # including when the regular market is closed.
+        try:
+            await self.sync_broker_state(force_balance=True)
+            self.ctx.logger.info("Startup broker balance synchronization completed")
+        except Exception as exc:
+            self.ctx.logger.warning(f"Startup broker balance synchronization deferred: {exc}")
+        try:
+            while True:
+                try:
+                    await self._tick()
+                except Exception as exc:
+                    self.ctx.logger.exception(f"Tick failed (isolated): {exc}")
+                    await self.telegram.notify_error(f"Tick failed: {exc}")
+                finally:
+                    self._heartbeat()
+                await self._wait_for_next_tick_or_control_change()
+        finally:
+            feed_obj = getattr(self.ctx, "price_feed_obj", None)
+            if feed_obj and getattr(feed_obj, "realtime", None):
+                feed_obj.realtime.remove_doorbell_callback(self.request_sync)
+                feed_obj.realtime.unsubscribe(self.ctx.strategy.symbol)
+
+    def _backup_ledger_at_startup(self) -> None:
+        """Mirror the prototype's per-account pre-run database backup."""
+        account_id = self.ctx.account_id
+        if account_id in _STARTUP_BACKUP_ACCOUNTS:
+            return
+        _STARTUP_BACKUP_ACCOUNTS.add(account_id)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        destination = Path("data") / "backup" / account_id / f"trades_{stamp}.db"
+        try:
+            backup_path = self.ledger.backup_to(destination)
+        except Exception as exc:
+            _STARTUP_BACKUP_ACCOUNTS.discard(account_id)
+            # A backup failure must not prevent broker reconciliation or leave a
+            # newly started engine unavailable.
+            self.ctx.logger.warning(f"Startup ledger backup deferred: {exc}")
+            return
+        self.ctx.logger.info(f"Startup ledger backup created: {backup_path}")
+
+    async def _shared_broker_balance(self) -> dict:
+        """Fetch at most one fresh account balance per shared interval."""
+        gate = self._balance_gate
+        async with gate.lock:
+            now = asyncio.get_running_loop().time()
+            if gate.raw_balance is not None and now - gate.received_at < self.balance_min_interval_sec:
+                return gate.raw_balance
+            raw_balance = await self.ctx.client.get_balance()
+            gate.raw_balance = raw_balance
+            gate.received_at = asyncio.get_running_loop().time()
+            return raw_balance
+
+    def _publish_passive_balance_snapshot(self, broker_holdings: list[dict], balance_recognized: bool) -> None:
+        """Publish all broker holdings without changing any strategy state."""
+        if not balance_recognized:
+            self.ctx.logger.warning("Passive balance monitor received an unrecognized balance response")
+            return
+        balance_path = Path(f"data/balance_{self.ctx.account_id}.json")
+        try:
+            previous = json.loads(balance_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        # The passive monitor never infers a tranche basis from broker moving
+        # averages. It may, however, publish the canonical values already
+        # persisted by an active lifecycle so an old balance snapshot cannot
+        # make the dashboard display a stale Line 1 basis.
+        try:
+            canonical_bases = json.loads(
+                Path(f"data/tranche_bases_{self.ctx.account_id}.json").read_text(encoding="utf-8")
+            )
+            canonical_bases = canonical_bases if isinstance(canonical_bases, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            canonical_bases = previous.get("trancheBases", {})
+        try:
+            lifecycles = json.loads(
+                Path(f"data/symbol_lifecycles_{self.ctx.account_id}.json").read_text(encoding="utf-8")
+            )
+            lifecycles = lifecycles if isinstance(lifecycles, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            lifecycles = {}
+        primary = broker_holdings[0] if broker_holdings else {}
+        snapshot = {
+            "account": self.ctx.account_id,
+            # The dashboard needs a non-empty legacy symbol field, but all
+            # holdings remain authoritative for the actual display.
+            "symbol": str(primary.get("symbol") or previous.get("symbol") or ""),
+            "qty": float(primary.get("qty") or 0),
+            "avgPrice": float(primary.get("avgPrice") or 0),
+            "updatedAt": datetime.now().isoformat(),
+            "holdings": broker_holdings,
+            "balanceComplete": True,
+            "trancheBases": canonical_bases,
+            "manualTrancheQty": {
+                str(symbol).upper().lstrip("A"): float(value.get("manual_qty", 0) or 0)
+                for symbol, value in lifecycles.items()
+                if isinstance(value, dict) and value.get("status") == "open"
+            },
+            "manualTrancheBases": {
+                str(symbol).upper().lstrip("A"): float(value.get("manual_price", 0) or 0)
+                for symbol, value in lifecycles.items()
+                if isinstance(value, dict) and value.get("status") == "open"
+                and float(value.get("manual_price", 0) or 0) > 0
+            },
+            "currency": previous.get("currency", self.ctx.currency),
+            "reportingCurrency": previous.get("reportingCurrency", self.ctx.reporting_currency),
+            "fxRateKrw": previous.get("fxRateKrw"),
+        }
+        balance_path.parent.mkdir(exist_ok=True)
+        tmp_path = balance_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        tmp_path.replace(balance_path)
+
+    def _has_unresolved_order_for_cleanup(self, symbol: str) -> bool:
+        """Read pending attribution state even from a passive account monitor.
+
+        Failure is intentionally treated as unresolved: cleanup must fail closed
+        if the ledger cannot be inspected.
+        """
+        if self.ledger is not None:
+            return self.ledger.has_unresolved_orders(symbol)
+        path = Path(f"data/trades_{self.ctx.account_id}.db")
+        if not path.exists():
+            return False
+        try:
+            with sqlite3.connect(path, timeout=0.25) as db:
+                return db.execute(
+                    "SELECT 1 FROM pending_orders WHERE account_id=? AND symbol=? "
+                    "AND status IN ('open','awaiting_execution_history') LIMIT 1",
+                    (self.ctx.account_id, symbol),
+                ).fetchone() is not None
+        except sqlite3.Error:
+            return True
+
+    async def _wait_for_next_tick_or_control_change(self) -> None:
+        deadline = asyncio.get_running_loop().time() + self.poll_interval_sec
+        while True:
+            if self._dashboard_control_changed():
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(0.25, remaining))
+
+    def _dashboard_control_changed(self) -> bool:
+        """Return true once for each dashboard control-file update."""
+        path = self._dashboard_control_path()
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = None
+        if self._dashboard_control_mtime_ns is None:
+            self._dashboard_control_mtime_ns = mtime_ns
+            return False
+        if mtime_ns != self._dashboard_control_mtime_ns:
+            self._dashboard_control_mtime_ns = mtime_ns
+            return True
+        return False
+
+    def _dashboard_control_path(self) -> Path:
+        suffix = f"_{self._control_symbol}" if self._control_symbol else ""
+        return Path(f"data/dashboard_control_{self.ctx.account_id}{suffix}.json")
+
+    async def _tick(self):
+        # Baseline polling makes a wrong/silent WS subscription a latency issue,
+        # never a source of silently stale financial state.
+        self._refresh_dashboard_controls()
+        # Controls may select a previously HTS-purchased ticker. Reconcile only
+        # after loading them so its broker quantity/average are used immediately.
+        force_balance = self._dashboard_strategy_changed
+        if not await self.sync_broker_state(force_balance=force_balance):
+            # A rate-limited or otherwise incomplete reconciliation is never a
+            # valid basis for an order decision. Fail closed until a complete
+            # broker snapshot succeeds.
+            return
+        self._dashboard_strategy_changed = False
+        symbol_key = self.ctx.strategy.symbol.upper().lstrip("A")
+        if symbol_key in self._broker_fill_catchup_qty:
+            # _reconcile_balance has published the latest snapshot but has
+            # deliberately not mutated tranche/position state while the broker
+            # balance is behind a durable confirmed BUY fill.
+            return
+        if not self._dashboard_profile_allowed:
+            return
+        if not (self._auto_trading_enabled or self._dashboard_auto_buy or self._dashboard_auto_sell):
+            return
+        session = self.calendar.session_name_now()
+        if not self.calendar.is_trading_day() or session == "CLOSED":
+            return
+        quote = await self._safe_get_quote()
+        if quote is None:
+            return
+        price, quote_source, quote_timestamp = quote
+        self._record_evaluated_quote(price, quote_source, quote_timestamp)
+        trigger = self._next_buy_trigger()
+        self.ctx.logger.info(
+            f"Strategy quote evaluated: {self.ctx.strategy.symbol} price={price:g} source={quote_source} "
+            f"observed_at={datetime.fromtimestamp(quote_timestamp, timezone.utc).isoformat()} "
+            f"current_step={self.ctx.position.step} next_buy_trigger="
+            f"{trigger if trigger is not None else 'n/a'}"
+        )
+        snapshot = MarketSnapshot(self.ctx.strategy.symbol, price, datetime.now().isoformat())
+        intent = self.ctx.strategy.evaluate(snapshot, self.ctx.position)
+        if intent is None:
+            return
+        if self._trading_paused:
+            self.ctx.logger.warning(
+                f"Auto condition suppressed by trading pause: {intent.action.value} {intent.symbol}"
+            )
+            return
+        if intent.action == Action.SELL and intent.meta.get("sell_only_step") and self._tranche_sell_paused:
+            self.ctx.logger.warning(
+                f"Tranche-profit sell deferred for {intent.symbol}: broker quantity is awaiting tranche reconciliation"
+            )
+            return
+        if self._order_block_cooldown_active(intent):
+            return
+        self.ctx.logger.info(
+            f"Auto condition reached: {intent.action.value} {intent.symbol} x{intent.qty} @ {price} ({intent.reason})"
+        )
+        if intent.action == Action.BUY and (self._buying_paused or not (self._auto_trading_enabled or self._dashboard_auto_buy)):
+            return
+        if intent.action != Action.BUY and not (self._auto_trading_enabled or self._dashboard_auto_sell):
+            return
+        await self._handle_intent(intent, price)
+
+    def _refresh_dashboard_controls(self) -> None:
+        """Read the local dashboard's explicit per-side execution switches."""
+        path = self._dashboard_control_path()
+        if not path.exists():
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            return
+        try:
+            control = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            return
+        symbol = str(control.get("symbol", "")).strip().upper().lstrip("A")
+        config = control.get("config")
+        if not symbol or not isinstance(config, dict) or str(config.get("symbol", "")).strip().upper().lstrip("A") != symbol:
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            return
+        control_market = str(config.get("market", "")).strip().upper()
+        if control_market != self.ctx.client.market:
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            self.ctx.logger.error(
+                f"Automation blocked: {symbol} profile market={control_market or 'missing'} "
+                f"does not match {self.ctx.client.market} worker"
+            )
+            return
+        # The persisted Trade Settings List is the sole allow-list for order
+        # execution. A stale control file cannot trade a removed/unlisted stock.
+        settings_path = Path(f"data/dashboard_settings_{self.ctx.account_id}.json")
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
+        except (OSError, json.JSONDecodeError):
+            profiles = []
+        profile = next((p for p in profiles if isinstance(p, dict)
+                        and str((p.get("config") or {}).get("symbol", "")).strip().upper().lstrip("A") == symbol), None)
+        if profile is None:
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            if self._last_allowlist_warning_symbol != symbol:
+                self.ctx.logger.warning(f"Automation blocked: {symbol} is not in the Trade Settings List")
+                self._last_allowlist_warning_symbol = symbol
+            return
+        if profile.get("enabled", True) is False:
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            return
+        if symbol in self._closed_symbols_blocked:
+            # A closed lifecycle removed its old profile/control. Seeing a new
+            # valid profile is an explicit operator re-entry request, not a
+            # stale tick from the closed cycle. Let broker adoption create a
+            # new manual tranche 1 while still blocking the old state itself.
+            lifecycle = self._symbol_lifecycles.get(symbol, {})
+            if isinstance(lifecycle, dict) and lifecycle.get("status") == "closed":
+                self._closed_symbols_blocked.discard(symbol)
+            else:
+                self._dashboard_auto_buy = self._dashboard_auto_sell = False
+                self._dashboard_profile_allowed = False
+                return
+        self._last_allowlist_warning_symbol = ""
+        saved_config = profile.get("config") or {}
+        saved_buy = bool((saved_config.get("auto_buy") or {}).get("enabled", False))
+        saved_sell = bool((saved_config.get("auto_sell") or {}).get("enabled", False))
+        self._dashboard_profile_allowed = True
+        # The durable list is authoritative for the strategy values too; a
+        # stale dashboard_control file may only supply the current opt-in state.
+        config = saved_config
+        # The dashboard can operate a previously HTS-purchased holding.  Switch
+        # the runtime strategy atomically to that holding's saved configuration;
+        # it is never inferred from an arbitrary balance row.
+        fingerprint = json.dumps(config, sort_keys=True, separators=(",", ":"))
+        lifecycle_state = self._symbol_lifecycles.get(symbol, {})
+        lifecycle_is_open = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "open"
+        if (symbol != self.ctx.strategy.symbol.lstrip("A")
+                or fingerprint != self._dashboard_config_fingerprint
+                or not lifecycle_is_open):
+            try:
+                strategy = InfiniteGridStrategy(config)
+            except (KeyError, TypeError, ValueError) as exc:
+                self.ctx.logger.warning(f"Ignoring invalid dashboard strategy configuration: {exc}")
+                self._dashboard_auto_buy = self._dashboard_auto_sell = False
+                return
+            self.ctx.strategy = strategy
+            self.ctx.position = PositionState(symbol=strategy.symbol)
+            # Dashboard profile activation is an explicit operator action.
+            # Clear a stale account-level pause left by an earlier broker
+            # mismatch; current balance and tranche safety gates still apply.
+            self._trading_paused = False
+            # A profile re-enabled after a full close is a fresh manual-first
+            # lifecycle. Only an already-open lifecycle may restore fills;
+            # otherwise the imminent broker snapshot adopts tranche 1 and old
+            # reporting rows cannot blend into it.
+            self._prepare_lifecycle_scope(strategy.symbol)
+            if self._lifecycle_pending_adoption:
+                self._begin_manual_lifecycle_activation(strategy.symbol)
+            self._restore_from_ledger()
+            self._dashboard_symbol = symbol
+            self._dashboard_config_fingerprint = fingerprint
+            self._dashboard_strategy_changed = True
+            feed_obj = getattr(self.ctx, "price_feed_obj", None)
+            if feed_obj and getattr(feed_obj, "realtime", None):
+                # Keep the active holding subscribed for low-latency quotes;
+                # REST remains authoritative whenever WS is stale or silent.
+                feed_obj.realtime.subscribe(strategy.symbol)
+            self.ctx.logger.info(f"Dashboard strategy activated for existing holding: {symbol}")
+        self._dashboard_auto_buy = bool(control.get("auto_buy")) and saved_buy
+        self._dashboard_auto_sell = bool(control.get("auto_sell")) and saved_sell
+
+    async def _handle_intent(self, intent: OrderIntent, price: float):
+        # Kiwoom accepts only valid domestic price increments.  Quotes can be
+        # an arbitrary last-trade value (for example 20,675), so normalize at
+        # the single order-intent boundary before any target/risk/submission
+        # decision uses the limit price.  BUYs round down; SELLs round up so a
+        # profit target cannot be weakened by the tick adjustment.
+        if self.ctx.client.market == "KR" and intent.price is not None and float(intent.price) > 0:
+            side = "BUY" if intent.action == Action.BUY else "SELL"
+            normalized_price = _kr_order_price(float(intent.price), side)
+            if abs(normalized_price - float(intent.price)) > 1e-9:
+                self.ctx.logger.info(
+                    f"KR order price normalized: {intent.symbol} {side} "
+                    f"{float(intent.price):g} -> {normalized_price:g}"
+                )
+                intent.price = normalized_price
+            price = normalized_price
+        if intent.action == Action.BUY:
+            remaining = self._buy_reentry_after.get(intent.symbol, 0.0) - asyncio.get_running_loop().time()
+            if remaining > 0:
+                self.ctx.logger.info(
+                    f"Next grid BUY deferred for {intent.symbol}: {remaining:.1f}s reconciliation cooldown remains"
+                )
+                return
+        if intent.action == Action.SELL and intent.meta.get("sell_only_step"):
+            step = int(intent.meta.get("step", 0))
+            # The ledger is authoritative for program-confirmed fills. For an
+            # HTS-adopted tranche (which has no program ledger rows yet), use
+            # the runtime tranche quantity seeded from the broker balance.
+            ledger_qty = self.ledger.open_tranche_qty(intent.symbol, step)
+            # A later grid line can only be sold from a broker-confirmed fill
+            # recorded for that exact line.  Runtime-only fallback is reserved
+            # for manually held tranche 1, which has no program ledger row.
+            if step > 1 and ledger_qty <= 0:
+                self.ctx.logger.error(
+                    f"Profit-taking sell blocked: tranche {step} has no confirmed ledger quantity ({intent.symbol})"
+                )
+                return
+            tranche_qty = ledger_qty if ledger_qty > 0 else float(self.ctx.strategy.step_qty.get(step, 0))
+            allowed_qty = min(int(tranche_qty), int(self.ctx.position.qty))
+            if allowed_qty <= 0:
+                self.ctx.logger.warning(f"Profit-taking sell blocked: no remaining quantity for tranche {step} ({intent.symbol})")
+                return
+            if intent.qty != allowed_qty:
+                self.ctx.logger.warning(
+                    f"Profit-taking sell quantity capped to tranche {step}: {intent.symbol} {intent.qty} -> {allowed_qty}"
+                )
+                intent.qty = allowed_qty
+            # Recheck the target at the final broker-submission boundary.  A
+            # stale quote, corrupted runtime map, or future strategy change
+            # must never turn a profit-taking sell into a sale below its own
+            # confirmed tranche purchase price/target.
+            target = self.ctx.strategy.sell_target_price(step)
+            order_price = float(intent.price if intent.price is not None else price)
+            if target is None or order_price < target:
+                self.ctx.logger.error(
+                    f"Profit-taking sell blocked below target: tranche {step} {intent.symbol} "
+                    f"price={order_price} target={target}"
+                )
+                return
+        # Serialize the final decision and broker submission per account and
+        # symbol.  This is deliberately shared by independently-created
+        # engines in the same worker, and complements the process-level worker
+        # lock in main.py for accidental duplicate worker launches.
+        symbol_key = intent.symbol.upper().lstrip("A")
+        order_lock = self._balance_gate.order_locks.setdefault(symbol_key, asyncio.Lock())
+        async with order_lock:
+            if intent.action == Action.SELL and intent.meta.get("sell_only_step"):
+                step = int(intent.meta.get("step", 0) or 0)
+                if step > 0 and self.ledger.has_pending_sell(intent.symbol, step):
+                    self.ctx.logger.warning(
+                        f"Duplicate profit-taking SELL blocked: {intent.symbol} tranche {step} "
+                        "already has an unresolved order"
+                    )
+                    return
+            if intent.action == Action.BUY:
+                if self._duplicate_buy_at_price(intent.symbol, price):
+                    self.ctx.logger.warning(
+                        f"Duplicate Auto Buy blocked at the same price level: {intent.symbol} @ {price}"
+                    )
+                    return
+                # Once a grid line has a current-lifecycle confirmed quantity,
+                # it is already occupied.  This catches a second engine/tick
+                # whose in-memory strategy map is stale after the first order
+                # filled, even when the order prices differ by a KR tick.
+                step = int(intent.meta.get("step", 0) or 0)
+                if step > 1 and self.ledger.open_tranche_qty(intent.symbol, step) > 0:
+                    self.ctx.logger.error(
+                        f"Duplicate grid BUY blocked: {intent.symbol} tranche {step} already has "
+                        "a confirmed current-lifecycle quantity"
+                    )
+                    return
+            ok, reason = self.ctx.risk_manager.approve(intent, self.ctx.position, price)
+            if not ok:
+                self.ctx.logger.warning(f"Order blocked by risk manager: {reason}")
+                return
+            await self._execute_order(intent)
+
+    async def _execute_order(self, intent: OrderIntent):
+        if not self._dashboard_profile_allowed:
+            self.ctx.logger.warning(f"Order blocked: {intent.symbol} is not allow-listed in Trade Settings")
+            return
+        # US mock accounts need a second, deliberate opt-in.  This prevents a
+        # newly-added US profile from becoming order-capable merely because the
+        # global dashboard controls were previously enabled for Korean trading.
+        side = "BUY" if intent.action == Action.BUY else "SELL"
+        block_key = (side, intent.symbol)
+        now = asyncio.get_running_loop().time()
+        if self._blocked_order_until.get(block_key, 0.0) > now:
+            return
+        if self.ctx.client.market == "US" and self.ctx.client.mode == "mock" and \
+                os.environ.get("US_PAPER_ORDER_SUBMISSION_ENABLED", "false").lower() != "true":
+            cooldown = max(1.0, float(os.environ.get("US_PAPER_BLOCK_COOLDOWN_SEC", "60")))
+            self._blocked_order_until[block_key] = now + cooldown
+            self.ctx.logger.warning("US paper order blocked: set US_PAPER_ORDER_SUBMISSION_ENABLED=true after validating the mock account")
+            return
+        self._blocked_order_until.pop(block_key, None)
+        try:
+            result = await self.ctx.client.place_order(side=side, symbol=intent.symbol, qty=intent.qty,
+                                                       price=intent.price, order_type=intent.order_type)
+        except (OrderRejectedError, RetryableError) as exc:
+            self.ctx.logger.error(f"Order failed: {exc}")
+            await self.telegram.notify_error(f"Order failed: {exc}")
+            return
+        if not result.ord_no:
+            self.ctx.logger.error("Broker accepted an order without ord_no; no state was changed")
+            await self.telegram.notify_error("Broker accepted an order without an order ID; no state was changed")
+            return
+        if side == "BUY":
+            self._last_auto_buy_price[intent.symbol] = float(intent.price or 0)
+        # Order acceptance is intentionally the only outcome here.  No position or
+        # strategy state changes until get_executed_orders confirms a fill.
+        self.ledger.add_pending(PendingOrder(result.ord_no, intent.symbol, side, intent.qty, intent.price,
+                                intent.action.value, int(intent.meta.get("step", self.ctx.position.step)), dict(intent.meta)))
+        self.ctx.logger.info(f"Accepted order is pending confirmation: {result.ord_no}")
+        await self.telegram.notify_order(side, intent.symbol, intent.qty, intent.price, result.ord_no)
+        await self.sync_broker_state()
+
+    def _order_block_cooldown_active(self, intent: OrderIntent) -> bool:
+        """Return whether a safety-blocked intent is still being throttled."""
+        side = "BUY" if intent.action == Action.BUY else "SELL"
+        return self._blocked_order_until.get((side, intent.symbol), 0.0) > asyncio.get_running_loop().time()
+
+    def _duplicate_buy_at_price(self, symbol: str, price: float) -> bool:
+        """Prevent repeated buys caused by duplicate ticks during a VI burst."""
+        if price <= 0:
+            return False
+        # A grid step cannot advance until the prior submitted BUY has been
+        # confirmed through the authoritative execution query. This prevents
+        # a fast VI tick burst from buying several tranches off one stale base.
+        if self.ledger.has_pending_buy(symbol):
+            return True
+        tolerance = 1.0 if self.ctx.client.market == "KR" else 1e-6
+        previous = self._last_auto_buy_price.get(symbol)
+        if previous is not None and abs(previous - price) <= tolerance:
+            return True
+        return self.ledger.has_pending_buy_at_price(symbol, price, tolerance)
+
+    def request_sync(self) -> None:
+        """WebSocket doorbell target: do not parse/accept its payload."""
+        # Many broker events can arrive in one burst. One in-flight REST sync is
+        # enough because it always asks the broker for the latest full balance.
+        if self._sync_task is None or self._sync_task.done():
+            self._sync_task = asyncio.create_task(self.sync_broker_state(force_balance=True))
+
+    async def sync_broker_state(self, force_balance: bool = False) -> bool:
+        """Apply cumulative REST fills as idempotent deltas, then reconcile balance."""
+        async with self._sync_lock:
+            # A broker-confirmed fill changes the durable tranche ledger.  The
+            # broker balance snapshot and its dashboard event must follow that
+            # transition in this same synchronization pass; otherwise the UI
+            # can briefly compare a new broker quantity to an old tranche map
+            # and report a false "unassigned shares" safety warning.
+            confirmed_fill = False
+            now = asyncio.get_running_loop().time()
+            if now < self._balance_gate.balance_not_before:
+                self._balance_sync_blocked = True
+                return False
+            if self._balance_only:
+                # This worker owns no strategy/order state.  In particular, it
+                # must not inspect or cancel pending orders belonging to an
+                # automated symbol on the same account.
+                try:
+                    await self._reconcile_balance()
+                except KiwoomAPIError as exc:
+                    if "429" not in str(exc) and "1700" not in str(exc):
+                        raise
+                    self._record_balance_rate_limit()
+                    self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
+                    return False
+                completed_at = asyncio.get_running_loop().time()
+                self._last_balance_request_at = completed_at
+                self._last_balance_reconciliation = completed_at
+                self._balance_gate.balance_backoff_sec = 5.0
+                self._balance_sync_blocked = False
+                return True
+            if self.ledger.pending_orders(self.ctx.strategy.symbol):
+                try:
+                    async with self._balance_gate.execution_lock:
+                        now = asyncio.get_running_loop().time()
+                        wait_for = self.execution_query_min_interval_sec - (now - self._balance_gate.last_execution_request_at)
+                        if wait_for > 0:
+                            await asyncio.sleep(wait_for)
+                        data = await self.ctx.client.get_executed_orders(self.ctx.strategy.symbol)
+                        completed_at = asyncio.get_running_loop().time()
+                        self._balance_gate.last_execution_request_at = completed_at
+                        self._last_execution_query_at = completed_at
+                    self._last_execution_unavailable_symbol = ""
+                except KiwoomAPIError as exc:
+                    completed_at = asyncio.get_running_loop().time()
+                    self._balance_gate.last_execution_request_at = completed_at
+                    self._last_execution_query_at = completed_at
+                    if exc.api_id == "ka10076" and ("429" in str(exc) or "1700" in str(exc)):
+                        self.ctx.logger.warning("ka10076 rate-limited; fill reconciliation deferred to the next poll")
+                        data = None
+                    elif exc.api_id == "ust21150" and getattr(exc, "return_code", None) in (7, "7"):
+                        # Some US mock symbols (for example SOXL) can be held
+                        # and quoted but are not exposed by the execution-history
+                        # endpoint. Do not fail the whole tick; balance polling
+                        # remains authoritative and the query is retried later.
+                        if self._last_execution_unavailable_symbol != self.ctx.strategy.symbol:
+                            self.ctx.logger.warning(
+                                f"ust21150 execution history unavailable for {self.ctx.strategy.symbol}; fill reconciliation deferred"
+                            )
+                            self._last_execution_unavailable_symbol = self.ctx.strategy.symbol
+                        data = None
+                    else:
+                        raise
+                execution_rows = (normalize_us_execution_rows(data or {})
+                                  if self.ctx.client.market == "US" else _executed_rows(data or {}))
+                recovery_orders = {order.ord_no: order for order in self.ledger.execution_recovery_orders(
+                    self.ctx.strategy.symbol
+                )}
+                for raw in execution_rows:
+                    order = recovery_orders.get(str(raw.get("ord_no", "")))
+                    if not order:
+                        continue
+                    total, price = _number(raw.get("cntr_qty")), _number(raw.get("cntr_pric") or raw.get("cntr_uv"))
+                    if total <= order.filled_qty or price <= 0:
+                        continue
+                    row = self.ledger.record_fill(order, total, price, _filled_at(raw))
+                    if row:
+                        await self._apply_confirmed_fill(order, row)
+                        confirmed_fill = True
+                await self._cancel_stale_orders()
+            now = asyncio.get_running_loop().time()
+            if confirmed_fill or force_balance or now - self._last_balance_reconciliation >= self.balance_reconcile_sec:
+                try:
+                    await self._reconcile_balance()
+                except KiwoomAPIError as exc:
+                    if "429" not in str(exc) and "1700" not in str(exc):
+                        raise
+                    # Quota exhaustion is transient. Keep this symbol's
+                    # prior broker-confirmed state and retry on the next
+                    # normal reconciliation without an exception traceback.
+                    self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
+                    self._record_balance_rate_limit()
+                    return False
+                completed_at = asyncio.get_running_loop().time()
+                self._last_balance_request_at = completed_at
+                self._last_balance_reconciliation = completed_at
+                self._flush_dashboard_fills()
+                self._balance_gate.balance_backoff_sec = 5.0
+            self._balance_sync_blocked = False
+            return True
+
+    def _record_balance_rate_limit(self) -> None:
+        """Apply one shared exponential cooldown to all tasks on this account."""
+        now = asyncio.get_running_loop().time()
+        gate = self._balance_gate
+        gate.balance_not_before = now + gate.balance_backoff_sec
+        gate.balance_backoff_sec = min(gate.balance_backoff_sec * 2, 60.0)
+        self._balance_sync_blocked = True
+
+    async def _cancel_stale_orders(self) -> None:
+        """Cancel one stale unfilled order, regardless of side, per sync cycle.
+
+        SELLs need the same recovery discipline as BUYs. Leaving an accepted
+        but unconfirmed sell open allowed repeated ticks to submit additional
+        orders for the same tranche before the duplicate guard existed.
+        """
+        now = datetime.now(timezone.utc)
+        # Include execution-history rows: once the broker has stopped exposing
+        # an accepted order, an unfilled row must not block a symbol forever.
+        # Confirmed fills are never touched because their status is ``filled``.
+        for order in self.ledger.execution_recovery_orders(self.ctx.strategy.symbol):
+            try:
+                created_at = datetime.fromisoformat(order.created_at)
+            except ValueError:
+                continue
+            if (now - created_at).total_seconds() < self.pending_order_cancel_after_sec:
+                continue
+            remaining_qty = int(order.requested_qty - order.filled_qty)
+            if remaining_qty <= 0:
+                continue
+            age = (now - created_at).total_seconds()
+            # ``awaiting_execution_history`` means cancellation/fill lookup
+            # already reached a terminal broker response.  After the bounded
+            # grace period, retire it locally as unfilled; this is explicitly
+            # auditable and still leaves confirmed-fill ledger rows untouched.
+            if order.status == "awaiting_execution_history" and age >= self.pending_order_cancel_after_sec:
+                self.ledger.mark_cancelled(order.ord_no)
+                self.ctx.logger.warning(
+                    f"Force-closed unresolved {order.side} after {age:g}s without confirmed fill: {order.ord_no}"
+                )
+                return
+            # kt10003 is quota constrained.  Submit one cancellation per sync
+            # cycle and keep it behind the same minimum request interval used
+            # for other broker reconciliation calls.
+            try:
+                async with self._balance_gate.cancel_lock:
+                    loop_now = asyncio.get_running_loop().time()
+                    wait_for = self.execution_query_min_interval_sec - (loop_now - self._balance_gate.last_cancel_request_at)
+                    if wait_for > 0:
+                        await asyncio.sleep(wait_for)
+                    await self.ctx.client.cancel_order(order.symbol, order.ord_no, remaining_qty)
+                    completed_at = asyncio.get_running_loop().time()
+                    self._balance_gate.last_cancel_request_at = completed_at
+                    self._last_cancel_request_at = completed_at
+            except (OrderRejectedError, RetryableError, KiwoomAPIError) as exc:
+                completed_at = asyncio.get_running_loop().time()
+                self._balance_gate.last_cancel_request_at = completed_at
+                self._last_cancel_request_at = completed_at
+                if "RC4033" in str(exc) or "RC4032" in str(exc):
+                    # Neither response proves an unfilled order. Preserve it
+                    # for matching against delayed execution history across
+                    # future polls and worker restarts, while blocking a
+                    # duplicate order for this side/tranche.
+                    self.ledger.mark_awaiting_execution_history(order.ord_no)
+                    self.ctx.logger.warning(
+                        f"{order.side} cancellation is terminal but fill remains unconfirmed; "
+                        f"awaiting execution-history recovery: {order.ord_no}"
+                    )
+                    continue
+                self.ctx.logger.warning(f"Timed-out {order.side} cancellation deferred for {order.ord_no}: {exc}")
+                # A failed request (especially a quota response) must not make
+                # every other legacy pending order retry in the same tick.
+                return
+            self.ledger.mark_cancelled(order.ord_no)
+            self.ctx.logger.info(
+                f"Cancelled unfilled {order.side} after {self.pending_order_cancel_after_sec:g}s: {order.ord_no}"
+            )
+            return
+
+    async def _apply_confirmed_fill(self, order: PendingOrder, row: dict):
+        action = Action(order.action)
+        meta = dict(order.meta)
+        current = self.ledger.get_pending(order.ord_no)
+        # A partially filled grid sale still owns its step until its tranche is gone.
+        if order.side == "SELL":
+            meta["sell_only_step"] = bool(current and current.filled_qty >= current.requested_qty)
+        intent = OrderIntent(action, order.symbol, int(row["qty"]), row["price"], meta=meta)
+        self._update_position(intent, order.side)
+        self.ctx.strategy.on_filled(action, order.step, int(row["qty"]), row["price"])
+        if order.side == "BUY":
+            symbol = order.symbol.upper().lstrip("A")
+            self._broker_fill_catchup_qty[symbol] = max(
+                self._broker_fill_catchup_qty.get(symbol, 0.0),
+                float(self.ctx.position.qty),
+            )
+            self._broker_fill_catchup_warned.discard(symbol)
+        if order.side == "BUY" and self.buy_reentry_delay_sec > 0:
+            self._buy_reentry_after[order.symbol] = (
+                asyncio.get_running_loop().time() + self.buy_reentry_delay_sec
+            )
+            self.ctx.logger.info(
+                f"Confirmed tranche {order.step} BUY; next BUY delayed {self.buy_reentry_delay_sec:g}s for reconciliation"
+            )
+        # UI refresh is deferred until the next complete broker-balance pass.
+        # This applies equally to confirmed BUY and SELL fills.
+        self._pending_dashboard_fills.append((order, dict(row)))
+        await self.telegram.notify_fill(order.side, order.symbol, row["qty"], row["price"], order.ord_no)
+        self.discord.safe_send(f"Confirmed fill: {order.side} {order.symbol} x{row['qty']} @ {row['price']}")
+
+    def _queue_dashboard_fill(self, order: PendingOrder, row: dict) -> None:
+        """Schedule an isolated UI notification without blocking the worker loop."""
+        try:
+            asyncio.create_task(
+                self._publish_dashboard_fill(order, dict(row)),
+                name=f"dashboard-{order.side.lower()}-fill-{self.ctx.account_id}-{order.ord_no}",
+            )
+        except Exception as exc:
+            # Even task scheduling is UI-only and must never affect an already
+            # confirmed broker fill or subsequent trading decisions.
+            self.ctx.logger.warning(f"Dashboard {order.side}-fill refresh event deferred: {exc}")
+
+    def _flush_dashboard_fills(self) -> None:
+        """Wake the dashboard only after its broker snapshot is current."""
+        pending, self._pending_dashboard_fills = self._pending_dashboard_fills, []
+        for order, row in pending:
+            self._queue_dashboard_fill(order, row)
+            self.ctx.logger.info(
+                f"Dashboard {order.side}-fill refresh event queued after balance reconciliation: "
+                f"{order.symbol} ord_no={order.ord_no}"
+            )
+
+    async def _publish_dashboard_fill(self, order: PendingOrder, row: dict) -> None:
+        """Run the small filesystem notification outside the trading event loop."""
+        try:
+            await asyncio.to_thread(self._write_dashboard_fill, order, row)
+        except Exception as exc:
+            # This is deliberately broader than OSError: payload conversion,
+            # serialization, thread scheduling, or filesystem failures are all
+            # non-critical dashboard concerns.
+            self.ctx.logger.warning(f"Dashboard {order.side}-fill refresh event deferred: {exc}")
+
+    def _write_dashboard_fill(self, order: PendingOrder, row: dict) -> None:
+        """Publish one UI-only event after a broker-confirmed fill.
+
+        The dashboard consumes this local notification and performs its normal
+        read-only refresh. The event is emitted only after the confirmed ledger
+        row and in-memory strategy state have been updated; it never calls the
+        dashboard server or changes order processing.
+        """
+        try:
+            side = str(order.side).upper()
+            event_id = str(row.get("id") or f"{side[:1]}-{order.ord_no}-{row.get('qty')}")
+            payload = {
+                "id": event_id,
+                "type": f"{side.lower()}-fill",
+                "account": self.ctx.account_id,
+                "symbol": order.symbol,
+                "orderNo": order.ord_no,
+                "qty": row.get("qty"),
+                "price": row.get("price"),
+                "filledAt": row.get("filled_at"),
+            }
+            path = Path(f"data/dashboard_event_{self.ctx.account_id}.json")
+            path.parent.mkdir(exist_ok=True)
+            # Each rapid fill gets its own temporary filename. The final
+            # account event remains newest-event-wins by design, but parallel
+            # background writers cannot collide on one .tmp file.
+            temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+            temporary.write_text(json.dumps(payload), encoding="utf-8")
+            temporary.replace(path)
+        except Exception as exc:
+            # Dashboard notification is never allowed to affect a confirmed
+            # fill, broker reconciliation, or the next trading decision.
+            self.ctx.logger.warning(f"Dashboard {order.side}-fill refresh event deferred: {exc}")
+
+    def _write_lifecycles(self) -> None:
+        """Persist lifecycle markers without allowing cache I/O to affect trading."""
+        try:
+            self._lifecycle_path.parent.mkdir(exist_ok=True)
+            temporary = self._lifecycle_path.with_name(f"{self._lifecycle_path.name}.{uuid.uuid4().hex}.tmp")
+            temporary.write_text(json.dumps(self._symbol_lifecycles, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self._lifecycle_path)
+        except Exception as exc:
+            self.ctx.logger.warning(f"Could not persist symbol lifecycle state: {exc}")
+
+    def _prepare_lifecycle_scope(self, symbol: str) -> None:
+        """Select only the currently open lifecycle for ledger recovery.
+
+        A missing or closed marker deliberately starts in broker-adoption mode:
+        the next complete broker holding becomes the new manual tranche 1 and
+        all prior SQLite rows remain reporting history only.
+        """
+        symbol = str(symbol).upper().lstrip("A")
+        state = self._symbol_lifecycles.get(symbol)
+        started_at = state.get("started_at") if isinstance(state, dict) and state.get("status") == "open" else None
+        self.ledger.set_lifecycle_started_at(started_at)
+        self._lifecycle_pending_adoption = not bool(started_at)
+
+    def _begin_manual_lifecycle_activation(self, symbol: str) -> None:
+        """Create a fresh boundary before adopting an HTS manual holding."""
+        symbol = str(symbol).upper().lstrip("A")
+        now = datetime.now(timezone.utc).isoformat()
+        self._symbol_lifecycles[symbol] = {"status": "pending", "started_at": now, "activated_at": now}
+        self.ledger.set_lifecycle_started_at(now)
+        self._lifecycle_pending_adoption = True
+        self._write_lifecycles()
+
+    def _adopt_manual_lifecycle(self, symbol: str, qty: float, avg_price: float) -> None:
+        """Initialize tranche 1 solely from the activation-time broker snapshot."""
+        symbol = str(symbol).upper().lstrip("A")
+        state = self._symbol_lifecycles.get(symbol, {})
+        started_at = str(state.get("started_at") or datetime.now(timezone.utc).isoformat())
+        self._symbol_lifecycles[symbol] = {
+            "status": "open", "started_at": started_at,
+            "activated_at": state.get("activated_at", started_at),
+            "manual_qty": float(qty), "manual_price": float(avg_price),
+        }
+        self.ledger.set_lifecycle_started_at(started_at)
+        self._lifecycle_pending_adoption = False
+        self.ctx.strategy.step_qty.clear()
+        self.ctx.strategy.step_prices.clear()
+        self.ctx.strategy.step_qty[1] = int(qty)
+        self.ctx.strategy.step_prices[1] = float(avg_price)
+        self.ctx.position = PositionState(
+            symbol=self.ctx.strategy.symbol, qty=float(qty), avg_price=float(avg_price), step=1
+        )
+        self._store_tranche_base(symbol, float(avg_price))
+        self._write_lifecycles()
+        self.ctx.logger.info(
+            f"Manual tranche 1 adopted at lifecycle activation: {symbol} qty={qty:g}, price={avg_price:g}"
+        )
+
+    def _refresh_open_lifecycle_manual_basis(self, symbol: str, qty: float, price: float) -> None:
+        """Persist a manual lot only when no manual lot has been adopted yet.
+
+        A manual Tranche 1 is immutable.  An unexplained broker quantity delta
+        must never be treated as evidence that the manual lot increased.
+        """
+        symbol = str(symbol).upper().lstrip("A")
+        state = self._symbol_lifecycles.get(symbol)
+        if not isinstance(state, dict) or state.get("status") != "open":
+            return
+        if float(state.get("manual_qty", 0) or 0) > 0 and float(state.get("manual_price", 0) or 0) > 0:
+            return
+        state["manual_qty"] = float(qty)
+        state["manual_price"] = float(price)
+        self._write_lifecycles()
+        self.ctx.logger.info(
+            f"Open lifecycle manual tranche basis reconciled from broker: {symbol} qty={qty:g}, price={price:g}"
+        )
+
+    def _close_symbol_lifecycle(self, symbol: str) -> None:
+        """Close the active lifecycle before deleting symbol controls/caches."""
+        symbol = str(symbol).upper().lstrip("A")
+        state = self._symbol_lifecycles.get(symbol, {})
+        self._symbol_lifecycles[symbol] = {
+            "status": "closed", "started_at": state.get("started_at"),
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.ledger.set_lifecycle_started_at(None)
+        self._lifecycle_pending_adoption = True
+        self._write_lifecycles()
+
+    def _restore_from_ledger(self):
+        """Rebuild volatile grid/position state from the durable confirmed-fill ledger."""
+        # A new or closed lifecycle must never replay a prior trading cycle.
+        if self._lifecycle_pending_adoption:
+            return
+        repaired = self.ledger.repair_cross_symbol_sell_buy_links(self.ctx.strategy.symbol)
+        for item in repaired:
+            self.ctx.logger.warning(
+                f"Repaired invalid cross-symbol SELL linkage: {item['symbol']} "
+                f"order={item['ordNo']} -> {item['buyId']}"
+            )
+        for row in self.ledger.ledger_rows(self.ctx.strategy.symbol):
+            side = row["type"].upper()
+            action = Action.BUY if side == "BUY" else Action.SELL
+            intent = OrderIntent(action, self.ctx.strategy.symbol, int(row["qty"]), row["price"],
+                                 meta={"step": row["step"], "sell_only_step": side == "SELL"})
+            self._update_position(intent, side)
+            self.ctx.strategy.on_filled(action, row["step"], int(row["qty"]), row["price"])
+
+    def _store_tranche_base(self, symbol: str, price: float) -> None:
+        """Persist a validated tranche-1 basis so a stale value cannot return."""
+        symbol = str(symbol).upper().lstrip("A")
+        price = float(price)
+        if price <= 0 or self._tranche_bases.get(symbol) == price:
+            return
+        self._tranche_bases[symbol] = price
+        try:
+            self._tranche_bases_path.parent.mkdir(exist_ok=True)
+            temp_path = self._tranche_bases_path.with_suffix(".json.tmp")
+            temp_path.write_text(json.dumps(self._tranche_bases, ensure_ascii=False), encoding="utf-8")
+            temp_path.replace(self._tranche_bases_path)
+        except OSError as exc:
+            # The in-memory recovery result remains safe even if persistence is
+            # temporarily unavailable; never let a cache-write issue affect the
+            # broker reconciliation path.
+            self.ctx.logger.warning(f"Could not persist validated tranche base for {symbol}: {exc}")
+
+    def _validated_manual_tranche_base(
+        self, symbol: str, broker_qty: float, broker_avg: float,
+        confirmed_lots: list[tuple[int, float, float]], manual_qty: float,
+    ) -> float:
+        """Use a saved manual basis only when it fits the live broker position.
+
+        A simple symbol->price cache has no lifecycle identity.  Therefore a
+        base from a prior fully-closed position must never override the current
+        broker/confirmed-lot reconstruction merely because the symbol matches.
+        """
+        symbol = str(symbol).upper().lstrip("A")
+        lot_qty = sum(float(qty) for _, qty, _ in confirmed_lots)
+        lot_cost = sum(float(qty) * float(price) for _, qty, price in confirmed_lots)
+        manual_qty = max(0.0, float(manual_qty))
+        lifecycle = self._symbol_lifecycles.get(symbol, {})
+        lifecycle_price = float(lifecycle.get("manual_price", 0) or 0) if isinstance(lifecycle, dict) else 0.0
+        lifecycle_qty = float(lifecycle.get("manual_qty", 0) or 0) if isinstance(lifecycle, dict) else 0.0
+        # An open lifecycle records the broker-confirmed HTS manual fill at
+        # adoption time. After partial sells a broker's displayed average can
+        # no longer be reverse-engineered into individual lots, so it must not
+        # overwrite that immutable manual Tranche 1 price on restart.
+        if lifecycle.get("status") == "open" and lifecycle_price > 0 and lifecycle_qty > 0 and manual_qty > 0:
+            self._store_tranche_base(symbol, lifecycle_price)
+            return lifecycle_price
+        saved = float(self._tranche_bases.get(symbol, 0) or 0)
+        tick_tolerance = float(_kr_tick_size(broker_avg)) if self.ctx.client.market == "KR" else 0.01
+        # Broker average prices can be rounded. One price tick is enough to
+        # accept a contemporaneous exact manual fill but rejects stale bases
+        # such as 226340's 9,120 KRW against the current 7,596 KRW position.
+        tolerance = max(tick_tolerance, abs(float(broker_avg)) * 0.0001)
+        if saved > 0 and manual_qty > 0 and broker_qty > 0:
+            implied_avg = (saved * manual_qty + lot_cost) / broker_qty
+            if abs(implied_avg - float(broker_avg)) <= tolerance:
+                return saved
+            self.ctx.logger.warning(
+                f"Discarded stale saved tranche base for {symbol}: saved={saved:g}, "
+                f"broker_avg={broker_avg:g}, implied_avg={implied_avg:g}"
+            )
+
+        # No trustworthy saved manual basis remains. Infer the residual only
+        # from the broker-held quantity and the newest confirmed program lots.
+        # Persist this replacement so the rejected value cannot reappear on a
+        # later restart. Exact manually adopted bases are persisted separately
+        # at adoption time and pass the validation above.
+        inferred = float(broker_avg)
+        if manual_qty > 0 and broker_qty > 0:
+            inferred = (float(broker_qty) * float(broker_avg) - lot_cost) / manual_qty
+        if inferred <= 0:
+            inferred = float(broker_avg)
+        if self.ctx.client.market == "KR":
+            tick = _kr_tick_size(inferred)
+            inferred = round(inferred / tick) * tick
+        else:
+            inferred = round(inferred, 4)
+        self._store_tranche_base(symbol, inferred)
+        return inferred
+
+    def _manual_lifecycle_basis_or_broker_average(self, qty: float, broker_avg: float) -> float:
+        """Choose T1's immutable lifecycle basis before a broker moving average.
+
+        A broker may retain a moving-average cost after every automated tranche
+        has been sold.  That value is not a new HTS fill and must never reset
+        an open lifecycle's manual Line 1 basis.
+        """
+        symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+        lifecycle = self._symbol_lifecycles.get(symbol, {})
+        manual_qty = float(lifecycle.get("manual_qty", 0) or 0) if isinstance(lifecycle, dict) else 0.0
+        if (isinstance(lifecycle, dict) and lifecycle.get("status") == "open"
+                and manual_qty > 0 and qty > 0):
+            return self._validated_manual_tranche_base(
+                symbol, qty, broker_avg, [], min(float(qty), manual_qty)
+            )
+        return float(broker_avg)
+
+    async def _reconcile_balance(self):
+        raw_balance = await self._shared_broker_balance()
+        if self.ctx.client.market == "US":
+            broker_holdings = normalize_us_holdings(raw_balance)
+            balance_recognized = us_balance_recognized(raw_balance)
+        else:
+            broker_holdings = _all_balance_holdings(raw_balance)
+            balance_recognized = _kr_balance_recognized(raw_balance)
+        if self._balance_only:
+            self._publish_passive_balance_snapshot(broker_holdings, balance_recognized)
+            quantities = {str(item.get("symbol", "")).upper().lstrip("A"): float(item.get("qty", 0) or 0)
+                          for item in broker_holdings}
+            self._orphan_cleaner.sweep(
+                quantities, balance_recognized, self._has_unresolved_order_for_cleanup, apply=True,
+            )
+            return
+        bases_changed = False
+        for broker_holding in broker_holdings:
+            symbol = broker_holding["symbol"]
+            if symbol not in self._tranche_bases and broker_holding["avgPrice"] > 0:
+                # Capture the original broker cost once. Later grid fills alter
+                # account average cost, but must never rewrite tranche 1.
+                self._tranche_bases[symbol] = broker_holding["avgPrice"]
+                bases_changed = True
+        if bases_changed:
+            self._tranche_bases_path.parent.mkdir(exist_ok=True)
+            self._tranche_bases_path.write_text(json.dumps(self._tranche_bases), encoding="utf-8")
+        if self.ctx.client.market == "US":
+            holding_row = next((item for item in broker_holdings
+                                if _same_symbol(item["symbol"], self.ctx.strategy.symbol)), None)
+            holding = ((holding_row["qty"], holding_row["avgPrice"]) if holding_row else (0.0, 0.0)) if balance_recognized else None
+        else:
+            holding = _balance_holding(raw_balance, self.ctx.strategy.symbol)
+        if holding is None:
+            self.ctx.logger.warning(
+                "Balance response could not be reconciled; preserving local state "
+                f"(top-level fields: {sorted(raw_balance.keys())}; "
+                f"holding summary: {_holding_summary(raw_balance)})"
+            )
+            return
+        qty, avg_price = holding
+        # The normal workflow is manual HTS tranche 1, then immediate strategy
+        # enablement. At that boundary use only this complete broker snapshot;
+        # never consult prior-lifecycle ledger rows or saved tranche bases.
+        if self._lifecycle_pending_adoption and balance_recognized and qty > 1e-9:
+            self._adopt_manual_lifecycle(self.ctx.strategy.symbol, qty, avg_price)
+        Path("data").mkdir(exist_ok=True)
+        if self.ctx.client.market == "US":
+            await self._refresh_fx_rate()
+        balance_path = Path(f"data/balance_{self.ctx.account_id}.json")
+        try:
+            previous_balance = json.loads(balance_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous_balance = {}
+        balance_snapshot = {
+            "account": self.ctx.account_id, "symbol": self.ctx.strategy.symbol,
+            "qty": qty, "avgPrice": avg_price, "updatedAt": datetime.now().isoformat(),
+            "holdings": broker_holdings,
+            "balanceComplete": bool(balance_recognized),
+            "trancheBases": self._tranche_bases,
+            "manualTrancheQty": {
+                key: float(value.get("manual_qty", 0) or 0)
+                for key, value in self._symbol_lifecycles.items()
+                if isinstance(value, dict) and value.get("status") == "open"
+            },
+            # This is separate from the legacy tranche-base cache.  A cached
+            # account average must never overwrite an immutable manually
+            # adopted Line 1 basis in dashboard recovery.
+            "manualTrancheBases": {
+                key: float(value.get("manual_price", 0) or 0)
+                for key, value in self._symbol_lifecycles.items()
+                if isinstance(value, dict) and value.get("status") == "open"
+                and float(value.get("manual_price", 0) or 0) > 0
+            },
+            "currency": self.ctx.currency,
+            "reportingCurrency": self.ctx.reporting_currency,
+            "fxRateKrw": self._fx_rate_krw,
+        }
+        # Dashboard readers run in a different process. Replace the snapshot
+        # atomically so they either see the previous complete balance or this
+        # complete balance, never a partly-written JSON document.
+        balance_tmp = balance_path.with_suffix(".json.tmp")
+        balance_tmp.write_text(json.dumps(balance_snapshot), encoding="utf-8")
+        balance_tmp.replace(balance_path)
+        if self._balance_only:
+            return
+        # One shared broker-authoritative orphan evaluator owns both startup
+        # and live cleanup.  It requires two complete zero snapshots and never
+        # touches unresolved orders or a nonzero holding.
+        quantities = {str(item.get("symbol", "")).upper().lstrip("A"): float(item.get("qty", 0) or 0)
+                      for item in broker_holdings}
+        orphan_results = self._orphan_cleaner.sweep(
+            quantities, balance_recognized, self.ledger.has_unresolved_orders, apply=True,
+        )
+        orphan_by_symbol = {item["symbol"]: item for item in orphan_results}
+        symbol_key = self.ctx.strategy.symbol.upper().lstrip("A")
+        current_orphan = orphan_by_symbol.get(symbol_key, {})
+        if current_orphan.get("classification") == "cleaned":
+            self._closed_symbols_blocked.add(symbol_key)
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            self.ctx.strategy.step_qty.clear()
+            self.ctx.strategy.step_prices.clear()
+            self.ctx.position = PositionState(symbol=self.ctx.strategy.symbol)
+            self._prepare_lifecycle_scope(symbol_key)
+            self.ctx.logger.info(f"Automatic orphan cleanup completed for {symbol_key}: {current_orphan.get('removed', [])}")
+            return
+        expected_qty = self._broker_fill_catchup_qty.get(symbol_key)
+        if expected_qty is not None:
+            if qty + 1e-9 >= expected_qty:
+                self._broker_fill_catchup_qty.pop(symbol_key, None)
+                self._broker_fill_catchup_warned.discard(symbol_key)
+                self.ctx.logger.info(
+                    f"Broker balance caught up after confirmed BUY: {self.ctx.strategy.symbol} "
+                    f"broker={qty:g} confirmed={expected_qty:g}"
+                )
+            else:
+                # Do not rebuild, adopt, or mark the lower snapshot as an
+                # external trade.  A filled order has durable attribution; the
+                # broker balance is simply not current yet.
+                if symbol_key not in self._broker_fill_catchup_warned:
+                    self._broker_fill_catchup_warned.add(symbol_key)
+                    self.ctx.logger.warning(
+                        f"Broker balance behind confirmed BUY fills for {self.ctx.strategy.symbol}: "
+                        f"broker={qty:g} confirmed={expected_qty:g}; preserving tranche state and holding automation"
+                    )
+                return
+        # A broker balance can reflect an accepted order before the execution
+        # history endpoint exposes its fill. Do not classify that temporary
+        # quantity delta as an unexplained HTS/manual trade: doing so pauses
+        # tranche sells and can reset the grid before the pending fill is
+        # applied to the ledger. The next sync will apply the confirmed fill
+        # and reconcile the balance normally. This applies to both BUY and
+        # SELL; the BUY re-entry delay is set only by _apply_confirmed_fill.
+        pending_for_symbol = self.ledger.pending_orders(self.ctx.strategy.symbol)
+        if pending_for_symbol and abs(float(self.ctx.position.qty) - qty) > 1e-9:
+            self.ctx.logger.info(
+                f"Broker quantity change deferred for pending fill reconciliation: "
+                f"{self.ctx.strategy.symbol} local={self.ctx.position.qty:g} broker={qty:g} "
+                f"pending={len(pending_for_symbol)}"
+            )
+            return
+        # A first complete zero snapshot is report-only. The orphan evaluator
+        # performs automatic state cleanup only after a second complete zero
+        # snapshot, preventing a transient/stale zero from deleting a symbol.
+        if balance_recognized and qty <= 1e-9:
+            self._dashboard_auto_buy = self._dashboard_auto_sell = False
+            self._dashboard_profile_allowed = False
+            self._trading_paused = True
+            self.ctx.logger.info(
+                f"Complete zero balance observed for {symbol_key}; orphan cleanup confirmation "
+                f"{current_orphan.get('zeroConfirmations', 0)}/2"
+            )
+            return
+        # A restart has no in-memory fill-catchup marker, but an open lifecycle
+        # has an equally strong durable minimum: its adopted manual tranche 1
+        # plus its still-open confirmed program lots.  A lower broker snapshot
+        # immediately after restart can be stale. Preserve the reconstructed
+        # map and fail closed rather than dropping T2/T3 or blending anything
+        # into T1; a later current broker snapshot releases this normal gate.
+        lifecycle = self._symbol_lifecycles.get(symbol_key, {})
+        if isinstance(lifecycle, dict) and lifecycle.get("status") == "open":
+            manual_qty = max(0.0, float(lifecycle.get("manual_qty", 0) or 0))
+            confirmed_qty = sum(
+                self.ledger.open_tranche_qty(self.ctx.strategy.symbol, step)
+                for step in range(2, self.ctx.strategy.max_step + 1)
+            )
+            lifecycle_min_qty = manual_qty + confirmed_qty
+            if lifecycle_min_qty > 0 and qty + 1e-9 < lifecycle_min_qty:
+                self._broker_fill_catchup_qty[symbol_key] = lifecycle_min_qty
+                if symbol_key not in self._broker_fill_catchup_warned:
+                    self._broker_fill_catchup_warned.add(symbol_key)
+                    self.ctx.logger.warning(
+                        f"Broker balance behind open lifecycle after restart for {self.ctx.strategy.symbol}: "
+                        f"broker={qty:g} lifecycle-minimum={lifecycle_min_qty:g}; preserving tranches and blocking automation"
+                    )
+                return
+        known_tranche_qty = sum(qty for qty in self.ctx.strategy.step_qty.values() if qty > 0)
+        if known_tranche_qty > qty + 1e-9:
+            # Historical runtime state exceeds the broker balance. Rebuild
+            # from confirmed open ledger quantities first; never relabel the
+            # whole broker balance as tranche 1. Preserve one manual HTS
+            # share when no confirmed step-1 fill exists, then cap confirmed
+            # later tranches to the live broker quantity.
+            open_rows = []
+            for step in range(1, self.ctx.strategy.max_step + 1):
+                open_qty = self.ledger.open_tranche_qty(self.ctx.strategy.symbol, step)
+                if open_qty > 0:
+                    # ledger_rows() is lifecycle-scoped, so rows here cannot
+                    # belong to an older fully closed cycle.  Aggregate every
+                    # current-lifecycle fill for this line: a prior duplicate
+                    # or legitimate split execution must not disappear merely
+                    # because a recovery used only the newest order.
+                    buys = [r for r in self.ledger.ledger_rows(self.ctx.strategy.symbol)
+                            if r.get("type", "").lower() == "buy" and int(r.get("step", 0)) == step]
+                    total = sum(float(row.get("qty", 0)) for row in buys)
+                    weighted = sum(float(row.get("qty", 0)) * float(row.get("price", 0)) for row in buys)
+                    open_rows.append((step, min(float(open_qty), total), weighted / total if total else avg_price))
+            self.ctx.strategy.step_qty.clear()
+            self.ctx.strategy.step_prices.clear()
+            self.ctx.position = PositionState(symbol=self.ctx.strategy.symbol)
+            remaining = float(qty)
+            if not any(step == 1 for step, _, _ in open_rows) and remaining > 0:
+                manual_qty = min(1.0, remaining)
+                self.ctx.strategy.step_qty[1] = int(manual_qty)
+                # A single remaining broker share is the current manual/HTS
+                # holding after the previous cycle closed. Validate any saved
+                # basis against the broker position plus the confirmed newer
+                # lots before using it; a base cached for an older lifecycle
+                # cannot be allowed to alter the reconstructed grid.
+                manual_price = self._validated_manual_tranche_base(
+                    self.ctx.strategy.symbol, qty, avg_price, open_rows, manual_qty
+                )
+                self._refresh_open_lifecycle_manual_basis(self.ctx.strategy.symbol, manual_qty, manual_price)
+                self.ctx.strategy.step_prices[1] = manual_price
+                remaining -= manual_qty
+            for step, open_qty, price in open_rows:
+                if remaining <= 0:
+                    break
+                allocated = min(float(open_qty), remaining)
+                self.ctx.strategy.step_qty[step] = int(allocated)
+                self.ctx.strategy.step_prices[step] = price
+                remaining -= allocated
+            known_tranche_qty = sum(self.ctx.strategy.step_qty.values())
+            # The tranche map and aggregate position must be restored as one
+            # state transition. Leaving PositionState at zero makes the next
+            # tick generate a new first-tranche BUY even though the broker
+            # already owns the reconstructed position.
+            self.ctx.position.qty = float(qty)
+            self.ctx.position.avg_price = float(avg_price)
+            self.ctx.position.step = max(
+                (step for step, step_qty in self.ctx.strategy.step_qty.items() if step_qty > 0),
+                default=0,
+            )
+            self._tranche_sell_paused = False
+            self.ctx.logger.warning(
+                f"Rebuilt stale tranche history for {self.ctx.strategy.symbol} from broker quantity {qty}; "
+                f"preserved confirmed tranche attribution; "
+                f"tranches={{{', '.join(f'{step}:{self.ctx.strategy.step_qty[step]:g}@{self.ctx.strategy.step_prices.get(step, 0):g}' for step in sorted(self.ctx.strategy.step_qty))}}}"
+            )
+        if abs(float(self.ctx.position.qty) - qty) <= 1e-9:
+            self._tranche_sell_paused = False
+        if abs(float(self.ctx.position.qty) - qty) > 1e-9 and known_tranche_qty > 0:
+            unmatched_qty = qty - known_tranche_qty
+            # A restored program ledger can describe later confirmed tranches
+            # while an earlier manual tranche is absent from that ledger.  When
+            # the broker owns exactly the known program quantity plus a positive
+            # remainder, keep the program tranches intact and isolate the
+            # remainder as tranche 1.  This lets a tranche-2 target sell its
+            # own confirmed quantity (never the manual share) after restart.
+            # Only a lifecycle with no adopted manual lot may use a positive
+            # broker remainder to initialize Line 1.  Once a manual HTS lot
+            # exists, a larger remainder is un-attributed exposure, not more
+            # manual shares.
+            lifecycle_manual_qty = max(0.0, float(lifecycle.get("manual_qty", 0) or 0)) if isinstance(lifecycle, dict) else 0.0
+            lifecycle_manual_price = float(lifecycle.get("manual_price", 0) or 0) if isinstance(lifecycle, dict) else 0.0
+            if unmatched_qty > 1e-9 and not self.ctx.strategy.step_qty.get(1) and lifecycle_manual_qty > 1e-9:
+                # Restart recovery restores the immutable manual lot first.
+                # Any broker quantity beyond that lot remains un-attributed and
+                # is handled by the fail-closed branch below; it is never
+                # merged into Line 1.
+                restored_manual_qty = min(unmatched_qty, lifecycle_manual_qty)
+                self.ctx.strategy.step_qty[1] = int(restored_manual_qty)
+                self.ctx.strategy.step_prices[1] = lifecycle_manual_price or avg_price
+                self._store_tranche_base(self.ctx.strategy.symbol, self.ctx.strategy.step_prices[1])
+                self.ctx.position.qty = known_tranche_qty + restored_manual_qty
+                self.ctx.position.avg_price = avg_price
+                self.ctx.position.step = max(
+                    (step for step, step_qty in self.ctx.strategy.step_qty.items() if step_qty > 0), default=1,
+                )
+                known_tranche_qty += restored_manual_qty
+                unmatched_qty = qty - known_tranche_qty
+                if unmatched_qty <= 1e-9:
+                    self._tranche_sell_paused = False
+                    return
+            if unmatched_qty > 1e-9 and not self.ctx.strategy.step_qty.get(1):
+                confirmed_lots = [
+                    (step, float(step_qty), float(self.ctx.strategy.step_prices.get(step, avg_price)))
+                    for step, step_qty in self.ctx.strategy.step_qty.items() if step_qty > 0
+                ]
+                first_price = self._validated_manual_tranche_base(
+                    self.ctx.strategy.symbol, qty, avg_price, confirmed_lots, unmatched_qty
+                )
+                self._refresh_open_lifecycle_manual_basis(self.ctx.strategy.symbol, unmatched_qty, first_price)
+                self.ctx.strategy.step_qty[1] = int(unmatched_qty)
+                self.ctx.strategy.step_prices[1] = first_price
+                self.ctx.position.qty = qty
+                self.ctx.position.avg_price = avg_price
+                self.ctx.position.step = max(
+                    (step for step, step_qty in self.ctx.strategy.step_qty.items() if step_qty > 0),
+                    default=0,
+                )
+                self._tranche_sell_paused = False
+                self.ctx.logger.info(
+                    f"Broker remainder isolated as manual tranche 1 for {self.ctx.strategy.symbol}: "
+                    f"qty={unmatched_qty:g}, base={first_price}"
+                )
+                return
+            # A broker quantity change that cannot be attributed to a confirmed
+            # tranche fill must never be folded into tranche 1. Doing so could
+            # make a tranche-profit sale submit the whole holding. Preserve the
+            # known tranche map and require reconciliation before resuming.
+            self._tranche_sell_paused = True
+            self._trading_paused = True
+            self.ctx.logger.error(
+                f"Broker quantity changed without tranche attribution for {self.ctx.strategy.symbol}; "
+                "all automated orders paused to protect tranche-only quantities"
+            )
+            return
+        if abs(float(self.ctx.position.qty) - qty) > 1e-9:
+            # HTS/manual trades are real broker state, but have no strategy step or
+            # ledger provenance. Reflect them immediately while pausing automation
+            # so the strategy cannot make an unsafe assumption about the tranche.
+            self.ctx.position.qty = qty
+            self.ctx.position.avg_price = avg_price if qty else 0.0
+            # HTS purchases have no program ledger history.  Once the user has
+            # explicitly enabled this holding in the dashboard, treat the broker
+            # average as tranche 1 so sell targets and later grid buys have a
+            # known, broker-authoritative reference price.
+            if qty > 0 and self._dashboard_symbol == self.ctx.strategy.symbol.lstrip("A"):
+                tranche_one_price = self._manual_lifecycle_basis_or_broker_average(qty, avg_price)
+                self.ctx.position.step = 1
+                self.ctx.strategy.step_qty[1] = int(qty)
+                self.ctx.strategy.step_prices[1] = tranche_one_price
+                # A genuinely new manual Tier 1 uses the broker average. An
+                # already-open lifecycle instead retains its recorded manual
+                # basis even when broker moving-average accounting has shifted.
+                symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+                self._store_tranche_base(symbol, tranche_one_price)
+            if not self._auto_trading_enabled:
+                self.ctx.logger.info(
+                    f"Strategy-symbol broker balance synchronized: {self.ctx.strategy.symbol} qty={qty}, avg={avg_price}"
+                )
+            else:
+                self._trading_paused = True
+                msg = (f"Broker balance adopted: qty={qty}, avg={avg_price}; "
+                       "automated orders paused because the position changed outside this program")
+                self.ctx.logger.error(msg)
+                await self.telegram.notify_balance_change(msg)
+        # A manually/HTS-held position can have already been adopted before a
+        # dashboard profile becomes active. Seed tranche 1 regardless of a
+        # quantity change so grid Auto Buy has the broker average as its base.
+        if qty > 0 and self._dashboard_symbol == self.ctx.strategy.symbol.lstrip("A"):
+            if known_tranche_qty <= 0 and (self.ctx.position.step == 0 or not self.ctx.strategy.step_prices.get(1)):
+                tranche_one_price = self._manual_lifecycle_basis_or_broker_average(qty, avg_price)
+                self.ctx.position.qty = qty
+                self.ctx.position.avg_price = avg_price
+                self.ctx.position.step = 1
+                self.ctx.strategy.step_qty[1] = int(qty)
+                self.ctx.strategy.step_prices[1] = tranche_one_price
+                symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+                self._store_tranche_base(symbol, tranche_one_price)
+                self.ctx.logger.info(
+                    f"HTS holding initialized for automation: {self.ctx.strategy.symbol} qty={qty}, tranche-1 price={tranche_one_price}"
+                )
+
+    def _remove_settings_for_confirmed_closures(
+        self, previous_balance: dict, broker_holdings: list[dict], balance_recognized: bool
+    ) -> None:
+        """Remove opted-in profiles only after a complete broker-confirmed closure."""
+        if not balance_recognized:
+            return
+        current_symbols = {
+            str(item.get("symbol", "")).upper().lstrip("A")
+            for item in broker_holdings
+            if float(item.get("qty", 0) or 0) > 0
+        }
+        settings_path = Path(f"data/dashboard_settings_{self.ctx.account_id}.json")
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not settings.get("auto_remove_closed_positions", True):
+            return
+        profiles = settings.get("profiles", [])
+        configured_symbols = {
+            str((profile.get("config") or {}).get("symbol", "")).upper().lstrip("A")
+            for profile in profiles if isinstance(profile, dict)
+        }
+        configured_symbols.discard("")
+        # A symbol that was held in the previous complete snapshot and is now
+        # absent is a confirmed full close. Remove it immediately. For profiles
+        # that were never held, retain the existing two-snapshot safeguard.
+        previous_symbols = {
+            str(item.get("symbol", "")).upper().lstrip("A")
+            for item in (previous_balance.get("holdings") or [])
+            if float(item.get("qty", 0) or 0) > 0
+        }
+        for symbol in configured_symbols:
+            if symbol in current_symbols:
+                self._closure_absence_confirmations.pop(symbol, None)
+            elif symbol in previous_symbols:
+                self._closure_absence_confirmations[symbol] = 2
+            else:
+                self._closure_absence_confirmations[symbol] = self._closure_absence_confirmations.get(symbol, 0) + 1
+        for symbol in list(self._closure_absence_confirmations):
+            if symbol not in configured_symbols:
+                self._closure_absence_confirmations.pop(symbol, None)
+        self._closure_absence_path.parent.mkdir(exist_ok=True)
+        self._closure_absence_path.write_text(
+            json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
+        )
+        closed_symbols = {
+            symbol for symbol, count in self._closure_absence_confirmations.items() if count >= 2
+        }
+        if not closed_symbols:
+            return
+        retained = [profile for profile in profiles if str(
+            (profile.get("config") or {}).get("symbol", "")
+        ).upper().lstrip("A") not in closed_symbols]
+        if len(retained) == len(profiles):
+            return
+        settings["profiles"] = retained
+        settings_path.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+        for symbol in closed_symbols:
+            self._closure_absence_confirmations.pop(symbol, None)
+        self._closure_absence_path.write_text(
+            json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
+        )
+        self.ctx.logger.info(
+            f"Trade Settings removed after broker-confirmed position closure: {sorted(closed_symbols)}"
+        )
+
+    def _cleanup_fully_closed_symbol(self, symbol: str) -> None:
+        """Atomically retire all per-symbol automation state after full close."""
+        symbol = str(symbol).upper().lstrip("A")
+        account = self.ctx.account_id
+        control_paths = [
+            Path(f"data/dashboard_control_{account}_{symbol}.json"),
+        ]
+        for path in control_paths:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                self.ctx.logger.warning(f"Could not remove closed-symbol control file {path}: {exc}")
+
+        settings_path = Path(f"data/dashboard_settings_{account}.json")
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
+            retained = [p for p in profiles if str((p.get("config") or {}).get("symbol", "")).upper().lstrip("A") != symbol]
+            if len(retained) != len(profiles):
+                settings["profiles"] = retained
+                settings_path.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+
+        self._tranche_bases.pop(symbol, None)
+        self._tranche_bases_path.parent.mkdir(exist_ok=True)
+        self._tranche_bases_path.write_text(json.dumps(self._tranche_bases, ensure_ascii=False), encoding="utf-8")
+        self._closure_absence_confirmations.pop(symbol, None)
+        self._closure_absence_path.write_text(
+            json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
+        )
+        closed_orders = self.ledger.close_open_orders_for_symbol(symbol)
+        self._buy_reentry_after.pop(symbol, None)
+        self._last_auto_buy_price.pop(symbol, None)
+        self._blocked_order_until = {
+            key: value for key, value in self._blocked_order_until.items() if key[1] != symbol
+        }
+        self.ctx.logger.info(
+            f"Fully closed symbol state cleaned: {symbol}; pending strategy orders retired={closed_orders}"
+        )
+
+    async def _refresh_fx_rate(self) -> None:
+        """Refresh the dashboard-only USD/KRW reference rate at a safe cadence."""
+        # Kiwoom currently rejects ust31301 on the US paper-trading domain
+        # (RC9000: 업무 미제공).  FX is reporting-only, so do not repeatedly
+        # call an unsupported endpoint or make it look like an engine fault.
+        if self.ctx.client.market == "US" and self.ctx.client.mode == "mock":
+            return
+        now = asyncio.get_running_loop().time()
+        refresh_sec = float(os.environ.get("KIWOOM_FX_REFRESH_SEC", "60"))
+        if now - self._last_fx_request_at < refresh_sec:
+            return
+        self._last_fx_request_at = now
+        try:
+            rate = extract_us_fx_rate(await self.ctx.client.get_fx_rate())
+            if rate:
+                self._fx_rate_krw = rate
+        except (KiwoomAPIError, RetryableError) as exc:
+            self.ctx.logger.warning(f"USD/KRW reference FX refresh deferred: {exc}")
+
+    def _update_position(self, intent: OrderIntent, side: str):
+        pos = self.ctx.position
+        if side == "BUY":
+            total_cost = pos.qty * pos.avg_price + intent.qty * (intent.price or 0)
+            pos.qty += intent.qty
+            pos.avg_price = total_cost / pos.qty if pos.qty else 0
+            pos.step = intent.meta.get("step", pos.step + 1)
+        else:
+            pos.realized_pnl += ((intent.price or 0) - pos.avg_price) * intent.qty
+            pos.qty = max(0, pos.qty - intent.qty)
+            if intent.meta.get("sell_only_step"):
+                pos.step = max(0, pos.step - 1)
+            if pos.qty == 0:
+                pos.step = 0
+
+    async def _safe_get_quote(self) -> tuple[float, str, float] | None:
+        try:
+            feed_obj = getattr(self.ctx, "price_feed_obj", None)
+            if feed_obj is not None and hasattr(feed_obj, "get_quote"):
+                return await feed_obj.get_quote(self.ctx.strategy.symbol)
+            return await self.price_feed(self.ctx.strategy.symbol), "legacy", datetime.now().timestamp()
+        except Exception as exc:
+            self.ctx.logger.warning(f"Price lookup failed: {exc}")
+            # Some US mock symbols (currently including SOXL) are present in
+            # the balance feed but unavailable through usa20100. Use only a
+            # recent, broker-supplied balance quote as a bounded fallback;
+            # never use the stored average/tranche price as a market quote.
+            if self.ctx.client.market == "US" and self.ctx.client.mode == "mock":
+                try:
+                    path = Path(f"data/balance_{self.ctx.account_id}.json")
+                    snapshot = json.loads(path.read_text(encoding="utf-8"))
+                    updated = datetime.fromisoformat(str(snapshot.get("updatedAt", "")))
+                    age = (datetime.now() - updated).total_seconds()
+                    if 0 <= age <= 30 and snapshot.get("balanceComplete"):
+                        symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+                        row = next(
+                            (item for item in snapshot.get("holdings", [])
+                             if str(item.get("symbol", "")).upper().lstrip("A") == symbol),
+                            None,
+                        )
+                        fallback = float((row or {}).get("currentPrice") or 0)
+                        if fallback > 0:
+                            self.ctx.logger.info(
+                                f"Using recent broker balance quote for {symbol}: "
+                                f"{fallback} (usa20100 unavailable, age={age:.1f}s)"
+                            )
+                            return fallback, "broker-balance-fallback", updated.timestamp()
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    pass
+            return None
+
+    async def _safe_get_price(self) -> float | None:
+        quote = await self._safe_get_quote()
+        return quote[0] if quote is not None else None
+
+    def _next_buy_trigger(self) -> float | None:
+        step = int(self.ctx.position.step)
+        if step <= 0 or step >= self.ctx.strategy.max_step or step > len(self.ctx.strategy.buy_steps):
+            return None
+        base = self.ctx.strategy.step_prices.get(step)
+        if not base or base <= 0:
+            return None
+        return float(base) * (1 + float(self.ctx.strategy.buy_steps[step - 1].drop_pct) / 100)
+
+    def _record_evaluated_quote(self, price: float, source: str, observed_at: float) -> None:
+        """Publish the exact quote used for a strategy decision, per symbol."""
+        path = Path(f"data/worker_{self.ctx.account_id}.quotes.json")
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            if not isinstance(existing, dict):
+                existing = {}
+            trigger = self._next_buy_trigger()
+            existing[self.ctx.strategy.symbol.upper().lstrip("A")] = {
+                "price": float(price), "source": source,
+                "observedAt": datetime.fromtimestamp(observed_at, timezone.utc).isoformat(),
+                "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                "currentStep": int(self.ctx.position.step), "nextBuyTrigger": trigger,
+            }
+            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+            tmp.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.ctx.logger.warning(f"Quote diagnostic publication deferred: {exc}")
+
+    def pause_buying(self): self._buying_paused = True
+    def resume_buying(self): self._buying_paused = False
+    def resume_trading(self): self._trading_paused = False
+
+    def _heartbeat(self):
+        Path("data").mkdir(exist_ok=True)
+        Path("data/heartbeat.txt").write_text(datetime.now().isoformat())
+
+
+def _executed_rows(data: dict) -> list[dict]:
+    for key in ("cntr", "result_list", "result_lsit", "acnt_ord_cntr_prps_dtl"):
+        if isinstance(data.get(key), list):
+            return data[key]
+    return []
+
+def _number(value) -> float:
+    try: return abs(float(str(value).replace(",", "").replace("+", "").strip()))
+    except (TypeError, ValueError): return 0.0
+
+
+def _kr_tick_size(price: float) -> int:
+    """Return the domestic limit-order tick for the price bands used by Kiwoom."""
+    if price < 1_000:
+        return 1
+    if price < 5_000:
+        return 5
+    if price < 10_000:
+        return 10
+    if price < 50_000:
+        return 50
+    if price < 100_000:
+        return 100
+    if price < 500_000:
+        return 500
+    return 1_000
+
+
+def _kr_order_price(price: float, side: str) -> float:
+    """Make a positive KR limit price valid without worsening order safety."""
+    tick = _kr_tick_size(price)
+    if str(side).upper() == "SELL":
+        return float(math.ceil(price / tick) * tick)
+    return float(math.floor(price / tick) * tick)
+
+def _filled_at(row: dict) -> str:
+    value = str(row.get("ord_dt") or "").replace("-", "")
+    return f"{value[:4]}-{value[4:6]}-{value[6:]}" if len(value) == 8 and value.isdigit() else datetime.now().date().isoformat()
+
+def _balance_holding(data: dict, symbol: str) -> tuple[float, float] | None:
+    saw_holdings = False
+    for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "acnt_bal", "result_list", "result_lsit", "holdings"):
+        rows = data.get(key)
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            continue
+        saw_holdings = True
+        for row in rows:
+            if _same_symbol(row.get("stk_cd", ""), symbol):
+                for qty_key in ("rmnd_qty", "poss_qty", "hold_qty", "cur_qty", "qty"):
+                    if qty_key in row:
+                        avg = next((_number(row[k]) for k in ("buy_uv", "avg_prc", "pur_pric") if k in row), 0.0)
+                        return _number(row[qty_key]), avg
+    # An authoritative empty holdings list means the account owns zero shares.
+    # Returning None is reserved for an unrecognized/malformed response.
+    if saw_holdings:
+        return (0.0, 0.0)
+
+    # Some mock responses wrap the holdings list in another object. Walk only
+    # dictionaries that look like holding rows; never interpret arbitrary
+    # account totals as a position quantity.
+    def walk(value):
+        if isinstance(value, dict):
+            code = next((value.get(k) for k in ("stk_cd", "symbol", "code") if value.get(k) is not None), None)
+            if code is not None and _same_symbol(code, symbol):
+                qty_key = next((k for k in ("rmnd_qty", "cur_qty", "poss_qty", "hold_qty", "qty", "setl_remn") if k in value), None)
+                if qty_key:
+                    avg = next((_number(value[k]) for k in ("buy_uv", "avg_prc", "pur_pric", "cntr_uv") if k in value), 0.0)
+                    return _number(value[qty_key]), avg
+            for child in value.values():
+                found = walk(child)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = walk(child)
+                if found is not None:
+                    return found
+        return None
+
+    found = walk(data)
+    if found is not None:
+        return found
+    return None
+
+
+def _same_symbol(value, symbol: str) -> bool:
+    """Normalize documented A-prefixes plus whitespace from mock responses."""
+    return str(value).strip().lstrip("A") == str(symbol).strip().lstrip("A")
+
+
+def _holding_summary(data: dict) -> str:
+    """Safe diagnostic: structure/field names only, never account credentials."""
+    rows = data.get("acnt_evlt_remn_indv_tot")
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return f"acnt_evlt_remn_indv_tot={type(rows).__name__}"
+    if not rows:
+        return "acnt_evlt_remn_indv_tot=[]"
+    first = rows[0] if isinstance(rows[0], dict) else {}
+    codes = [str(r.get("stk_cd", "")).strip() for r in rows if isinstance(r, dict)]
+    return f"rows={len(rows)}, codes={codes}, row_fields={sorted(first.keys())}"
+
+
+def _kr_balance_recognized(data: dict) -> bool:
+    """Whether a domestic balance response contains an authoritative rows field."""
+    return any(key in data for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "acnt_bal", "result_list", "holdings"))
+
+
+def _all_balance_holdings(data: dict) -> list[dict]:
+    """Map the authoritative Kiwoom holdings list for dashboard display."""
+    rows = data.get("acnt_evlt_remn_indv_tot", [])
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return []
+    holdings = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("stk_cd"):
+            continue
+        qty = _number(row.get("rmnd_qty"))
+        if qty <= 0:
+            continue
+        holdings.append({
+            "symbol": str(row["stk_cd"]).strip().lstrip("A"),
+            "name": str(row.get("stk_nm", "")).strip(),
+            "qty": qty,
+            "avgPrice": _number(row.get("pur_pric")),
+            "currentPrice": _number(row.get("cur_prc")),
+            "prevClose": _number(row.get("pred_close_pric")),
+        })
+    return holdings

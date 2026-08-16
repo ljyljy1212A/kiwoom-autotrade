@@ -1,0 +1,18 @@
+# Secrets & credentials
+.env
+secrets/
+
+# Runtime state / data (DB, PID, lock, status, quotes, mock balances, etc.)
+data/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
