@@ -9,9 +9,11 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from src.core.runtime_paths import DATA_DIR
+
 
 class DedupStore:
-    def __init__(self, db_path: str | Path = "data/dedup.db"):
+    def __init__(self, db_path: str | Path = DATA_DIR / "dedup.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()

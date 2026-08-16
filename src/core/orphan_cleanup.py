@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from src.core.runtime_paths import DATA_DIR
+
 
 def _symbol(value: object) -> str:
     return str(value or "").upper().lstrip("A")
@@ -26,7 +28,7 @@ class OrphanStateCleaner:
     broker-authoritative quantity map; this class never guesses from a ledger.
     """
 
-    def __init__(self, account_id: str, data_dir: Path = Path("data"), logger=None):
+    def __init__(self, account_id: str, data_dir: Path = DATA_DIR, logger=None):
         self.account_id = account_id
         self.data_dir = data_dir
         self.logger = logger

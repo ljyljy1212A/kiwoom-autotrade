@@ -19,6 +19,7 @@ from src.core.us_market import (
     us_balance_recognized,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
+from src.core.runtime_paths import DATA_DIR
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, RetryableError
@@ -57,6 +58,8 @@ class AccountEngine:
                  control_symbol: str | None = None, balance_only: bool = False):
         self.ctx, self.telegram, self.discord = ctx, telegram, discord
         self.report_store, self.price_feed, self.poll_interval_sec = report_store, price_feed, poll_interval_sec
+        self.data_dir = DATA_DIR
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.calendar = MarketCalendar(market=ctx.client.market)
         self._buying_paused = False
         self._trading_paused = False
@@ -110,9 +113,9 @@ class AccountEngine:
         self._balance_gate = _balance_gate(ctx.account_id)
         # A passive account monitor publishes broker holdings only. It must not
         # open, initialize, or mutate the confirmed-fill ledger.
-        self.ledger = None if balance_only else TradeLedgerStore(f"data/trades_{ctx.account_id}.db", ctx.account_id)
-        self._tranche_bases_path = Path(f"data/tranche_bases_{ctx.account_id}.json")
-        self._closure_absence_path = Path(f"data/closure_absence_{ctx.account_id}.json")
+        self.ledger = None if balance_only else TradeLedgerStore(self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id)
+        self._tranche_bases_path = self.data_dir / f"tranche_bases_{ctx.account_id}.json"
+        self._closure_absence_path = self.data_dir / f"closure_absence_{ctx.account_id}.json"
         try:
             raw_absence = json.loads(self._closure_absence_path.read_text(encoding="utf-8"))
             self._closure_absence_confirmations = {
@@ -126,14 +129,14 @@ class AccountEngine:
             self._tranche_bases = json.loads(self._tranche_bases_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             self._tranche_bases = {}
-        self._lifecycle_path = Path(f"data/symbol_lifecycles_{ctx.account_id}.json")
+        self._lifecycle_path = self.data_dir / f"symbol_lifecycles_{ctx.account_id}.json"
         try:
             raw_lifecycles = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
             self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
         except (OSError, json.JSONDecodeError):
             self._symbol_lifecycles: dict[str, dict] = {}
         self._lifecycle_pending_adoption = False
-        self._orphan_cleaner = OrphanStateCleaner(ctx.account_id, logger=ctx.logger)
+        self._orphan_cleaner = OrphanStateCleaner(ctx.account_id, data_dir=self.data_dir, logger=ctx.logger)
         self._sync_lock = asyncio.Lock()
         self._sync_task: asyncio.Task | None = None
         self._last_balance_reconciliation = 0.0
@@ -211,7 +214,7 @@ class AccountEngine:
             return
         _STARTUP_BACKUP_ACCOUNTS.add(account_id)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        destination = Path("data") / "backup" / account_id / f"trades_{stamp}.db"
+        destination = self.data_dir / "backup" / account_id / f"trades_{stamp}.db"
         try:
             backup_path = self.ledger.backup_to(destination)
         except Exception as exc:
@@ -239,7 +242,7 @@ class AccountEngine:
         if not balance_recognized:
             self.ctx.logger.warning("Passive balance monitor received an unrecognized balance response")
             return
-        balance_path = Path(f"data/balance_{self.ctx.account_id}.json")
+        balance_path = self.data_dir / f"balance_{self.ctx.account_id}.json"
         try:
             previous = json.loads(balance_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -250,14 +253,14 @@ class AccountEngine:
         # make the dashboard display a stale Line 1 basis.
         try:
             canonical_bases = json.loads(
-                Path(f"data/tranche_bases_{self.ctx.account_id}.json").read_text(encoding="utf-8")
+                (self.data_dir / f"tranche_bases_{self.ctx.account_id}.json").read_text(encoding="utf-8")
             )
             canonical_bases = canonical_bases if isinstance(canonical_bases, dict) else {}
         except (OSError, json.JSONDecodeError):
             canonical_bases = previous.get("trancheBases", {})
         try:
             lifecycles = json.loads(
-                Path(f"data/symbol_lifecycles_{self.ctx.account_id}.json").read_text(encoding="utf-8")
+                (self.data_dir / f"symbol_lifecycles_{self.ctx.account_id}.json").read_text(encoding="utf-8")
             )
             lifecycles = lifecycles if isinstance(lifecycles, dict) else {}
         except (OSError, json.JSONDecodeError):
@@ -302,7 +305,7 @@ class AccountEngine:
         """
         if self.ledger is not None:
             return self.ledger.has_unresolved_orders(symbol)
-        path = Path(f"data/trades_{self.ctx.account_id}.db")
+        path = self.data_dir / f"trades_{self.ctx.account_id}.db"
         if not path.exists():
             return False
         try:
@@ -342,7 +345,7 @@ class AccountEngine:
 
     def _dashboard_control_path(self) -> Path:
         suffix = f"_{self._control_symbol}" if self._control_symbol else ""
-        return Path(f"data/dashboard_control_{self.ctx.account_id}{suffix}.json")
+        return self.data_dir / f"dashboard_control_{self.ctx.account_id}{suffix}.json"
 
     async def _tick(self):
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
@@ -437,7 +440,7 @@ class AccountEngine:
             return
         # The persisted Trade Settings List is the sole allow-list for order
         # execution. A stale control file cannot trade a removed/unlisted stock.
-        settings_path = Path(f"data/dashboard_settings_{self.ctx.account_id}.json")
+        settings_path = self.data_dir / f"dashboard_settings_{self.ctx.account_id}.json"
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
@@ -943,7 +946,7 @@ class AccountEngine:
                 "price": row.get("price"),
                 "filledAt": row.get("filled_at"),
             }
-            path = Path(f"data/dashboard_event_{self.ctx.account_id}.json")
+            path = self.data_dir / f"dashboard_event_{self.ctx.account_id}.json"
             path.parent.mkdir(exist_ok=True)
             # Each rapid fill gets its own temporary filename. The final
             # account event remains newest-event-wins by design, but parallel
@@ -1201,10 +1204,10 @@ class AccountEngine:
         # never consult prior-lifecycle ledger rows or saved tranche bases.
         if self._lifecycle_pending_adoption and balance_recognized and qty > 1e-9:
             self._adopt_manual_lifecycle(self.ctx.strategy.symbol, qty, avg_price)
-        Path("data").mkdir(exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         if self.ctx.client.market == "US":
             await self._refresh_fx_rate()
-        balance_path = Path(f"data/balance_{self.ctx.account_id}.json")
+        balance_path = self.data_dir / f"balance_{self.ctx.account_id}.json"
         try:
             previous_balance = json.loads(balance_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1522,7 +1525,7 @@ class AccountEngine:
             for item in broker_holdings
             if float(item.get("qty", 0) or 0) > 0
         }
-        settings_path = Path(f"data/dashboard_settings_{self.ctx.account_id}.json")
+        settings_path = self.data_dir / f"dashboard_settings_{self.ctx.account_id}.json"
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1583,7 +1586,7 @@ class AccountEngine:
         symbol = str(symbol).upper().lstrip("A")
         account = self.ctx.account_id
         control_paths = [
-            Path(f"data/dashboard_control_{account}_{symbol}.json"),
+            self.data_dir / f"dashboard_control_{account}_{symbol}.json",
         ]
         for path in control_paths:
             try:
@@ -1593,7 +1596,7 @@ class AccountEngine:
             except OSError as exc:
                 self.ctx.logger.warning(f"Could not remove closed-symbol control file {path}: {exc}")
 
-        settings_path = Path(f"data/dashboard_settings_{account}.json")
+        settings_path = self.data_dir / f"dashboard_settings_{account}.json"
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
@@ -1669,7 +1672,7 @@ class AccountEngine:
             # never use the stored average/tranche price as a market quote.
             if self.ctx.client.market == "US" and self.ctx.client.mode == "mock":
                 try:
-                    path = Path(f"data/balance_{self.ctx.account_id}.json")
+                    path = self.data_dir / f"balance_{self.ctx.account_id}.json"
                     snapshot = json.loads(path.read_text(encoding="utf-8"))
                     updated = datetime.fromisoformat(str(snapshot.get("updatedAt", "")))
                     age = (datetime.now() - updated).total_seconds()
@@ -1706,7 +1709,7 @@ class AccountEngine:
 
     def _record_evaluated_quote(self, price: float, source: str, observed_at: float) -> None:
         """Publish the exact quote used for a strategy decision, per symbol."""
-        path = Path(f"data/worker_{self.ctx.account_id}.quotes.json")
+        path = self.data_dir / f"worker_{self.ctx.account_id}.quotes.json"
         try:
             existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
             if not isinstance(existing, dict):
@@ -1729,8 +1732,8 @@ class AccountEngine:
     def resume_trading(self): self._trading_paused = False
 
     def _heartbeat(self):
-        Path("data").mkdir(exist_ok=True)
-        Path("data/heartbeat.txt").write_text(datetime.now().isoformat())
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "heartbeat.txt").write_text(datetime.now().isoformat())
 
 
 def _executed_rows(data: dict) -> list[dict]:

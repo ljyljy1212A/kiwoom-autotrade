@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import yaml
 
 from src.core.kiwoom_client import KiwoomClient
+from src.core.runtime_paths import DATA_DIR
 from src.data.dedup_store import DedupStore
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
@@ -92,7 +93,7 @@ def load_accounts(config_path: str = "config/accounts.yaml",
         )
         risk_manager = RiskManager(risk_limits, logger=logger)
 
-        dedup = DedupStore(f"data/dedup_{acc['id']}.db")
+        dedup = DedupStore(DATA_DIR / f"dedup_{acc['id']}.db")
 
         contexts.append(AccountContext(
             account_id=acc["id"],

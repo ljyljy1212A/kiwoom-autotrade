@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import src.core.engine as engine_module
 from src.core.account_manager import AccountContext
 from src.core.engine import AccountEngine
 from src.data.trade_ledger import PendingOrder
@@ -127,10 +128,13 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
             os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
             try:
                 asyncio.run(scenario())
             finally:
+                engine_module.DATA_DIR = original_data_dir
                 os.chdir(previous)
 
     def test_manual_first_buy_then_immediate_enable_keeps_t1_and_assigns_t2(self):
@@ -199,10 +203,13 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
             os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
             try:
                 asyncio.run(scenario())
             finally:
+                engine_module.DATA_DIR = original_data_dir
                 os.chdir(previous)
 
     def test_open_lifecycle_restart_recovers_manual_t1_and_program_t2_t3(self):
@@ -286,10 +293,13 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
             os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
             try:
                 asyncio.run(scenario())
             finally:
+                engine_module.DATA_DIR = original_data_dir
                 os.chdir(previous)
 
     def test_restart_preserves_manual_t1_sell_basis_after_later_partial_sell(self):
@@ -359,10 +369,13 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
             os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
             try:
                 asyncio.run(scenario())
             finally:
+                engine_module.DATA_DIR = original_data_dir
                 os.chdir(previous)
 
     def test_restart_after_all_automated_tranches_sell_keeps_manual_t1_basis(self):
@@ -423,10 +436,13 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
             os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
             try:
                 asyncio.run(scenario())
             finally:
+                engine_module.DATA_DIR = original_data_dir
                 os.chdir(previous)
 
 

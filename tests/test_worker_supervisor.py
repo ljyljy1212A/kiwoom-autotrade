@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -33,6 +34,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                                          stderr=supervisor.subprocess.DEVNULL)
         remove.assert_called_once_with("kr_mock", 123)
 
+    @unittest.skipUnless(os.name != "nt", "POSIX-only signal test")
     def test_stop_escalates_to_sigkill_on_posix(self):
         running = {"account": "kr_mock", "pid": 123, "running": True,
                    "instanceId": "instance", "state": "RUNNING", "market": "KR"}
