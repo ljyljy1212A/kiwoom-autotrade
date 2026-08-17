@@ -10,10 +10,12 @@ def test_partial_fill_is_idempotent_and_dashboard_shaped(tmp_path):
     assert store.record_fill(pending, 2, 100, "2026-08-11") is None
     pending = store.get_pending("42")
     store.record_fill(pending, 5, 101, "2026-08-11")
-    assert store.ledger_rows() == [
+    rows = store.ledger_rows()
+    assert [{key: row[key] for key in ("id", "type", "step", "filledAt", "qty", "price")} for row in rows] == [
         {"id": "B-42-2", "type": "buy", "step": 1, "filledAt": "2026-08-11", "qty": 2.0, "price": 100.0},
         {"id": "B-42-5", "type": "buy", "step": 1, "filledAt": "2026-08-11", "qty": 3.0, "price": 101.0},
     ]
+    assert [(row["ord_no"], bool(row["created_at"])) for row in rows] == [("42", True), ("42", True)]
     store.close()
 
 
@@ -27,10 +29,13 @@ def test_backup_preserves_account_scoped_confirmed_fills(tmp_path):
     restored = TradeLedgerStore(str(backup_path), "account-a")
 
     assert backup_path.exists()
-    assert restored.ledger_rows() == [
+    rows = restored.ledger_rows()
+    assert [{key: row[key] for key in ("id", "type", "step", "filledAt", "qty", "price")} for row in rows] == [
         {"id": "B-43-3", "type": "buy", "step": 1,
          "filledAt": "2026-08-12", "qty": 3.0, "price": 20.0},
     ]
+    assert rows[0]["ord_no"] == "43"
+    assert rows[0]["created_at"]
     restored.close()
     store.close()
 
