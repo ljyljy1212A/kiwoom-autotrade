@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.core.process_lock import ProcessLock
+from src.core.control_state import read_auto_trading_enabled
 from src.core.runtime_paths import DATA_DIR
 
 
@@ -172,7 +173,11 @@ def start(account: str, market: str) -> tuple[int, dict]:
     # Auto-trading is an explicit launch-time decision. Preserve the
     # configured value so the supervisor does not silently force every worker
     # back into monitor-only mode after a restart.
-    env["AUTO_TRADING_ENABLED"] = os.environ.get("AUTO_TRADING_ENABLED", "false").lower()
+    control_enabled = read_auto_trading_enabled(account)
+    if control_enabled is None:
+        env["AUTO_TRADING_ENABLED"] = os.environ.get("AUTO_TRADING_ENABLED", "false").lower()
+    else:
+        env["AUTO_TRADING_ENABLED"] = "true" if control_enabled else "false"
     popen_kwargs = {
         "cwd": ROOT,
         "env": env,

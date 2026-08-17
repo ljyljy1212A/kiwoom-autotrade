@@ -270,6 +270,7 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
     monitor = AccountEngine(ctx, telegram, discord, None, None, balance_only=True)
     while True:
         try:
+            monitor._refresh_runtime_control()
             await monitor.sync_broker_state(force_balance=True)
         except Exception as exc:
             ctx.logger.warning(f"Account balance monitor deferred: {exc}")

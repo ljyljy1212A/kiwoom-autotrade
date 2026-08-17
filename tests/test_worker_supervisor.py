@@ -67,6 +67,22 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         self.assertEqual(payload["state"], "STOPPED")
         self.assertEqual(payload["pid"], 123)
 
+    def test_start_prefers_persisted_control_state(self):
+        child = MagicMock(pid=999, returncode=0)
+        child.poll.return_value = None
+        running = {"account": "kr_mock", "pid": 999, "running": True,
+                   "instanceId": "instance", "state": "RUNNING", "market": "KR"}
+        with patch.object(supervisor, "status", side_effect=[{"account": "kr_mock", "pid": 0, "running": False}, running]), \
+             patch.object(supervisor, "read_auto_trading_enabled", return_value=True), \
+             patch.object(supervisor.subprocess, "Popen", return_value=child) as popen, \
+             patch.object(supervisor.time, "sleep"), \
+             patch.object(supervisor.time, "monotonic", side_effect=[0, 0.1, 0.2]):
+            code, payload = supervisor.start("kr_mock", "KR")
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["started"])
+        self.assertEqual(popen.call_args.kwargs["env"]["AUTO_TRADING_ENABLED"], "true")
+
 
 if __name__ == "__main__":
     unittest.main()

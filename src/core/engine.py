@@ -19,6 +19,7 @@ from src.core.us_market import (
     us_balance_recognized,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
+from src.core.control_state import read_auto_trading_enabled
 from src.core.runtime_paths import DATA_DIR
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
@@ -67,6 +68,9 @@ class AccountEngine:
         # Starting the program must be safe: monitoring/synchronization runs by
         # default, but no strategy intent can reach the broker without opt-in.
         self._auto_trading_enabled = os.environ.get("AUTO_TRADING_ENABLED", "false").lower() == "true"
+        persisted_auto_trading = read_auto_trading_enabled(ctx.account_id, self.data_dir)
+        if persisted_auto_trading is not None:
+            self._auto_trading_enabled = persisted_auto_trading
         self._dashboard_auto_buy = False
         self._dashboard_auto_sell = False
         self._dashboard_profile_allowed = False
@@ -172,6 +176,7 @@ class AccountEngine:
     async def run(self):
         self._backup_ledger_at_startup()
         self._restore_from_ledger()
+        self._refresh_runtime_control()
         # Dashboard controls are an explicit execution authority, independent
         # of the worker-wide environment switch. Read them before reporting
         # startup mode so the log cannot falsely claim submissions are off.
@@ -350,6 +355,7 @@ class AccountEngine:
     async def _tick(self):
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
         # never a source of silently stale financial state.
+        self._refresh_runtime_control()
         self._refresh_dashboard_controls()
         # Controls may select a previously HTS-purchased ticker. Reconcile only
         # after loading them so its broker quantity/average are used immediately.
@@ -519,6 +525,17 @@ class AccountEngine:
             self.ctx.logger.info(f"Dashboard strategy activated for existing holding: {symbol}")
         self._dashboard_auto_buy = bool(control.get("auto_buy")) and saved_buy
         self._dashboard_auto_sell = bool(control.get("auto_sell")) and saved_sell
+
+    def _refresh_runtime_control(self) -> None:
+        """Refresh the account-wide auto-trading switch from the control file."""
+        persisted = read_auto_trading_enabled(self.ctx.account_id, self.data_dir)
+        if persisted is not None and persisted != self._auto_trading_enabled:
+            previous = str(self._auto_trading_enabled).lower()
+            self._auto_trading_enabled = persisted
+            current = str(persisted).lower()
+            self.ctx.logger.info(
+                f"auto_trading_enabled changed: {previous} -> {current} (source: control file)"
+            )
 
     async def _handle_intent(self, intent: OrderIntent, price: float):
         # Kiwoom accepts only valid domestic price increments.  Quotes can be
