@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 import httpx
-from src.core.broker_http import BrokerHTTPGate
+from src.core.broker_http import BrokerHTTPGate, http_operation
 from src.utils.exceptions import FatalError, RetryableError
 
 
@@ -49,7 +49,8 @@ class TokenManager:
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "au10001"}
         async with self.http_gate.client(timeout=10) as client:
             try:
-                resp = await client.post(url, json=payload, headers=headers, timeout=10)
+                with http_operation("token"):
+                    resp = await client.post(url, json=payload, headers=headers, timeout=10)
             except httpx.RequestError as e:
                 raise RetryableError(f"토큰 발급 네트워크 오류: {e}") from e
 
@@ -78,7 +79,14 @@ class TokenManager:
         return Token(value=token_value, token_type=data.get("token_type", "Bearer"), expires_at=expires_at)
 
     async def get_token(self) -> str:
-        if self._token is None or time.time() >= self._token.expires_at:
+        token_valid = self._token is not None and time.time() < self._token.expires_at
+        debug = getattr(self.logger, "debug", None)
+        if debug is not None:
+            debug(
+                "Token diagnostic: "
+                f"state={'cached-token-valid' if token_valid else 'fetching-new-token'}"
+            )
+        if not token_valid:
             async with self._issue_lock:
                 # Recheck after waiting: another concurrent caller may have
                 # populated the cache while this caller was blocked on the lock.

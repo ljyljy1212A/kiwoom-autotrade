@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -14,6 +16,63 @@ import httpx
 from httpcore._backends.anyio import AnyIOBackend, AnyIOStream
 from httpcore._backends.base import SOCKET_OPTION
 from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
+
+
+_HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
+
+
+@contextmanager
+def http_operation(label: str):
+    token = _HTTP_OPERATION_CONTEXT.set(label)
+    try:
+        yield
+    finally:
+        _HTTP_OPERATION_CONTEXT.reset(token)
+
+
+class _DiagnosticByteStream:
+    def __init__(self, stream, logger):
+        self._stream = stream
+        self._logger = logger
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def _debug(self, operation: str, state: str, started: float, **fields) -> None:
+        debug = getattr(self._logger, "debug", None)
+        if debug is None:
+            return
+        elapsed_ms = (time.monotonic() - started) * 1000
+        details = " ".join(f"{key}={value}" for key, value in fields.items())
+        suffix = f" {details}" if details else ""
+        debug(
+            f"HTTP I/O diagnostic: client={_HTTP_OPERATION_CONTEXT.get()} "
+            f"operation={operation} state={state} elapsed_ms={elapsed_ms:.1f}{suffix}"
+        )
+
+    async def send(self, item: bytes) -> None:
+        started = time.monotonic()
+        self._debug("write", "before", started, bytes=len(item))
+        try:
+            await self._stream.send(item)
+        except BaseException as exc:
+            self._debug("write", "after", started, outcome=type(exc).__name__)
+            raise
+        self._debug("write", "after", started, outcome="success")
+
+    async def receive(self, max_bytes: int = 65536) -> bytes:
+        started = time.monotonic()
+        self._debug("read", "before", started, max_bytes=max_bytes)
+        try:
+            data = await self._stream.receive(max_bytes)
+        except BaseException as exc:
+            self._debug("read", "after", started, outcome=type(exc).__name__)
+            raise
+        self._debug("read", "after", started, outcome="eof" if data == b"" else "success", bytes=len(data))
+        return data
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
 
 
 @asynccontextmanager
@@ -113,7 +172,7 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
                     self.logger,
                 )
                 stream = await anyio.abc.SocketStream.from_socket(raw_socket)
-        return AnyIOStream(stream)
+        return AnyIOStream(_DiagnosticByteStream(stream, self.logger))
 
 
 class FixedPortAsyncHTTPTransport(httpx.AsyncHTTPTransport):

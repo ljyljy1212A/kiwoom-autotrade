@@ -16,7 +16,7 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from src.core.broker_http import BrokerHTTPGate
+from src.core.broker_http import BrokerHTTPGate, http_operation
 from src.core.token_manager import TokenManager
 from src.core.process_lock import AccountOrderAuthority
 from src.core.us_market import normalize_us_symbol, validate_us_order
@@ -199,7 +199,8 @@ class KiwoomClient:
         headers = await self._headers(api_id)
         async with self._http_gate.client(timeout=15) as client:
             try:
-                resp = await client.post(url, json=body, headers=headers, timeout=15)
+                with http_operation("rest"):
+                    resp = await client.post(url, json=body, headers=headers, timeout=15)
             except httpx.RequestError as e:
                 raise RetryableError(f"{api_id} 네트워크 오류: {e}") from e
 
