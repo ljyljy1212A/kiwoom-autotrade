@@ -109,7 +109,7 @@ class KiwoomClient:
         self.logger = logger
         self._order_authority = order_authority
         http_port = 10000 if mode == "mock" and market == "KR" else 443 if mode == "mock" and market == "US" else None
-        self._http_gate = BrokerHTTPGate(http_port)
+        self._http_gate = BrokerHTTPGate(http_port, logger)
         self.token_mgr = TokenManager(self.domain, appkey, secretkey, logger, self._http_gate)
         self._quote_min_interval_sec = max(0.5, float(os.environ.get("KIWOOM_REST_QUOTE_MIN_INTERVAL_SEC", "2.0")))
         self._order_min_interval_sec = max(
