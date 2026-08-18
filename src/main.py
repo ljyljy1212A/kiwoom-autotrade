@@ -269,6 +269,9 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
     """
     monitor = AccountEngine(ctx, telegram, discord, None, None, balance_only=True)
     while True:
+        ctx.logger.debug(
+            f"Account balance monitor iteration starting (interval={monitor.poll_interval_sec:g}s)"
+        )
         try:
             monitor._refresh_runtime_control()
             await monitor.sync_broker_state(force_balance=True)
