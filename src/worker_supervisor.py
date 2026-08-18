@@ -215,6 +215,10 @@ def start(account: str, market: str) -> tuple[int, dict]:
             current["exitCode"] = child.returncode
             current["started"] = False
             current["reason"] = "worker-refused-or-exited"
+            current["failureClass"] = (
+                "lock-conflict" if current.get("running") and current.get("pid") != child.pid
+                else "worker-exited-before-start"
+            )
             return 3, current
         time.sleep(0.05)
     final = status(account)
@@ -276,10 +280,47 @@ def stop(account, timeout: float | None = None):
     _record_stopped_status(account, pid)
     final_st = status(account)
     return 0, {**final_st, "mode": mode}
+
+
+def kill(account: str):
+    """Immediately terminate one worker without waiting for graceful shutdown."""
+    curr = status(account)
+    if not curr.get("running"):
+        return 0, {**curr, "mode": "already_stopped"}
+
+    identity = _owned_identity(account)
+    if identity is None:
+        return 5, {**curr, "mode": "unknown", "reason": "identity-unresolved"}
+    pid, _ = identity
+
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if _pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+
+    stopped = _wait_for_stopped(account, pid, _FORCE_STOP_TIMEOUT_SEC)
+    if stopped:
+        _remove_pid_after_confirmed_exit(account, pid)
+        _record_stopped_status(account, pid)
+    final_st = status(account)
+    return (0 if stopped else 6), {**final_st, "mode": "killed", "stopped": stopped}
             
 def main() -> int:
     parser = argparse.ArgumentParser(description="Single-account Kiwoom worker supervisor")
-    parser.add_argument("action", choices=("start", "stop", "status"))
+    parser.add_argument("action", choices=("start", "stop", "kill", "status"))
     parser.add_argument("--account", required=True)
     parser.add_argument("--market", choices=("KR", "US"), required=True)
     args = parser.parse_args()
@@ -290,8 +331,10 @@ def main() -> int:
         code, payload = 0, status(account)
     elif args.action == "start":
         code, payload = start(account, args.market)
-    else:
+    elif args.action == "stop":
         code, payload = stop(account)
+    else:
+        code, payload = kill(account)
     print(json.dumps(payload, ensure_ascii=False))
     return code
 

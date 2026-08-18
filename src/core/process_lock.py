@@ -127,7 +127,9 @@ class ProcessLock:
             state = kernel32.WaitForSingleObject(handle, 0)
             if state == 258:
                 return True
-            if state == 0:
+            # WAIT_ABANDONED (0x80) means the prior owner exited without
+            # releasing the mutex; the current probe now owns that mutex.
+            if state in (0, 0x80):
                 kernel32.ReleaseMutex(handle)
             return False
         finally:
