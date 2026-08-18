@@ -1,11 +1,54 @@
 import os
+import subprocess
+import sys
+import tempfile
+import textwrap
 import unittest
+import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src import worker_supervisor as supervisor
 
 
 class WorkerSupervisorStopTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows abandoned-mutex semantics are verified on Windows")
+    def test_wait_for_stopped_accepts_abandoned_mutex_after_worker_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            account = f"crash_{uuid.uuid4().hex}"
+            script = textwrap.dedent(
+                """
+                import sys
+                import time
+                from pathlib import Path
+                from src.core.process_lock import ProcessLock
+
+                lock = ProcessLock(sys.argv[1], Path(sys.argv[2]))
+                lock.acquire()
+                print("ready", flush=True)
+                time.sleep(30)
+                """
+            )
+            proc = subprocess.Popen(
+                [sys.executable, "-c", script, account, str(base_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                self.assertEqual(proc.stdout.readline().strip(), "ready")
+                pid = proc.pid
+                self.assertTrue(supervisor.ProcessLock(account, base_dir).is_alive())
+                proc.kill()
+                proc.wait(timeout=10)
+                with patch.object(supervisor, "DATA_DIR", base_dir):
+                    self.assertTrue(supervisor._wait_for_stopped(account, pid, 1))
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=10)
+
     def test_wait_requires_process_exit_and_lock_release(self):
         lock = MagicMock()
         lock.is_alive.side_effect = [True, False]
