@@ -39,6 +39,10 @@ class OrderAuthorityError(OrderRejectedError):
     """Order submission attempted without current account authority."""
 
 
+class ExchangeResolutionError(OrderRejectedError):
+    """US venue lookup failed; the order/request must not guess a venue."""
+
+
 class DuplicateExecutionError(TradingSystemError):
     """이미 처리된 체결 건을 중복 반영하려는 경우 (DedupStore가 발생)."""
 

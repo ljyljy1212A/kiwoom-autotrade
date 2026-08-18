@@ -19,7 +19,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from src.core.token_manager import TokenManager
 from src.core.process_lock import AccountOrderAuthority
 from src.core.us_market import normalize_us_symbol, validate_us_order
-from src.utils.exceptions import KiwoomAPIError, OrderAuthorityError, OrderRejectedError, QuoteCircuitOpenError, RetryableError
+from src.utils.exceptions import (
+    ExchangeResolutionError,
+    KiwoomAPIError,
+    OrderAuthorityError,
+    OrderRejectedError,
+    QuoteCircuitOpenError,
+    RetryableError,
+)
 
 REAL_DOMAIN = "https://api.kiwoom.com"
 MOCK_DOMAIN = "https://mockapi.kiwoom.com"
@@ -52,12 +59,30 @@ class _QuoteGate:
 
 _QUOTE_GATES: dict[str, _QuoteGate] = {}
 
+@dataclass
+class _OrderGate:
+    """Account-wide order throttle shared across all symbols and tranches."""
+
+    lock: asyncio.Lock
+    last_request_at: float = 0.0
+
+
+_ORDER_GATES: dict[str, _OrderGate] = {}
+
 
 def _quote_gate(domain: str) -> _QuoteGate:
     gate = _QUOTE_GATES.get(domain)
     if gate is None:
         gate = _QuoteGate(lock=asyncio.Lock())
         _QUOTE_GATES[domain] = gate
+    return gate
+
+
+def _order_gate(domain: str) -> _OrderGate:
+    gate = _ORDER_GATES.get(domain)
+    if gate is None:
+        gate = _OrderGate(lock=asyncio.Lock())
+        _ORDER_GATES[domain] = gate
     return gate
 
 
@@ -84,27 +109,70 @@ class KiwoomClient:
         self._order_authority = order_authority
         self.token_mgr = TokenManager(self.domain, appkey, secretkey, logger)
         self._quote_min_interval_sec = max(0.5, float(os.environ.get("KIWOOM_REST_QUOTE_MIN_INTERVAL_SEC", "2.0")))
+        self._order_min_interval_sec = max(
+            0.0,
+            float(os.environ.get("KIWOOM_REST_ORDER_MIN_INTERVAL_SEC", self._default_order_min_interval_sec())),
+        )
         self._quote_error_threshold = max(1, int(os.environ.get("KIWOOM_QUOTE_SYMBOL_ERROR_THRESHOLD", "3")))
         self._quote_circuit_sec = max(5.0, float(os.environ.get("KIWOOM_QUOTE_CIRCUIT_SEC", "60")))
         self._quote_inflight: dict[str, asyncio.Task[dict]] = {}
+        self._order_gate = _order_gate(f"{self.domain}|{self.account_no}|{self.market}")
+        self._exchange_cache = {
+            "KORU": "NY", "SOXL": "NY", "BIVI": "ND", "SMCI": "ND",
+            "DFSC": "ND", "IREN": "ND", "SPCX": "ND",
+        } if market == "US" else {}
+        self._exchange_alert_callback = None
+        self._exchange_alerted_symbols: set[str] = set()
 
-    def _exchange_for_symbol(self, symbol: str) -> str:
-        """Return the US listing venue for a symbol.
+    def _default_order_min_interval_sec(self) -> float:
+        if self.mode == "mock":
+            return 1.0
+        if self.market == "US":
+            return 1.0 / 3.0
+        return 0.2
 
-        Kiwoom's US APIs validate the venue per symbol, not per account. Keep
-        the account value as the default, but correct the known mock symbols
-        whose venue differs from the account's historical default.
-        """
-        if self.market != "US":
-            return self.exchange
-        known = {
-            "SOXL": "NA", "BIVI": "ND", "SMCI": "ND",
-            "DFSC": "ND", "IREN": "ND",
-        }
-        return known.get(normalize_us_symbol(symbol), self.exchange)
+    def set_exchange_alert_callback(self, callback) -> None:
+        """Attach the worker's notification path without coupling the client to Telegram."""
+        self._exchange_alert_callback = callback
 
     def bind_order_authority(self, authority: AccountOrderAuthority) -> None:
         self._order_authority = authority
+
+    async def _notify_exchange_failure(self, symbol: str, error: Exception) -> None:
+        if symbol in self._exchange_alerted_symbols:
+            return
+        self._exchange_alerted_symbols.add(symbol)
+        callback = self._exchange_alert_callback
+        if callback is not None:
+            try:
+                result = callback(f"US exchange lookup failed; order/request blocked: {symbol}; {error}")
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception as alert_error:
+                if self.logger:
+                    self.logger.warning(f"US exchange lookup alert failed for {symbol}: {alert_error}")
+
+    async def _resolve_exchange(self, symbol: str) -> str:
+        if self.market != "US":
+            return self.exchange
+        normalized = normalize_us_symbol(symbol)
+        cached = self._exchange_cache.get(normalized)
+        if cached:
+            return cached
+        try:
+            data = await self._post("/api/us/stkinfo", "usa10098", {"stk_cd": normalized})
+            rows = data.get("list") if isinstance(data, dict) else None
+            row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+            exchange = str(row.get("stex_tp", "")).strip().upper() if row else ""
+            if exchange not in {"NA", "ND", "NY"}:
+                raise ValueError(f"usa10098 returned no valid stex_tp for {normalized}")
+        except Exception as exc:
+            await self._notify_exchange_failure(normalized, exc)
+            raise ExchangeResolutionError(
+                f"US exchange lookup failed for {normalized}; order/request blocked: {exc}"
+            ) from exc
+        self._exchange_cache[normalized] = exchange
+        return exchange
 
     async def _headers(self, api_id: str, cont_yn: str = "N", next_key: str = "") -> dict:
         token = await self.token_mgr.get_token()
@@ -116,12 +184,14 @@ class KiwoomClient:
             "next-key": next_key,
         }
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
-        retry=retry_if_exception_type(RetryableError),
-    )
-    async def _post(self, path: str, api_id: str, body: dict, _reauth_attempt: bool = False) -> dict:
+    async def _post_once(
+        self,
+        path: str,
+        api_id: str,
+        body: dict,
+        _reauth_attempt: bool = False,
+        allow_reauth_retry: bool = True,
+    ) -> dict:
         url = f"{self.domain}{path}"
         headers = await self._headers(api_id)
         async with httpx.AsyncClient(timeout=15) as client:
@@ -144,13 +214,27 @@ class KiwoomClient:
             # Invalidate the cached token and retry this exact request once;
             # never let a generic retry submit an order twice.
             message = str(data.get("return_msg", ""))
-            if (not _reauth_attempt and str(return_code) == "3" and "8005" in message):
+            if (allow_reauth_retry and not _reauth_attempt and str(return_code) == "3" and "8005" in message):
                 self.logger.warning(f"{api_id}: server rejected cached token; issuing a fresh token and retrying once")
                 self.token_mgr.invalidate()
-                return await self._post(path, api_id, body, _reauth_attempt=True)
+                return await self._post_once(
+                    path,
+                    api_id,
+                    body,
+                    _reauth_attempt=True,
+                    allow_reauth_retry=allow_reauth_retry,
+                )
             raise KiwoomAPIError(api_id, return_code, data.get("return_msg", ""), data)
 
         return data
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type(RetryableError),
+    )
+    async def _post(self, path: str, api_id: str, body: dict, _reauth_attempt: bool = False) -> dict:
+        return await self._post_once(path, api_id, body, _reauth_attempt=_reauth_attempt)
 
     # ------------------------------------------------------------------
     # 주문 (매수/매도/정정/취소)
@@ -170,7 +254,7 @@ class KiwoomClient:
             )
         self._order_authority.assert_owned()
         if self.market == "US":
-            exchange = self._exchange_for_symbol(symbol)
+            exchange = await self._resolve_exchange(symbol)
             try:
                 symbol = validate_us_order(symbol, exchange, qty, price, order_type)
             except ValueError as exc:
@@ -203,8 +287,14 @@ class KiwoomClient:
             }
 
         try:
-            self._order_authority.assert_owned()
-            data = await self._post(path, api_id, body)
+            async with self._order_gate.lock:
+                now = time.monotonic()
+                wait_for = self._order_min_interval_sec - (now - self._order_gate.last_request_at)
+                if wait_for > 0:
+                    await asyncio.sleep(wait_for)
+                self._order_authority.assert_owned()
+                self._order_gate.last_request_at = time.monotonic()
+                data = await self._post_once(path, api_id, body, allow_reauth_retry=False)
         except KiwoomAPIError as e:
             raise OrderRejectedError(str(e)) from e
 
@@ -217,7 +307,8 @@ class KiwoomClient:
     async def cancel_order(self, symbol: str, orig_ord_no: str, qty: int) -> dict:
         if self.market == "US":
             api_id, path = "ust20003", "/api/us/ordr"
-            body = {"stex_tp": self._exchange_for_symbol(symbol), "stk_cd": symbol, "orig_ord_no": orig_ord_no, "ord_qty": str(qty)}
+            exchange = await self._resolve_exchange(symbol)
+            body = {"stex_tp": exchange, "stk_cd": symbol, "orig_ord_no": orig_ord_no, "ord_qty": str(qty)}
         else:
             api_id, path = "kt10003", "/api/dostk/ordr"
             body = {"dmst_stex_tp": self.exchange or "KRX", "stk_cd": symbol,
@@ -270,7 +361,7 @@ class KiwoomClient:
             # by symbol. ``0`` requests all execution history and both sides.
             return await self._post(
                 "/api/us/acnt", "ust21150",
-                {"stk_cd": symbol, "query_tp": "0", "slby_tp": "0", "stex_tp": self._exchange_for_symbol(symbol)},
+                {"stk_cd": symbol, "query_tp": "0", "slby_tp": "0", "stex_tp": await self._resolve_exchange(symbol)},
             )
         body = {"stk_cd": symbol, "qry_tp": "1" if symbol else "0", "sell_tp": "0", "ord_no": "", "stex_tp": "0"}
         return await self._post("/api/dostk/acnt", "ka10076", body)
@@ -321,7 +412,7 @@ class KiwoomClient:
                 if self.market == "US":
                     data = await self._post(
                         "/api/us/mrkcond", "usa20100",
-                        {"stex_tp": self._exchange_for_symbol(symbol), "stk_cd": symbol},
+                        {"stex_tp": await self._resolve_exchange(symbol), "stk_cd": symbol},
                     )
                 else:
                     data = await self._post("/api/dostk/stkinfo", "ka10001", {"stk_cd": symbol})
