@@ -91,6 +91,16 @@ class KiwoomRealtimeFeed:
             return os.environ.get("KIWOOM_WS_URL_REAL", DEFAULT_WS_REAL)
         return os.environ.get("KIWOOM_WS_URL_MOCK", DEFAULT_WS_MOCK)
 
+    @property
+    def ws_local_addr(self) -> tuple[str, int] | None:
+        if self.client.mode != "mock":
+            return None
+        if self.client.market == "KR":
+            return ("0.0.0.0", 10000)
+        if self.client.market == "US":
+            return ("0.0.0.0", 443)
+        return None
+
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._run_forever())
@@ -174,7 +184,12 @@ class KiwoomRealtimeFeed:
         token = await self.client.token_mgr.get_token()
         raw_token = token.split(" ", 1)[1] if " " in token else token  # "Bearer xxx" -> "xxx"
 
-        async with websockets.connect(self.ws_url, ping_interval=None, max_size=2**22) as ws:
+        async with websockets.connect(
+            self.ws_url,
+            ping_interval=None,
+            max_size=2**22,
+            local_addr=self.ws_local_addr,
+        ) as ws:
             self._ws = ws
             await ws.send(json.dumps({"trnm": "LOGIN", "token": raw_token}))
             resp = json.loads(await ws.recv())
