@@ -47,6 +47,28 @@ RECONNECT_MAX_SEC = 30.0
 HEALTHY_SESSION_SEC = float(os.environ.get("KIWOOM_WS_HEALTHY_SESSION_SEC", "15"))
 
 
+def _connect_ws_socket(host: str, port: int, local_port: int, timeout: float) -> socket.socket:
+    last_error: OSError | None = None
+    for family, socktype, proto, _, remote_address in socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM
+    ):
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            bind_address = "::" if family == socket.AF_INET6 else "0.0.0.0"
+            sock.bind((bind_address, local_port))
+            sock.connect(remote_address)
+            sock.setblocking(False)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            sock.close()
+    if last_error is not None:
+        raise last_error
+    raise OSError(f"Could not resolve {host}:{port}")
+
+
 @dataclass
 class _Tick:
     price: float
@@ -111,14 +133,13 @@ class KiwoomRealtimeFeed:
         if not parsed.hostname:
             raise ValueError(f"WebSocket URL has no hostname: {self.ws_url!r}")
         remote_port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-        sock = await asyncio.to_thread(
-            socket.create_connection,
-            (parsed.hostname, remote_port),
-            timeout=10,
-            source_address=("0.0.0.0", local_port),
+        return await asyncio.to_thread(
+            _connect_ws_socket,
+            parsed.hostname,
+            remote_port,
+            local_port,
+            10,
         )
-        sock.setblocking(False)
-        return sock
 
     def start(self) -> None:
         if self._task is None:

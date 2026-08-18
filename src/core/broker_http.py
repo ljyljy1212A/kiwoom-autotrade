@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -12,6 +13,37 @@ import httpx
 from httpcore._backends.anyio import AnyIOBackend, AnyIOStream
 from httpcore._backends.base import SOCKET_OPTION
 from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
+
+
+def _connect_with_reuseaddr(
+    host: str,
+    port: int,
+    local_address: str | None,
+    local_port: int,
+    timeout: float | None,
+    socket_options: list[SOCKET_OPTION],
+) -> socket.socket:
+    last_error: OSError | None = None
+    for family, socktype, proto, _, remote_address in socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM
+    ):
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.settimeout(timeout)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            for option in socket_options:
+                sock.setsockopt(*option)
+            bind_address = local_address or ("::" if family == socket.AF_INET6 else "0.0.0.0")
+            sock.bind((bind_address, local_port))
+            sock.connect(remote_address)
+            sock.setblocking(False)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            sock.close()
+    if last_error is not None:
+        raise last_error
+    raise OSError(f"Could not resolve {host}:{port}")
 
 
 class _FixedPortAnyIOBackend(AnyIOBackend):
@@ -35,14 +67,16 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
         }
         with map_exceptions(exc_map):
             with anyio.fail_after(timeout):
-                stream = await anyio.connect_tcp(
-                    remote_host=host,
-                    remote_port=port,
-                    local_host=local_address or "0.0.0.0",
-                    local_port=self.local_port,
+                raw_socket = await asyncio.to_thread(
+                    _connect_with_reuseaddr,
+                    host,
+                    port,
+                    local_address,
+                    self.local_port,
+                    timeout,
+                    socket_options,
                 )
-                for option in socket_options:
-                    stream._raw_socket.setsockopt(*option)  # type: ignore[attr-defined]
+                stream = await anyio.abc.SocketStream.from_socket(raw_socket)
         return AnyIOStream(stream)
 
 
