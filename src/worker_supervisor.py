@@ -25,6 +25,7 @@ from src.core.runtime_paths import DATA_DIR
 ROOT = Path(__file__).resolve().parents[1]
 _GRACEFUL_STOP_TIMEOUT_SEC = 10.0
 _FORCE_STOP_TIMEOUT_SEC = 5.0
+_STARTUP_ACK_TIMEOUT_SEC = 10.0
 
 
 def _worker_lock(account: str) -> ProcessLock:
@@ -196,10 +197,11 @@ def start(account: str, market: str) -> tuple[int, dict]:
         [sys.executable, "-m", "src.main", "--market", market],
         **popen_kwargs,
     )
-    # ``src.main`` claims its OS account mutex before initializing feeds or
-    # engines.  Wait briefly for that acknowledgement so a racing launcher is
-    # reported as a clean refusal rather than appearing to have started.
-    deadline = time.monotonic() + 3.0
+    # ``src.main`` claims its OS account mutex and publishes PID/status
+    # metadata before the launcher can acknowledge success.  Imports,
+    # configuration loading, and a prior worker's shutdown can make that
+    # handoff exceed a few seconds without indicating a failed child.
+    deadline = time.monotonic() + _STARTUP_ACK_TIMEOUT_SEC
     while time.monotonic() < deadline:
         current = status(account)
         if current["running"]:
