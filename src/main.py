@@ -18,7 +18,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.core.process_lock import ProcessLock
+from src.core.process_lock import AccountOrderAuthority, ProcessLock
 from src.core.runtime_paths import DATA_DIR, LOG_DIR
 from src.core.account_manager import load_accounts, run_all
 from src.core.engine import AccountEngine
@@ -273,6 +273,7 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
             monitor._refresh_runtime_control()
             await monitor.sync_broker_state(force_balance=True)
         except Exception as exc:
+            monitor._fail_dashboard_refresh(str(exc))
             ctx.logger.warning(f"Account balance monitor deferred: {exc}")
         await asyncio.sleep(monitor.poll_interval_sec)
 
@@ -422,16 +423,12 @@ async def main():
     args = parser.parse_args()
     account_filter = os.environ.get("ACCOUNT_FILTER")
     market_filter = args.market or os.environ.get("MARKET_INSTANCE")
-    # A KR launch must name exactly one account.  `--market KR` alone used to
-    # load both kr_real and kr_mock, which is an unacceptable credential and
-    # order-routing ambiguity for a market worker.
-    if str(market_filter or "").strip().upper() == "KR":
-        requested_accounts = [item.strip() for item in (account_filter or "").split(",") if item.strip()]
-        if len(requested_accounts) != 1:
-            raise RuntimeError(
-                "KR worker launch refused: set ACCOUNT_FILTER to exactly one account ID "
-                "(for example, kr_mock or kr_real); --market KR alone is not allowed."
-            )
+    requested_accounts = [item.strip() for item in (account_filter or "").split(",") if item.strip()]
+    if len(requested_accounts) != 1:
+        raise RuntimeError(
+            "Worker launch refused: set ACCOUNT_FILTER to exactly one account ID "
+            "(for example, us_mock or kr_mock); multi-account launches are not allowed."
+        )
     contexts = load_accounts(
         "config/accounts.yaml", account_filter=account_filter, market_filter=market_filter,
     )
@@ -450,8 +447,13 @@ async def main():
     telegram: TelegramController | None = None
     discord: DiscordNotifier | None = None
     worker_identity: WorkerIdentity | None = None
+    lock_acquired = False
     try:
         worker_lock.acquire()
+        lock_acquired = True
+        authority = AccountOrderAuthority(worker_account_id, worker_lock)
+        for ctx in contexts:
+            ctx.client.bind_order_authority(authority)
         worker_pid_path = _worker_pid_path(worker_account_id)
         _acquire_worker_pid(worker_pid_path, worker_account_id)
         worker_identity = WorkerIdentity(
@@ -481,6 +483,8 @@ async def main():
             chat_id=os.environ["TELEGRAM_CHAT_ID"],
             logger=SYS_LOG,
         )
+        for ctx in contexts:
+            ctx.client.set_exchange_alert_callback(telegram.notify_error)
         discord = DiscordNotifier(os.environ.get("DISCORD_WEBHOOK_URL"), SYS_LOG)
 
         stop_watcher = asyncio.create_task(
@@ -535,10 +539,11 @@ async def main():
             # makes a clean STOPPED status distinguishable from a crash and avoids
             # any window where a live process loses its ownership metadata.
             _write_worker_status(worker_identity, "STOPPED")
-        if worker_identity is not None:
-            lock = _WORKER_LOCKS.pop(worker_identity.account_id, None)
-            if lock is not None:
-                lock.release()
+        if lock_acquired:
+            lock = _WORKER_LOCKS.pop(worker_account_id, None)
+            if lock is None:
+                lock = worker_lock
+            lock.release()
 
 
 if __name__ == "__main__":

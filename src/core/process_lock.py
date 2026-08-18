@@ -17,6 +17,21 @@ class ProcessLockError(RuntimeError):
 
 
 @dataclass
+class AccountOrderAuthority:
+    """Capability to submit orders while owning an account ProcessLock."""
+
+    account_id: str
+    lock: "ProcessLock"
+
+    def assert_owned(self) -> None:
+        if not self.lock.owned_by_current_process():
+            from src.utils.exceptions import OrderAuthorityError
+            raise OrderAuthorityError(
+                f"Order authority is not owned for account {self.account_id}"
+            )
+
+
+@dataclass
 class ProcessLock:
     account_id: str
     base_dir: Path = DATA_DIR
@@ -62,6 +77,10 @@ class ProcessLock:
         if os.name == "nt":
             return self._is_alive_windows()
         return self._is_alive_posix()
+
+    def owned_by_current_process(self) -> bool:
+        """Return whether this lock handle is owned by this process."""
+        return bool(self._acquired and self._owner_pid == os.getpid())
 
     def _acquire_windows(self) -> None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)

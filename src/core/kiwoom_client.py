@@ -17,8 +17,9 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from src.core.token_manager import TokenManager
+from src.core.process_lock import AccountOrderAuthority
 from src.core.us_market import normalize_us_symbol, validate_us_order
-from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, QuoteCircuitOpenError, RetryableError
+from src.utils.exceptions import KiwoomAPIError, OrderAuthorityError, OrderRejectedError, QuoteCircuitOpenError, RetryableError
 
 REAL_DOMAIN = "https://api.kiwoom.com"
 MOCK_DOMAIN = "https://mockapi.kiwoom.com"
@@ -72,6 +73,7 @@ class KiwoomClient:
         exchange: str = "ND",  # US: ND(나스닥)/NY(뉴욕)/NA(아멕스), KR: KRX/NXT/SOR (실제 스펙값 확인 후 사용)
         mode: Literal["real", "mock"] = "mock",
         logger=None,
+        order_authority: AccountOrderAuthority | None = None,
     ):
         self.domain = REAL_DOMAIN if mode == "real" else MOCK_DOMAIN
         self.account_no = account_no
@@ -79,6 +81,7 @@ class KiwoomClient:
         self.exchange = exchange
         self.mode = mode
         self.logger = logger
+        self._order_authority = order_authority
         self.token_mgr = TokenManager(self.domain, appkey, secretkey, logger)
         self._quote_min_interval_sec = max(0.5, float(os.environ.get("KIWOOM_REST_QUOTE_MIN_INTERVAL_SEC", "2.0")))
         self._quote_error_threshold = max(1, int(os.environ.get("KIWOOM_QUOTE_SYMBOL_ERROR_THRESHOLD", "3")))
@@ -99,6 +102,9 @@ class KiwoomClient:
             "DFSC": "ND", "IREN": "ND",
         }
         return known.get(normalize_us_symbol(symbol), self.exchange)
+
+    def bind_order_authority(self, authority: AccountOrderAuthority) -> None:
+        self._order_authority = authority
 
     async def _headers(self, api_id: str, cont_yn: str = "N", next_key: str = "") -> dict:
         token = await self.token_mgr.get_token()
@@ -158,6 +164,11 @@ class KiwoomClient:
         order_type: str = "00",  # 00:지정가, 03:시장가 등 (spec 참고)
     ) -> OrderResult:
         """매수/매도 주문. market 에 따라 kt10000/kt10001 또는 ust20000/ust20001 사용."""
+        if self._order_authority is None:
+            raise OrderAuthorityError(
+                f"Order authority is not configured for account {self.account_no}"
+            )
+        self._order_authority.assert_owned()
         if self.market == "US":
             exchange = self._exchange_for_symbol(symbol)
             try:
@@ -192,6 +203,7 @@ class KiwoomClient:
             }
 
         try:
+            self._order_authority.assert_owned()
             data = await self._post(path, api_id, body)
         except KiwoomAPIError as e:
             raise OrderRejectedError(str(e)) from e

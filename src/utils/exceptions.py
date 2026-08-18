@@ -35,6 +35,10 @@ class OrderRejectedError(TradingSystemError):
     """주문이 거부된 경우 (증거금 부족, 시장 미개장 등)."""
 
 
+class OrderAuthorityError(OrderRejectedError):
+    """Order submission attempted without current account authority."""
+
+
 class DuplicateExecutionError(TradingSystemError):
     """이미 처리된 체결 건을 중복 반영하려는 경우 (DedupStore가 발생)."""
 
