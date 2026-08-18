@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import anyio
@@ -13,6 +14,27 @@ import httpx
 from httpcore._backends.anyio import AnyIOBackend, AnyIOStream
 from httpcore._backends.base import SOCKET_OPTION
 from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
+
+
+@asynccontextmanager
+async def _diagnostic_lock(lock: asyncio.Lock, lock_name: str, logger):
+    debug = getattr(logger, "debug", None)
+    if debug is None:
+        async with lock:
+            yield
+        return
+    task = asyncio.current_task()
+    task_name = task.get_name() if task is not None else "-"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    debug(f"Lock diagnostic: lock={lock_name} state=acquiring task={task_name} timestamp={timestamp}")
+    async with lock:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        debug(f"Lock diagnostic: lock={lock_name} state=acquired task={task_name} timestamp={timestamp}")
+        try:
+            yield
+        finally:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            debug(f"Lock diagnostic: lock={lock_name} state=released task={task_name} timestamp={timestamp}")
 
 
 def _connect_with_reuseaddr(
@@ -128,7 +150,7 @@ class BrokerHTTPGate:
             return
 
         assert self.lock is not None
-        async with self.lock:
+        async with _diagnostic_lock(self.lock, "http_gate.lock", self.logger):
             if self._client is None:
                 transport = FixedPortAsyncHTTPTransport(self.local_port, self.logger)
                 self._client = httpx.AsyncClient(timeout=timeout, transport=transport)
@@ -138,7 +160,7 @@ class BrokerHTTPGate:
         if self.local_port is None:
             return
         assert self.lock is not None
-        async with self.lock:
+        async with _diagnostic_lock(self.lock, "http_gate.lock", self.logger):
             if self._client is not None:
                 await self._client.aclose()
                 self._client = None

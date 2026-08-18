@@ -7,6 +7,7 @@ import math
 import os
 import sqlite3
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,6 +53,27 @@ _STARTUP_BACKUP_ACCOUNTS: set[str] = set()
 
 def _balance_gate(account_id: str) -> _AccountBalanceGate:
     return _ACCOUNT_BALANCE_GATES.setdefault(account_id, _AccountBalanceGate())
+
+
+@asynccontextmanager
+async def _diagnostic_lock(lock: asyncio.Lock, lock_name: str, logger):
+    debug = getattr(logger, "debug", None)
+    if debug is None:
+        async with lock:
+            yield
+        return
+    task = asyncio.current_task()
+    task_name = task.get_name() if task is not None else "-"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    debug(f"Lock diagnostic: lock={lock_name} state=acquiring task={task_name} timestamp={timestamp}")
+    async with lock:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        debug(f"Lock diagnostic: lock={lock_name} state=acquired task={task_name} timestamp={timestamp}")
+        try:
+            yield
+        finally:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            debug(f"Lock diagnostic: lock={lock_name} state=released task={task_name} timestamp={timestamp}")
 
 
 class AccountEngine:
@@ -233,7 +255,7 @@ class AccountEngine:
     async def _shared_broker_balance(self) -> dict:
         """Fetch at most one fresh account balance per shared interval."""
         gate = self._balance_gate
-        async with gate.lock:
+        async with _diagnostic_lock(gate.lock, "balance_gate.lock", self.ctx.logger):
             now = asyncio.get_running_loop().time()
             if gate.raw_balance is not None and now - gate.received_at < self.balance_min_interval_sec:
                 return gate.raw_balance
@@ -703,7 +725,7 @@ class AccountEngine:
 
     async def sync_broker_state(self, force_balance: bool = False) -> bool:
         """Apply cumulative REST fills as idempotent deltas, then reconcile balance."""
-        async with self._sync_lock:
+        async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
             # A broker-confirmed fill changes the durable tranche ledger.  The
             # broker balance snapshot and its dashboard event must follow that
             # transition in this same synchronization pass; otherwise the UI
