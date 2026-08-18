@@ -26,8 +26,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import websockets
 
@@ -92,14 +94,31 @@ class KiwoomRealtimeFeed:
         return os.environ.get("KIWOOM_WS_URL_MOCK", DEFAULT_WS_MOCK)
 
     @property
-    def ws_local_addr(self) -> tuple[str, int] | None:
+    def ws_local_port(self) -> int | None:
         if self.client.mode != "mock":
             return None
         if self.client.market == "KR":
-            return ("0.0.0.0", 10000)
+            return 10000
         if self.client.market == "US":
-            return ("0.0.0.0", 443)
+            return 443
         return None
+
+    async def _prebound_ws_socket(self) -> socket.socket | None:
+        local_port = self.ws_local_port
+        if local_port is None:
+            return None
+        parsed = urlsplit(self.ws_url)
+        if not parsed.hostname:
+            raise ValueError(f"WebSocket URL has no hostname: {self.ws_url!r}")
+        remote_port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        sock = await asyncio.to_thread(
+            socket.create_connection,
+            (parsed.hostname, remote_port),
+            timeout=10,
+            source_address=("0.0.0.0", local_port),
+        )
+        sock.setblocking(False)
+        return sock
 
     def start(self) -> None:
         if self._task is None:
@@ -184,53 +203,56 @@ class KiwoomRealtimeFeed:
         token = await self.client.token_mgr.get_token()
         raw_token = token.split(" ", 1)[1] if " " in token else token  # "Bearer xxx" -> "xxx"
 
-        async with websockets.connect(
-            self.ws_url,
-            ping_interval=None,
-            max_size=2**22,
-            local_addr=self.ws_local_addr,
-        ) as ws:
-            self._ws = ws
-            await ws.send(json.dumps({"trnm": "LOGIN", "token": raw_token}))
-            resp = json.loads(await ws.recv())
-            return_code = resp.get("return_code", 0)
-            if resp.get("trnm") != "LOGIN" or str(return_code) not in ("0", "None"):
-                raise FatalError(f"실시간 시세 WS 로그인 실패: {resp}")
-            if self.logger:
-                self.logger.info(f"실시간 시세 WS 로그인 완료 ({self.client.mode}, {self.ws_url})")
+        sock = await self._prebound_ws_socket()
+        try:
+            connect_kwargs = {"ping_interval": None, "max_size": 2**22}
+            if sock is not None:
+                connect_kwargs["sock"] = sock
+            async with websockets.connect(self.ws_url, **connect_kwargs) as ws:
+                self._ws = ws
+                await ws.send(json.dumps({"trnm": "LOGIN", "token": raw_token}))
+                resp = json.loads(await ws.recv())
+                return_code = resp.get("return_code", 0)
+                if resp.get("trnm") != "LOGIN" or str(return_code) not in ("0", "None"):
+                    raise FatalError(f"실시간 시세 WS 로그인 실패: {resp}")
+                if self.logger:
+                    self.logger.info(f"실시간 시세 WS 로그인 완료 ({self.client.mode}, {self.ws_url})")
 
-            self.connected.set()
-            # 재연결 상황이면 기존에 구독 중이던 종목을 다시 등록 대상에 넣음
-            self._pending_subscribe |= self._subscribed
-            self._subscribed.clear()
+                self.connected.set()
+                # 재연결 상황이면 기존에 구독 중이던 종목을 다시 등록 대상에 넣음
+                self._pending_subscribe |= self._subscribed
+                self._subscribed.clear()
 
-            tasks = [
-                asyncio.create_task(self._register_loop(ws), name="ws_register"),
-                asyncio.create_task(self._receive_loop(ws), name="ws_receive"),
-                asyncio.create_task(self._ping_loop(ws), name="ws_ping"),
-            ]
-            try:
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for t in pending:
-                    t.cancel()
-                for t in pending:
-                    try:
-                        await t
-                    except (asyncio.CancelledError, Exception):
-                        pass
-                for t in done:
-                    exc = t.exception()
-                    if exc:
-                        raise exc
-            finally:
-                for t in tasks:
-                    if not t.done():
+                tasks = [
+                    asyncio.create_task(self._register_loop(ws), name="ws_register"),
+                    asyncio.create_task(self._receive_loop(ws), name="ws_receive"),
+                    asyncio.create_task(self._ping_loop(ws), name="ws_ping"),
+                ]
+                try:
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for t in pending:
                         t.cancel()
-                if self.logger and not self._stop.is_set():
-                    self.logger.warning(
-                        f"WebSocket session ended: close_code={getattr(ws, 'close_code', None)!r} "
-                        f"close_reason={getattr(ws, 'close_reason', '')!r}"
-                    )
+                    for t in pending:
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    for t in done:
+                        exc = t.exception()
+                        if exc:
+                            raise exc
+                finally:
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+                    if self.logger and not self._stop.is_set():
+                        self.logger.warning(
+                            f"WebSocket session ended: close_code={getattr(ws, 'close_code', None)!r} "
+                            f"close_reason={getattr(ws, 'close_reason', '')!r}"
+                        )
+        finally:
+            if sock is not None:
+                sock.close()
 
     async def _register_loop(self, ws) -> None:
         """새로 구독 요청된 종목이 있으면 REG(실시간 등록) 메시지를 전송."""
