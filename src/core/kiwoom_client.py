@@ -16,6 +16,7 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from src.core.broker_http import BrokerHTTPGate
 from src.core.token_manager import TokenManager
 from src.core.process_lock import AccountOrderAuthority
 from src.core.us_market import normalize_us_symbol, validate_us_order
@@ -107,7 +108,9 @@ class KiwoomClient:
         self.mode = mode
         self.logger = logger
         self._order_authority = order_authority
-        self.token_mgr = TokenManager(self.domain, appkey, secretkey, logger)
+        http_port = 10000 if mode == "mock" and market == "KR" else 443 if mode == "mock" and market == "US" else None
+        self._http_gate = BrokerHTTPGate(http_port)
+        self.token_mgr = TokenManager(self.domain, appkey, secretkey, logger, self._http_gate)
         self._quote_min_interval_sec = max(0.5, float(os.environ.get("KIWOOM_REST_QUOTE_MIN_INTERVAL_SEC", "2.0")))
         self._order_min_interval_sec = max(
             0.0,
@@ -194,9 +197,9 @@ class KiwoomClient:
     ) -> dict:
         url = f"{self.domain}{path}"
         headers = await self._headers(api_id)
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with self._http_gate.client(timeout=15) as client:
             try:
-                resp = await client.post(url, json=body, headers=headers)
+                resp = await client.post(url, json=body, headers=headers, timeout=15)
             except httpx.RequestError as e:
                 raise RetryableError(f"{api_id} 네트워크 오류: {e}") from e
 

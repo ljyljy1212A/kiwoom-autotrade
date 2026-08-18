@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 import httpx
+from src.core.broker_http import BrokerHTTPGate
 from src.utils.exceptions import FatalError, RetryableError
 
 
@@ -22,11 +23,12 @@ class Token:
 class TokenManager:
     """appkey/secretkey 로 접근토큰을 발급받고, 만료 전에 자동 재발급합니다."""
 
-    def __init__(self, domain: str, appkey: str, secretkey: str, logger):
+    def __init__(self, domain: str, appkey: str, secretkey: str, logger, http_gate: BrokerHTTPGate | None = None):
         self.domain = domain.rstrip("/")
         self.appkey = appkey
         self.secretkey = secretkey
         self.logger = logger
+        self.http_gate = http_gate or BrokerHTTPGate(None)
         self._token: Token | None = None
         # The first REST call and WebSocket login commonly happen together.
         # One lock prevents them from issuing duplicate au10001 requests.
@@ -45,9 +47,9 @@ class TokenManager:
             "secretkey": self.secretkey,
         }
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "au10001"}
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with self.http_gate.client(timeout=10) as client:
             try:
-                resp = await client.post(url, json=payload, headers=headers)
+                resp = await client.post(url, json=payload, headers=headers, timeout=10)
             except httpx.RequestError as e:
                 raise RetryableError(f"토큰 발급 네트워크 오류: {e}") from e
 
@@ -86,16 +88,18 @@ class TokenManager:
 
     async def revoke(self) -> None:
         if self._token is None:
+            await self.http_gate.close()
             return
         url = f"{self.domain}/oauth2/revoke"
         headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": "au10002"}
         payload = {"appkey": self.appkey, "secretkey": self.secretkey, "token": self._token.value}
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with self.http_gate.client(timeout=10) as client:
             try:
-                await client.post(url, json=payload, headers=headers)
+                await client.post(url, json=payload, headers=headers, timeout=10)
             except httpx.RequestError as e:
                 self.logger.warning(f"토큰 폐기 실패(무시 가능): {e}")
         self._token = None
+        await self.http_gate.close()
 
     def invalidate(self) -> None:
         """Discard a server-rejected token without making another network call."""
