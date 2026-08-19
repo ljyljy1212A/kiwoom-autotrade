@@ -13,7 +13,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass, replace
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,6 +23,7 @@ from src.core.runtime_paths import DATA_DIR, LOG_DIR
 from src.core.account_manager import load_accounts, run_all
 from src.core.engine import AccountEngine
 from src.core.realtime_feed import PriceFeed
+from src.calendar_utils.market_calendar import _FALLBACK_HOURS
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.notify.discord_notify import DiscordNotifier
@@ -277,7 +278,41 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
             await monitor.sync_broker_state(force_balance=True)
         except Exception as exc:
             ctx.logger.warning(f"Account balance monitor deferred: {exc}")
-        await asyncio.sleep(monitor.poll_interval_sec)
+        await asyncio.sleep(_balance_monitor_sleep_seconds(monitor))
+
+
+def _balance_monitor_sleep_seconds(monitor) -> float:
+    if monitor.calendar.session_name_now() != "CLOSED":
+        return monitor.poll_interval_sec
+    return min(60.0, _seconds_until_next_regular_open(monitor.calendar))
+
+
+def _seconds_until_next_regular_open(calendar) -> float:
+    """Return seconds until the next regular open using the existing calendar data."""
+    if calendar.calendar is not None:
+        now = datetime.now(tz=calendar.calendar.tz)
+        schedule = calendar.calendar.schedule(
+            start_date=now.date(),
+            end_date=now.date() + timedelta(days=7),
+        )
+        for open_at in schedule["market_open"]:
+            if open_at > now:
+                return max(0.0, (open_at - now).total_seconds())
+        return 60.0
+
+    fallback = _FALLBACK_HOURS.get(calendar.market)
+    if fallback is None:
+        return 60.0
+    open_time, _close_time, timezone_info = fallback
+    now = datetime.now(tz=timezone_info)
+    for day_offset in range(8):
+        candidate_date = now.date() + timedelta(days=day_offset)
+        if candidate_date.weekday() >= 5:
+            continue
+        candidate = datetime.combine(candidate_date, open_time, tzinfo=timezone_info)
+        if candidate > now:
+            return max(0.0, (candidate - now).total_seconds())
+    return 60.0
 
 
 async def run_quote_health_monitor(ctx, feed: PriceFeed) -> None:
