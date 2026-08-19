@@ -276,9 +276,20 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
             monitor._refresh_runtime_control()
             await monitor.sync_broker_state(force_balance=True)
         except Exception as exc:
-            monitor._fail_dashboard_refresh(str(exc))
             ctx.logger.warning(f"Account balance monitor deferred: {exc}")
         await asyncio.sleep(monitor.poll_interval_sec)
+
+
+async def run_quote_health_monitor(ctx, feed: PriceFeed) -> None:
+    """Periodically report the age of each subscribed WebSocket quote."""
+    while True:
+        realtime = feed.realtime
+        if realtime is not None:
+            for symbol in realtime.subscribed_symbols():
+                age = realtime.cache_age_sec(symbol)
+                age_text = "missing" if age is None else f"{age:.1f}s"
+                ctx.logger.info(f"Quote health: symbol={symbol} cache_age={age_text}")
+        await asyncio.sleep(60)
 
 
 def _symbol_has_unresolved_orders(account_id: str, symbol: str) -> bool:
@@ -343,6 +354,10 @@ def _enabled_symbol_configs(account_id: str, market: str) -> list[dict]:
 async def run_symbol_engines(ctx, telegram: TelegramController, discord: DiscordNotifier) -> None:
     """Keep one isolated engine/task per enabled symbol on an account."""
     price_feed = await make_price_feed(ctx)
+    quote_health_monitor = asyncio.create_task(
+        run_quote_health_monitor(ctx, ctx.price_feed_obj),
+        name=f"{ctx.account_id}-quote-health-monitor",
+    )
     workers: dict[str, asyncio.Task] = {}
     registry = SymbolEngineRegistry()
     balance_monitor: asyncio.Task | None = None
@@ -378,6 +393,22 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
                     run_account_balance_monitor(ctx, telegram, discord),
                     name=f"{ctx.account_id}-balance-monitor",
                 )
+
+                def _log_balance_monitor_done(task: asyncio.Task) -> None:
+                    if task.cancelled():
+                        ctx.logger.warning("Account balance monitor task finished: cancelled")
+                        return
+
+                    exc = task.exception()
+                    if exc is None:
+                        ctx.logger.info("Account balance monitor task finished: completed")
+                    else:
+                        ctx.logger.opt(exception=exc).error(
+                            f"Account balance monitor task finished: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
+                balance_monitor.add_done_callback(_log_balance_monitor_done)
                 ctx.logger.info("Started passive account balance monitor (no enabled strategies)")
             elif wanted and balance_monitor is not None:
                 balance_monitor.cancel()
@@ -410,14 +441,20 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
                         ctx.logger.info(f"Stopping independent symbol engine: {symbol}; registry=STOPPING")
             await asyncio.sleep(1)
     finally:
+        quote_health_monitor.cancel()
         for symbol, task in list(workers.items()):
             if registry.request_stop(ctx.account_id, symbol, task):
                 task.cancel()
         if balance_monitor is not None:
             balance_monitor.cancel()
-            await asyncio.gather(*workers.values(), balance_monitor, return_exceptions=True)
+            await asyncio.gather(
+                *workers.values(), balance_monitor, quote_health_monitor,
+                return_exceptions=True,
+            )
         else:
-            await asyncio.gather(*workers.values(), return_exceptions=True)
+            await asyncio.gather(
+                *workers.values(), quote_health_monitor, return_exceptions=True,
+            )
 
 
 async def main():
@@ -549,5 +586,30 @@ async def main():
             lock.release()
 
 
+def _install_asyncio_exception_handler() -> None:
+    loop = asyncio.get_running_loop()
+
+    def _handle(loop, context):
+        task = context.get("task") or context.get("future")
+        exc = context.get("exception")
+        task_name = task.get_name() if task is not None else None
+
+        SYS_LOG.opt(exception=exc).error(
+            "Asyncio unhandled exception: message={!r} task={!r} "
+            "exception_type={!r} context_keys={!r}",
+            context.get("message"),
+            task_name,
+            type(exc).__name__ if exc is not None else None,
+            sorted(context.keys()),
+        )
+
+    loop.set_exception_handler(_handle)
+
+
+async def _run_main() -> None:
+    _install_asyncio_exception_handler()
+    await main()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_run_main())

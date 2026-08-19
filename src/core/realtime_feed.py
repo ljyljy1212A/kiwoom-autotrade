@@ -83,9 +83,10 @@ class KiwoomRealtimeFeed:
     - 수신한 체결가는 메모리 캐시에 (가격, 수신시각)으로 저장되며 get_cached()로 조회합니다.
     """
 
-    def __init__(self, client, logger=None):
+    def __init__(self, client, logger=None, max_staleness_sec: float = 20.0):
         self.client = client
         self.logger = logger
+        self.max_staleness_sec = max_staleness_sec
         self._ws = None
         self._cache: dict[str, _Tick] = {}
         self._subscribed: set[str] = set()
@@ -184,6 +185,17 @@ class KiwoomRealtimeFeed:
         if tick is None or time.time() - tick.ts > max_age_sec:
             return None
         return tick
+
+    def subscribed_symbols(self) -> tuple[str, ...]:
+        """Return symbols currently active or waiting for subscription."""
+        return tuple(sorted(self._subscribed | self._pending_subscribe))
+
+    def cache_age_sec(self, symbol: str) -> float | None:
+        """Return seconds since the last cached tick, or None if absent."""
+        tick = self._cache.get(symbol)
+        if tick is None:
+            return None
+        return max(0.0, time.time() - tick.ts)
 
     # ------------------------------------------------------------------
     # 연결 유지 루프 (지수 백오프 재연결)
@@ -347,7 +359,19 @@ class KiwoomRealtimeFeed:
                     price = abs(float(str(price_raw).replace(",", "").strip()))
                 except ValueError:
                     continue
-                self._cache[symbol] = _Tick(price=price, ts=time.time())
+                received_at = time.time()
+                previous = self._cache.get(symbol)
+                self._cache[symbol] = _Tick(price=price, ts=received_at)
+                if (
+                    self.logger
+                    and previous is not None
+                    and received_at - previous.ts > self.max_staleness_sec
+                ):
+                    self.logger.warning(
+                        f"WebSocket quote gap recovered: symbol={symbol} "
+                        f"gap_sec={received_at - previous.ts:.1f} "
+                        f"threshold_sec={self.max_staleness_sec:g}"
+                    )
 
 
 class PriceFeed:
@@ -361,7 +385,10 @@ class PriceFeed:
         self.logger = logger
         self.mode = mode  # "auto" | "ws" | "rest"
         self.max_staleness_sec = max_staleness_sec
-        self.realtime = KiwoomRealtimeFeed(client, logger) if mode in ("auto", "ws") else None
+        self.realtime = (
+            KiwoomRealtimeFeed(client, logger, max_staleness_sec)
+            if mode in ("auto", "ws") else None
+        )
         self._first_tick_wait_sec = float(os.environ.get("KIWOOM_WS_FIRST_TICK_WAIT_SEC", "5"))
         # A dashboard user can switch holdings quickly.  Serialize REST quote
         # fallback across symbols so Kiwoom's ka10001 quota is never burst.
