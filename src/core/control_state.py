@@ -49,3 +49,22 @@ def write_control_state(
     temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     temp.replace(path)
     return payload
+
+
+def write_reconciliation_clear_event(
+    account_id: str, *, updated_by: str = "telegram", data_dir: Path | None = None
+) -> dict:
+    """Persist an authenticated, narrowly scoped reconciliation-clear event."""
+    path = control_path(account_id, data_dir)
+    current = read_control_state(account_id, data_dir) or {"account": account_id}
+    event = {
+        "event_id": uuid.uuid4().hex,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": updated_by,
+    }
+    current["reconciliation_clear_event"] = event
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    temp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+    temp.replace(path)
+    return event

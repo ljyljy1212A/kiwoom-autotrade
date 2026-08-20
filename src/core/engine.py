@@ -7,6 +7,7 @@ import math
 import os
 import sqlite3
 import uuid
+import weakref
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ from src.core.us_market import (
     us_balance_recognized,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
-from src.core.control_state import read_auto_trading_enabled
+from src.core.control_state import read_auto_trading_enabled, read_control_state
 from src.core.runtime_paths import DATA_DIR
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
@@ -45,6 +46,25 @@ class _AccountBalanceGate:
         self.last_cancel_request_at = 0.0
         self.balance_not_before = 0.0
         self.balance_backoff_sec = 5.0
+        self.reconciliation_failure_count = 0
+        self.reconciliation_clear_event_id = ""
+        self.reconciliation_mode = "off"
+        self.reconciliation_failure_threshold = 3
+        self.session_failure_ceiling = 3
+        self.engines = weakref.WeakSet()
+
+    @property
+    def reconciliation_blocked(self) -> bool:
+        return self.reconciliation_failure_count >= self.reconciliation_failure_threshold
+
+    def configure_reconciliation(self, config: dict | None) -> None:
+        config = config or {}
+        self.reconciliation_mode = str(config.get("mode", "off")).lower()
+        self.reconciliation_failure_threshold = max(
+            1, int(config.get("consecutive_failure_threshold", 3))
+        )
+        # Forward-compatible only; manual mode does not use this value.
+        self.session_failure_ceiling = max(1, int(config.get("session_failure_ceiling", 3)))
 
 
 _ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
@@ -137,6 +157,12 @@ class AccountEngine:
         # broker balance is account-wide. Share its fresh response so startup
         # and normal ticks do not multiply kt00018/ust21070 requests.
         self._balance_gate = _balance_gate(ctx.account_id)
+        self._balance_gate.configure_reconciliation(getattr(ctx, "reconciliation_fail_closed", None))
+        initial_state = read_control_state(ctx.account_id, self.data_dir) or {}
+        initial_event = initial_state.get("reconciliation_clear_event")
+        if isinstance(initial_event, dict):
+            self._balance_gate.reconciliation_clear_event_id = str(initial_event.get("event_id", ""))
+        self._balance_gate.engines.add(self)
         # A passive account monitor publishes broker holdings only. It must not
         # open, initialize, or mutate the confirmed-fill ledger.
         self.ledger = None if balance_only else TradeLedgerStore(self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id)
@@ -386,6 +412,8 @@ class AccountEngine:
             # A rate-limited or otherwise incomplete reconciliation is never a
             # valid basis for an order decision. Fail closed until a complete
             # broker snapshot succeeds.
+            return
+        if self._balance_gate.reconciliation_blocked:
             return
         self._dashboard_strategy_changed = False
         symbol_key = self.ctx.strategy.symbol.upper().lstrip("A")
@@ -726,6 +754,7 @@ class AccountEngine:
     async def sync_broker_state(self, force_balance: bool = False) -> bool:
         """Apply cumulative REST fills as idempotent deltas, then reconcile balance."""
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
+            self._apply_reconciliation_clear_event()
             # A broker-confirmed fill changes the durable tranche ledger.  The
             # broker balance snapshot and its dashboard event must follow that
             # transition in this same synchronization pass; otherwise the UI
@@ -742,6 +771,9 @@ class AccountEngine:
                 # automated symbol on the same account.
                 try:
                     await self._reconcile_balance()
+                except RetryableError as exc:
+                    self._record_reconciliation_failure(exc)
+                    return False
                 except KiwoomAPIError as exc:
                     if "429" not in str(exc) and "1700" not in str(exc):
                         raise
@@ -752,6 +784,7 @@ class AccountEngine:
                 self._last_balance_request_at = completed_at
                 self._last_balance_reconciliation = completed_at
                 self._balance_gate.balance_backoff_sec = 5.0
+                self._record_reconciliation_success()
                 self._balance_sync_blocked = False
                 return True
             if self.ledger.pending_orders(self.ctx.strategy.symbol):
@@ -807,6 +840,9 @@ class AccountEngine:
             if confirmed_fill or force_balance or now - self._last_balance_reconciliation >= self.balance_reconcile_sec:
                 try:
                     await self._reconcile_balance()
+                except RetryableError as exc:
+                    self._record_reconciliation_failure(exc)
+                    return False
                 except KiwoomAPIError as exc:
                     if "429" not in str(exc) and "1700" not in str(exc):
                         raise
@@ -821,8 +857,43 @@ class AccountEngine:
                 self._last_balance_reconciliation = completed_at
                 self._flush_dashboard_fills()
                 self._balance_gate.balance_backoff_sec = 5.0
+                self._record_reconciliation_success()
             self._balance_sync_blocked = False
             return True
+
+    def _record_reconciliation_failure(self, exc: Exception) -> None:
+        gate = self._balance_gate
+        if gate.reconciliation_mode != "manual":
+            return
+        gate.reconciliation_failure_count += 1
+        self.ctx.logger.warning(
+            "Broker reconciliation unavailable: "
+            f"consecutive_cycle_failures={gate.reconciliation_failure_count}; {exc}"
+        )
+        if gate.reconciliation_failure_count < gate.reconciliation_failure_threshold:
+            return
+        for engine in list(gate.engines):
+            if not engine._pause_reason or engine._pause_reason == "broker_reconciliation_unavailable":
+                engine._trading_paused = True
+                engine._pause_reason = "broker_reconciliation_unavailable"
+
+    def _record_reconciliation_success(self) -> None:
+        gate = self._balance_gate
+        if gate.reconciliation_mode == "manual":
+            gate.reconciliation_failure_count = 0
+
+    def _apply_reconciliation_clear_event(self) -> None:
+        state = read_control_state(self.ctx.account_id, getattr(self, "data_dir", DATA_DIR)) or {}
+        event = state.get("reconciliation_clear_event")
+        event_id = event.get("event_id") if isinstance(event, dict) else ""
+        if not event_id or event_id == self._balance_gate.reconciliation_clear_event_id:
+            return
+        self._balance_gate.reconciliation_clear_event_id = event_id
+        for engine in list(self._balance_gate.engines):
+            if engine._pause_reason == "broker_reconciliation_unavailable":
+                engine._trading_paused = False
+                engine._pause_reason = ""
+        self.ctx.logger.info("Applied operator clear for broker_reconciliation_unavailable")
 
     def _record_balance_rate_limit(self) -> None:
         """Apply one shared exponential cooldown to all tasks on this account."""

@@ -236,6 +236,7 @@ class KiwoomClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=8),
         retry=retry_if_exception_type(RetryableError),
+        reraise=True,
     )
     async def _post(self, path: str, api_id: str, body: dict, _reauth_attempt: bool = False) -> dict:
         return await self._post_once(path, api_id, body, _reauth_attempt=_reauth_attempt)

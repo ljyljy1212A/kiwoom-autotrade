@@ -10,7 +10,11 @@ from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-from src.core.control_state import read_auto_trading_enabled, write_control_state
+from src.core.control_state import (
+    read_auto_trading_enabled,
+    write_control_state,
+    write_reconciliation_clear_event,
+)
 from src.core.runtime_paths import DATA_DIR
 from src.worker_supervisor import status as worker_status
 from src.utils.logger import get_logger
@@ -120,6 +124,7 @@ class TelegramControlBot:
                 InlineKeyboardButton("Yes", callback_data=f"confirm|{account_id}|{action}|yes"),
                 InlineKeyboardButton("No", callback_data=f"confirm|{account_id}|{action}|no"),
             ],
+            [InlineKeyboardButton("Clear reconciliation pause", callback_data=f"clear_reconciliation_pause|{account_id}")],
             [InlineKeyboardButton("Back", callback_data=f"acct|{account_id}")],
         ]
         return InlineKeyboardMarkup(rows)
@@ -171,6 +176,23 @@ class TelegramControlBot:
                     query,
                     self._confirm_text(account_id, action),
                     reply_markup=self._confirm_markup(account_id, action),
+                )
+            elif kind == "clear_reconciliation_pause" and len(parts) >= 2:
+                account_id = parts[1]
+                try:
+                    write_reconciliation_clear_event(account_id, updated_by="telegram", data_dir=DATA_DIR)
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(f"Telegram reconciliation clear write failed for {account_id}; continuing: {exc}")
+                    await self._safe_edit_text(
+                        query,
+                        f"Failed to persist reconciliation clear for {account_id}.",
+                        reply_markup=self._account_markup(account_id),
+                    )
+                    return
+                await self._safe_edit_text(
+                    query,
+                    f"Requested reconciliation-pause clear for {account_id}.",
+                    reply_markup=self._account_markup(account_id),
                 )
             elif kind == "confirm" and len(parts) >= 4:
                 account_id, action, decision = parts[1], parts[2], parts[3]

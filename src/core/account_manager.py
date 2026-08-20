@@ -34,6 +34,7 @@ class AccountContext:
     currency: str = "KRW"
     reporting_currency: str = "KRW"
     price_feed_obj: object = None  # main.make_price_feed()가 채워 넣음 (종료 시 WS 연결 정리용)
+    reconciliation_fail_closed: dict | None = None
 
 
 def _env(prefix: str, key: str) -> str:
@@ -87,6 +88,8 @@ def load_accounts(config_path: str = "config/accounts.yaml",
             strategy_cfg.setdefault("reporting_currency", "KRW")
         strategy = InfiniteGridStrategy(strategy_cfg)
 
+        reconciliation_config = acc.get("reconciliation_fail_closed") or {}
+
         risk_limits = RiskLimits(
             max_position_amount=strategy_cfg.get("risk", {}).get("max_position_amount")
                 or strategy_cfg.get("risk", {}).get("max_position_usd"),  # 구버전 설정 호환
@@ -106,6 +109,17 @@ def load_accounts(config_path: str = "config/accounts.yaml",
             position=PositionState(symbol=strategy_cfg["symbol"]),
             currency=str(strategy_cfg.get("currency", "USD" if configured_market == "US" else "KRW")).upper(),
             reporting_currency=str(strategy_cfg.get("reporting_currency", "KRW")).upper(),
+            reconciliation_fail_closed={
+                "mode": str(reconciliation_config.get(
+                    "mode", "manual" if mode == "mock" else "off"
+                )).strip().lower(),
+                "consecutive_failure_threshold": max(1, int(
+                    reconciliation_config.get("consecutive_failure_threshold", 3)
+                )),
+                "session_failure_ceiling": max(1, int(
+                    reconciliation_config.get("session_failure_ceiling", 3)
+                )),
+            },
         ))
 
     if not contexts:

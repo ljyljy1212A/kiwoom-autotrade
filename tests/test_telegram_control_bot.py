@@ -133,6 +133,23 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(query.answered)
         self.assertTrue(any("auto_trading set to ON" in text for text, _ in query.message.edits))
 
+    async def test_unauthorized_reconciliation_clear_callback_is_ignored(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        query = _CallbackQuery("clear_reconciliation_pause|kr_mock")
+        update = SimpleNamespace(
+            effective_chat=SimpleNamespace(id=999),
+            effective_message=query.message,
+            callback_query=query,
+        )
+
+        with patch.object(bot_module, "write_reconciliation_clear_event") as clear_event:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        clear_event.assert_not_called()
+        self.assertEqual(query.message.edits, [])
+        self.assertFalse(query.answered)
+
 
 if __name__ == "__main__":
     unittest.main()
