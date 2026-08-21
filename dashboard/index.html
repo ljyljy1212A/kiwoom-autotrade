@@ -2143,6 +2143,7 @@ setTradeLedger=function(rows){
 // the balance, ledger, profiles, and control file used by this browser tab.
 const nativeFetch=window.fetch.bind(window);
 let activeAccount=localStorage.getItem('kiwoom_active_account') || '';
+const requestedAccount=new URLSearchParams(window.location.search).get('account') || '';
 let accountCatalog=[];
 let dashboardEventSource=null;
 let dashboardEventAccount='';
@@ -2203,12 +2204,17 @@ async function initializeAccounts(){
   try{
     const payload=await (await nativeFetch('/api/accounts')).json();
     accountCatalog=payload.accounts||[];
+    const requestedAccountIsValid=accountCatalog.some(account=>account.id===requestedAccount);
+    if(requestedAccountIsValid){
+      activeAccount=requestedAccount;
+      localStorage.setItem('kiwoom_active_account', activeAccount);
+    }
     // A previously selected account is stored in the browser.  Do not let that
     // stale selection show an empty US/KR dashboard while the user has started
     // exactly one different account engine from the controller.
     const status=await (await nativeFetch('/api/status')).json();
     const running=Array.isArray(status.accounts) ? status.accounts : [];
-    if(running.length===1 && accountCatalog.some(a=>a.id===running[0])){
+    if(!requestedAccountIsValid && running.length===1 && accountCatalog.some(a=>a.id===running[0])){
       activeAccount=running[0];
       localStorage.setItem('kiwoom_active_account', activeAccount);
     }
@@ -2216,7 +2222,7 @@ async function initializeAccounts(){
     // src.main) are not controller-owned, so /api/status cannot name them.
     // In that case select the most recently broker-synchronized account rather
     // than retaining a stale US/KR browser selection.
-    if(!running.length){
+    if(!requestedAccountIsValid && !running.length){
       const snapshots=await Promise.all(accountCatalog.map(async account=>{
         try{
           const response=await nativeFetch(`/api/balance?account=${encodeURIComponent(account.id)}`);
