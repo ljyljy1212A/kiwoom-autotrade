@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import struct
 import time
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
@@ -19,6 +20,39 @@ from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
 
 
 _HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
+_FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
+
+
+class _CloseCompletionState:
+    def __init__(self):
+        self.event = asyncio.Event()
+        self.event.set()
+        self.hook_installed = False
+        self.close_started = False
+        self.completion_scheduled = False
+        self.completion_count = 0
+
+    def begin_close(self) -> bool:
+        if self.close_started:
+            return False
+        self.close_started = True
+        self.event.clear()
+        return True
+
+    def schedule_completion(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self.completion_scheduled:
+            return
+        self.completion_scheduled = True
+        loop.call_soon(self._complete)
+
+    def resolve_fallback(self) -> None:
+        self._complete()
+
+    def _complete(self) -> None:
+        if self.completion_count:
+            return
+        self.completion_count = 1
+        self.event.set()
 
 
 @contextmanager
@@ -73,6 +107,49 @@ class _DiagnosticByteStream:
 
     async def aclose(self) -> None:
         await self._stream.aclose()
+
+
+class _LingerOnCloseByteStream(_DiagnosticByteStream):
+    """Use an abortive close when the fixed-port HTTP pool retires a stream."""
+
+    def __init__(self, stream, logger, raw_socket: socket.socket, close_state: _CloseCompletionState):
+        super().__init__(stream, logger)
+        self._raw_socket = raw_socket
+        self._close_state = close_state
+
+    async def aclose(self) -> None:
+        if getattr(self._stream, "_closed", False):
+            self._close_state.resolve_fallback()
+            await super().aclose()
+            return
+        self._close_state.begin_close()
+        self._raw_socket.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_LINGER,
+            struct.pack("ii", 1, 0),
+        )
+        try:
+            await super().aclose()
+        finally:
+            if not self._close_state.hook_installed:
+                self._close_state.resolve_fallback()
+
+
+def _install_close_completion_hook(stream, close_state: _CloseCompletionState) -> None:
+    protocol = getattr(stream, "_protocol", None)
+    original_connection_lost = getattr(protocol, "connection_lost", None)
+    if protocol is None or not callable(original_connection_lost):
+        raise RuntimeError("AnyIO stream does not expose a connection_lost callback")
+    loop = asyncio.get_running_loop()
+
+    def connection_lost(exc):
+        try:
+            original_connection_lost(exc)
+        finally:
+            close_state.schedule_completion(loop)
+
+    protocol.connection_lost = connection_lost
+    close_state.hook_installed = True
 
 
 @asynccontextmanager
@@ -143,6 +220,8 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
     def __init__(self, local_port: int, logger=None):
         self.local_port = local_port
         self.logger = logger
+        self._close_state = _CloseCompletionState()
+        self._connect_lock = asyncio.Lock()
 
     async def connect_tcp(
         self,
@@ -160,19 +239,37 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
             anyio.BrokenResourceError: ConnectError,
         }
         with map_exceptions(exc_map):
-            with anyio.fail_after(timeout):
-                raw_socket = await asyncio.to_thread(
-                    _connect_with_reuseaddr,
-                    host,
-                    port,
-                    local_address,
-                    self.local_port,
-                    timeout,
-                    socket_options,
-                    self.logger,
-                )
-                stream = await anyio.abc.SocketStream.from_socket(raw_socket)
-        return AnyIOStream(_DiagnosticByteStream(stream, self.logger))
+            async with self._connect_lock:
+                try:
+                    await asyncio.wait_for(
+                        self._close_state.event.wait(),
+                        timeout=_FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise OSError(
+                        "Timed out waiting for the previous fixed-port HTTP socket to close "
+                        f"after {_FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC:.1f}s"
+                    ) from exc
+                with anyio.fail_after(timeout):
+                    raw_socket = await asyncio.to_thread(
+                        _connect_with_reuseaddr,
+                        host,
+                        port,
+                        local_address,
+                        self.local_port,
+                        timeout,
+                        socket_options,
+                        self.logger,
+                    )
+                    try:
+                        stream = await anyio.abc.SocketStream.from_socket(raw_socket)
+                        close_state = _CloseCompletionState()
+                        _install_close_completion_hook(stream, close_state)
+                    except BaseException:
+                        raw_socket.close()
+                        raise
+                self._close_state = close_state
+        return AnyIOStream(_LingerOnCloseByteStream(stream, self.logger, raw_socket, close_state))
 
 
 class FixedPortAsyncHTTPTransport(httpx.AsyncHTTPTransport):
@@ -184,7 +281,7 @@ class FixedPortAsyncHTTPTransport(httpx.AsyncHTTPTransport):
             ssl_context=ssl_context,
             max_connections=1,
             max_keepalive_connections=1,
-            keepalive_expiry=5.0,
+            keepalive_expiry=30.0,
             http1=True,
             http2=False,
             retries=0,
