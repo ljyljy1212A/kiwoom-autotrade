@@ -603,6 +603,10 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 if __name__ == "__main__":
     print(f"Dashboard: http://127.0.0.1:{PORT}")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    ReusableThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
