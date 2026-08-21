@@ -12,6 +12,8 @@ if not exist .env (
   pause
   exit /b 1
 )
+set "DASHBOARD_URL=http://127.0.0.1:8765"
+if not "%~1"=="" set "DASHBOARD_URL=%DASHBOARD_URL%/dashboard/index.html?account=%~1"
 start "Kiwoom Dashboard" cmd /k ""%PYTHON_EXE%" dashboard\dashboard_server.py"
 timeout /t 2 /nobreak >nul
-start "" http://127.0.0.1:8765
+start "" "%DASHBOARD_URL%"
