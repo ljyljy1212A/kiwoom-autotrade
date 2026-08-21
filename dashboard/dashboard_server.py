@@ -296,6 +296,13 @@ class Handler(BaseHTTPRequestHandler):
             return requested
         return _default_accounts()[0] if _default_accounts() else "kr_mock"
 
+    def _reject_real_account(self, account: str) -> bool:
+        catalog = {item["id"]: item for item in _account_catalog()}
+        if catalog.get(account, {}).get("mode") == "real" and os.environ.get("ALLOW_LIVE_DASHBOARD", "false").lower() != "true":
+            self._json({"error": "Live accounts are disabled by the dashboard"}, 403)
+            return True
+        return False
+
     def _json(self, payload: dict, status: int = 200):
         body = json.dumps(payload).encode()
         self.send_response(status)
@@ -321,6 +328,8 @@ class Handler(BaseHTTPRequestHandler):
             # atomically publish one small file after a confirmed BUY/SELL fill;
             # the connected dashboard is released only when that event changes.
             account = self._account(query)
+            if self._reject_real_account(account):
+                return
             event_path = ROOT / "data" / f"dashboard_event_{account}.json"
             last_id = self.headers.get("Last-Event-ID", "")
             deadline = time.monotonic() + 25.0
@@ -350,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/balance":
             account = self._account(query)
+            if self._reject_real_account(account):
+                return
             state_file = ROOT / "data" / f"balance_{account}.json"
             if not state_file.exists():
                 self._json({"error": "No broker balance has been synchronized yet"}, 404)
@@ -361,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/trades":
             account = self._account(query)
+            if self._reject_real_account(account):
+                return
             db_path = ROOT / "data" / f"trades_{account}.db"
             if not db_path.exists():
                 self._json({"trades": [], "tranches": [], "historyDays": TRADE_HISTORY_DAYS,
@@ -373,6 +386,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/settings":
             account = self._account(query)
+            if self._reject_real_account(account):
+                return
             path = ROOT / "data" / f"dashboard_settings_{account}.json"
             if path.exists():
                 try:
@@ -412,6 +427,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(profiles, list):
                     raise ValueError("profiles must be a list")
                 account = self._account(query)
+                if self._reject_real_account(account):
+                    return
                 for profile in profiles:
                     if not isinstance(profile, dict):
                         raise ValueError("profile must be an object")
@@ -488,6 +505,8 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 account = self._account(query)
+                if self._reject_real_account(account):
+                    return
                 _validate_market_config(account, payload.get("config"))
                 control = {
                     "symbol": str(payload.get("symbol", "")).upper(),
@@ -564,6 +583,9 @@ class Handler(BaseHTTPRequestHandler):
             accounts = [str(item) for item in requested if str(item) in catalog]
             if not accounts:
                 self._json({"error": "No valid account was selected"}, 400)
+                return
+            if any(catalog[item]["mode"] == "real" for item in accounts) and os.environ.get("ALLOW_LIVE_DASHBOARD", "false").lower() != "true":
+                self._json({"error": "Live accounts are disabled by the dashboard"}, 403)
                 return
             stops = []
             for account in accounts:
