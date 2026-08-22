@@ -21,6 +21,9 @@ from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
 
 _HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
 _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
+_FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 2.5
+_FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
+_FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
 
 
 class _CloseCompletionState:
@@ -173,6 +176,10 @@ async def _diagnostic_lock(lock: asyncio.Lock, lock_name: str, logger):
             debug(f"Lock diagnostic: lock={lock_name} state=released task={task_name} timestamp={timestamp}")
 
 
+def _is_address_in_use(exc: OSError) -> bool:
+    return getattr(exc, "winerror", None) == 10048 or getattr(exc, "errno", None) == 98
+
+
 def _connect_with_reuseaddr(
     host: str,
     port: int,
@@ -197,7 +204,42 @@ def _connect_with_reuseaddr(
             phase = "bind"
             sock.bind((bind_address, local_port))
             phase = "connect"
-            sock.connect(remote_address)
+            retry_count = 0
+            retry_started = None
+            retry_delay = _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC
+            while True:
+                try:
+                    sock.connect(remote_address)
+                except OSError as exc:
+                    if not _is_address_in_use(exc):
+                        raise
+                    if retry_started is None:
+                        retry_started = time.monotonic()
+                    elapsed = time.monotonic() - retry_started
+                    remaining = _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC - elapsed
+                    if remaining <= 0:
+                        raise
+                    retry_count += 1
+                    delay = min(retry_delay, remaining)
+                    if logger is not None:
+                        logger.warning(
+                            "Fixed-port HTTP connect retry: "
+                            f"attempt={retry_count} delay_ms={delay * 1000:.1f} "
+                            f"local={(bind_address, local_port)!r} "
+                            f"remote={remote_address!r} winerror=10048"
+                        )
+                    time.sleep(delay)
+                    retry_delay = min(retry_delay * 2, _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC)
+                else:
+                    break
+            if retry_count and logger is not None:
+                logger.warning(
+                    "Fixed-port HTTP connect recovered: "
+                    f"retries={retry_count} "
+                    f"elapsed_ms={(time.monotonic() - retry_started) * 1000:.1f} "
+                    f"local={(bind_address, local_port)!r} "
+                    f"remote={remote_address!r}"
+                )
             sock.setblocking(False)
             return sock
         except OSError as exc:

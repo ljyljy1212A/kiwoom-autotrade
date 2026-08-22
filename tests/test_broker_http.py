@@ -302,5 +302,53 @@ class BrokerHTTPCloseTest(unittest.IsolatedAsyncioTestCase):
             http_server.close()
 
 
+class BrokerHTTPConnectRetryTest(unittest.TestCase):
+    def test_retries_address_in_use_connect_and_recovers(self):
+        from unittest.mock import Mock, call, patch
+
+        busy_one = OSError(10048, "address already in use")
+        busy_two = OSError(10048, "address already in use")
+        fake_socket = Mock()
+        busy_one.winerror = 10048
+        busy_two.winerror = 10048
+        fake_socket.connect.side_effect = [busy_one, busy_two, None]
+        logger = Mock()
+        with patch(
+            "src.core.broker_http.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
+        ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
+            "src.core.broker_http.time.sleep"
+        ) as sleep:
+            result = _connect_with_reuseaddr(
+                "127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], logger
+            )
+
+        self.assertIs(result, fake_socket)
+        self.assertEqual(fake_socket.connect.call_count, 3)
+        sleep.assert_has_calls([call(0.05), call(0.1)])
+        self.assertTrue(
+            any("Fixed-port HTTP connect recovered" in call.args[0] for call in logger.warning.call_args_list)
+        )
+
+    def test_does_not_retry_non_address_in_use_connect_error(self):
+        from unittest.mock import Mock, patch
+
+        failure = OSError(10061, "connection refused")
+        fake_socket = Mock()
+        fake_socket.connect.side_effect = failure
+        with patch(
+            "src.core.broker_http.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
+        ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
+            "src.core.broker_http.time.sleep"
+        ) as sleep:
+            with self.assertRaises(OSError) as raised:
+                _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
+
+        self.assertIs(raised.exception, failure)
+        fake_socket.connect.assert_called_once_with(("127.0.0.1", 443))
+        sleep.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
