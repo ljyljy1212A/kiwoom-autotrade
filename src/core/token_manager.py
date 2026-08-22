@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import httpx
 from src.core.broker_http import BrokerHTTPGate, http_operation
+from src.core.rate_limit_observability import emit_rate_limit_event
 from src.utils.exceptions import FatalError, RetryableError
 
 
@@ -23,11 +24,25 @@ class Token:
 class TokenManager:
     """appkey/secretkey 로 접근토큰을 발급받고, 만료 전에 자동 재발급합니다."""
 
-    def __init__(self, domain: str, appkey: str, secretkey: str, logger, http_gate: BrokerHTTPGate | None = None):
+    def __init__(
+        self,
+        domain: str,
+        appkey: str,
+        secretkey: str,
+        logger,
+        http_gate: BrokerHTTPGate | None = None,
+        *,
+        account_id: str = "-",
+        market: str = "-",
+        mode: str = "-",
+    ):
         self.domain = domain.rstrip("/")
         self.appkey = appkey
         self.secretkey = secretkey
         self.logger = logger
+        self.account_id = account_id
+        self.market = market
+        self.mode = mode
         self.http_gate = http_gate or BrokerHTTPGate(None)
         self._token: Token | None = None
         # The first REST call and WebSocket login commonly happen together.
@@ -55,11 +70,24 @@ class TokenManager:
                 raise RetryableError(f"토큰 발급 네트워크 오류: {e}") from e
 
         if resp.status_code == 429:
-            self._next_issue_at = time.monotonic() + self._issue_backoff_sec
-            self.logger.warning(
-                f"Token issuance rate-limited; cooling down for {self._issue_backoff_sec:.0f}s before retry"
+            cooldown = self._issue_backoff_sec
+            self._next_issue_at = time.monotonic() + cooldown
+            emit_rate_limit_event(
+                self.logger,
+                market=self.market,
+                mode=self.mode,
+                account_id=self.account_id,
+                appkey=self.appkey,
+                api_id="au10001",
+                return_code=resp.status_code,
+                error_text=resp.text,
+                trigger="token_backoff",
+                cooldown_sec=cooldown,
             )
-            self._issue_backoff_sec = min(self._issue_backoff_sec * 2, 300.0)
+            self.logger.warning(
+                f"Token issuance rate-limited; cooling down for {cooldown:.0f}s before retry"
+            )
+            self._issue_backoff_sec = min(cooldown * 2, 300.0)
             raise RetryableError(f"Token issuance rate-limited (429): {resp.text}")
         if resp.status_code >= 500:
             raise RetryableError(f"토큰 발급 서버 오류: {resp.status_code}")

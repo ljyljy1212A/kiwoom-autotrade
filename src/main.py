@@ -284,7 +284,7 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
 def _balance_monitor_sleep_seconds(monitor) -> float:
     if monitor.calendar.session_name_now() != "CLOSED":
         return monitor.poll_interval_sec
-    return min(60.0, _seconds_until_next_regular_open(monitor.calendar))
+    return min(180.0, _seconds_until_next_regular_open(monitor.calendar))
 
 
 def _seconds_until_next_regular_open(calendar) -> float:

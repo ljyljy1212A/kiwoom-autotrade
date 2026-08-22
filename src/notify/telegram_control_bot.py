@@ -11,8 +11,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from src.core.control_state import (
+    PAUSE_CLEAR_REASONS,
     read_auto_trading_enabled,
     write_control_state,
+    write_pause_clear_event,
     write_reconciliation_clear_event,
 )
 from src.core.runtime_paths import DATA_DIR
@@ -125,6 +127,18 @@ class TelegramControlBot:
                 InlineKeyboardButton("No", callback_data=f"confirm|{account_id}|{action}|no"),
             ],
             [InlineKeyboardButton("Clear reconciliation pause", callback_data=f"clear_reconciliation_pause|{account_id}")],
+            [InlineKeyboardButton(
+                "Clear quantity-attribution pause",
+                callback_data=f"clear_pause|{account_id}|broker_quantity_unattributed",
+            )],
+            [InlineKeyboardButton(
+                "Clear tranche-rebuild pause",
+                callback_data=f"clear_pause|{account_id}|tranche_rebuild_ambiguous",
+            )],
+            [InlineKeyboardButton(
+                "Clear external-balance pause",
+                callback_data=f"clear_pause|{account_id}|external_broker_balance_change",
+            )],
             [InlineKeyboardButton("Back", callback_data=f"acct|{account_id}")],
         ]
         return InlineKeyboardMarkup(rows)
@@ -192,6 +206,30 @@ class TelegramControlBot:
                 await self._safe_edit_text(
                     query,
                     f"Requested reconciliation-pause clear for {account_id}.",
+                    reply_markup=self._account_markup(account_id),
+                )
+            elif kind == "clear_pause" and len(parts) >= 3:
+                account_id, reason = parts[1], parts[2]
+                if reason not in PAUSE_CLEAR_REASONS:
+                    await self._safe_edit_text(
+                        query,
+                        f"Unsupported pause-clear reason for {account_id}.",
+                        reply_markup=self._account_markup(account_id),
+                    )
+                    return
+                try:
+                    write_pause_clear_event(account_id, reason, updated_by="telegram", data_dir=DATA_DIR)
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(f"Telegram pause clear write failed for {account_id}; continuing: {exc}")
+                    await self._safe_edit_text(
+                        query,
+                        f"Failed to persist pause clear for {account_id}.",
+                        reply_markup=self._account_markup(account_id),
+                    )
+                    return
+                await self._safe_edit_text(
+                    query,
+                    f"Requested {reason} clear for {account_id}.",
                     reply_markup=self._account_markup(account_id),
                 )
             elif kind == "confirm" and len(parts) >= 4:

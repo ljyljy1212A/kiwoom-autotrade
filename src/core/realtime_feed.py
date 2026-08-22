@@ -121,9 +121,9 @@ class KiwoomRealtimeFeed:
         if self.client.mode != "mock":
             return None
         if self.client.market == "KR":
-            return 10000
+            return 10001
         if self.client.market == "US":
-            return 443
+            return 10002
         return None
 
     async def _prebound_ws_socket(self) -> socket.socket | None:

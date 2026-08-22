@@ -113,7 +113,12 @@ class TradeLedgerStore:
         return self._pending_from_row(row) if row else None
 
     def pending_orders(self, symbol: str | None = None) -> list[PendingOrder]:
-        sql = "SELECT * FROM pending_orders WHERE account_id=? AND status='open'"
+        # A filled row with no durable quantity is a recoverable attribution
+        # invariant violation, not a completed order. Keep it in the fill
+        # polling set until the broker execution history supplies the fill.
+        sql = ("SELECT * FROM pending_orders WHERE account_id=? "
+               "AND (status='open' OR (status='filled' AND filled_qty<=0) "
+               "OR status='awaiting_execution_history')")
         args: list[str] = [self.account_id]
         if symbol:
             sql += " AND symbol=?"
@@ -212,7 +217,9 @@ class TradeLedgerStore:
 
     def execution_recovery_orders(self, symbol: str | None = None) -> list[PendingOrder]:
         """Return open and terminal-but-unconfirmed orders for REST matching."""
-        sql = "SELECT * FROM pending_orders WHERE account_id=? AND status IN ('open','awaiting_execution_history')"
+        sql = ("SELECT * FROM pending_orders WHERE account_id=? "
+               "AND (status IN ('open','awaiting_execution_history') "
+               "OR (status='filled' AND filled_qty<=0))")
         args: list[str] = [self.account_id]
         if symbol:
             sql += " AND symbol=?"
@@ -223,7 +230,8 @@ class TradeLedgerStore:
         """True for any order that still needs broker fill attribution."""
         row = self.db.execute(
             "SELECT 1 FROM pending_orders WHERE account_id=? AND symbol=? "
-            "AND status IN ('open','awaiting_execution_history') LIMIT 1",
+            "AND (status IN ('open','awaiting_execution_history') "
+            "OR (status='filled' AND filled_qty<=0)) LIMIT 1",
             (self.account_id, symbol),
         ).fetchone()
         return row is not None

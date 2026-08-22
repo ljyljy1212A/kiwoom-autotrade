@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sqlite3
+import threading
 import uuid
 import weakref
 from contextlib import asynccontextmanager
@@ -26,6 +27,7 @@ from src.core.runtime_paths import DATA_DIR
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, RetryableError
+from src.core.rate_limit_observability import emit_rate_limit_event
 
 
 class _AccountBalanceGate:
@@ -47,7 +49,7 @@ class _AccountBalanceGate:
         self.balance_not_before = 0.0
         self.balance_backoff_sec = 5.0
         self.reconciliation_failure_count = 0
-        self.reconciliation_clear_event_id = ""
+        self.pause_clear_event_id = ""
         self.reconciliation_mode = "off"
         self.reconciliation_failure_threshold = 3
         self.session_failure_ceiling = 3
@@ -68,6 +70,7 @@ class _AccountBalanceGate:
 
 
 _ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
+_TRANCHE_BASES_WRITE_LOCK = threading.RLock()
 _STARTUP_BACKUP_ACCOUNTS: set[str] = set()
 
 
@@ -106,6 +109,7 @@ class AccountEngine:
         self.calendar = MarketCalendar(market=ctx.client.market)
         self._buying_paused = False
         self._trading_paused = False
+        self._pause_reason = ""
         self._tranche_sell_paused = False
         # Starting the program must be safe: monitoring/synchronization runs by
         # default, but no strategy intent can reach the broker without opt-in.
@@ -159,9 +163,13 @@ class AccountEngine:
         self._balance_gate = _balance_gate(ctx.account_id)
         self._balance_gate.configure_reconciliation(getattr(ctx, "reconciliation_fail_closed", None))
         initial_state = read_control_state(ctx.account_id, self.data_dir) or {}
-        initial_event = initial_state.get("reconciliation_clear_event")
+        initial_event = initial_state.get("pause_clear_event")
+        if not isinstance(initial_event, dict):
+            legacy_event = initial_state.get("reconciliation_clear_event")
+            if isinstance(legacy_event, dict):
+                initial_event = {**legacy_event, "reason": "broker_reconciliation_unavailable"}
         if isinstance(initial_event, dict):
-            self._balance_gate.reconciliation_clear_event_id = str(initial_event.get("event_id", ""))
+            self._balance_gate.pause_clear_event_id = str(initial_event.get("event_id", ""))
         self._balance_gate.engines.add(self)
         # A passive account monitor publishes broker holdings only. It must not
         # open, initialize, or mutate the confirmed-fill ledger.
@@ -188,6 +196,8 @@ class AccountEngine:
         except (OSError, json.JSONDecodeError):
             self._symbol_lifecycles: dict[str, dict] = {}
         self._lifecycle_pending_adoption = False
+        self._lifecycle_activation_lock = threading.RLock()
+        self._manual_lifecycle_adoptions = 0
         self._orphan_cleaner = OrphanStateCleaner(ctx.account_id, data_dir=self.data_dir, logger=ctx.logger)
         self._sync_lock = asyncio.Lock()
         self._sync_task: asyncio.Task | None = None
@@ -541,9 +551,10 @@ class AccountEngine:
         fingerprint = json.dumps(config, sort_keys=True, separators=(",", ":"))
         lifecycle_state = self._symbol_lifecycles.get(symbol, {})
         lifecycle_is_open = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "open"
+        lifecycle_is_pending = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "pending"
         if (symbol != self.ctx.strategy.symbol.lstrip("A")
                 or fingerprint != self._dashboard_config_fingerprint
-                or not lifecycle_is_open):
+                or (not lifecycle_is_open and not lifecycle_is_pending)):
             try:
                 strategy = InfiniteGridStrategy(config)
             except (KeyError, TypeError, ValueError) as exc:
@@ -777,6 +788,18 @@ class AccountEngine:
                 except KiwoomAPIError as exc:
                     if "429" not in str(exc) and "1700" not in str(exc):
                         raise
+                    emit_rate_limit_event(
+                        self.ctx.logger,
+                        market=self.ctx.client.market,
+                        mode=self.ctx.client.mode,
+                        account_id=self.ctx.account_id,
+                        appkey=self.ctx.client.token_mgr.appkey,
+                        api_id=exc.api_id,
+                        return_code=exc.return_code,
+                        error_text=str(exc),
+                        trigger="balance_reconciliation_deferred",
+                        cooldown_sec=self._balance_gate.balance_backoff_sec,
+                    )
                     self._record_balance_rate_limit()
                     self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
                     return False
@@ -804,6 +827,17 @@ class AccountEngine:
                     self._balance_gate.last_execution_request_at = completed_at
                     self._last_execution_query_at = completed_at
                     if exc.api_id == "ka10076" and ("429" in str(exc) or "1700" in str(exc)):
+                        emit_rate_limit_event(
+                            self.ctx.logger,
+                            market=self.ctx.client.market,
+                            mode=self.ctx.client.mode,
+                            account_id=self.ctx.account_id,
+                            appkey=self.ctx.client.token_mgr.appkey,
+                            api_id=exc.api_id,
+                            return_code=exc.return_code,
+                            error_text=str(exc),
+                            trigger="balance_reconciliation_deferred",
+                        )
                         self.ctx.logger.warning("ka10076 rate-limited; fill reconciliation deferred to the next poll")
                         data = None
                     elif exc.api_id == "ust21150" and getattr(exc, "return_code", None) in (7, "7"):
@@ -849,6 +883,18 @@ class AccountEngine:
                     # Quota exhaustion is transient. Keep this symbol's
                     # prior broker-confirmed state and retry on the next
                     # normal reconciliation without an exception traceback.
+                    emit_rate_limit_event(
+                        self.ctx.logger,
+                        market=self.ctx.client.market,
+                        mode=self.ctx.client.mode,
+                        account_id=self.ctx.account_id,
+                        appkey=self.ctx.client.token_mgr.appkey,
+                        api_id=exc.api_id,
+                        return_code=exc.return_code,
+                        error_text=str(exc),
+                        trigger="balance_reconciliation_deferred",
+                        cooldown_sec=self._balance_gate.balance_backoff_sec,
+                    )
                     self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
                     self._record_balance_rate_limit()
                     return False
@@ -884,16 +930,24 @@ class AccountEngine:
 
     def _apply_reconciliation_clear_event(self) -> None:
         state = read_control_state(self.ctx.account_id, getattr(self, "data_dir", DATA_DIR)) or {}
-        event = state.get("reconciliation_clear_event")
+        event = state.get("pause_clear_event")
+        if not isinstance(event, dict):
+            legacy_event = state.get("reconciliation_clear_event")
+            if isinstance(legacy_event, dict):
+                event = {**legacy_event, "reason": "broker_reconciliation_unavailable"}
         event_id = event.get("event_id") if isinstance(event, dict) else ""
-        if not event_id or event_id == self._balance_gate.reconciliation_clear_event_id:
+        reason = str(event.get("reason", "")) if isinstance(event, dict) else ""
+        if not event_id or not reason or event_id == self._balance_gate.pause_clear_event_id:
             return
-        self._balance_gate.reconciliation_clear_event_id = event_id
+        self._balance_gate.pause_clear_event_id = event_id
         for engine in list(self._balance_gate.engines):
-            if engine._pause_reason == "broker_reconciliation_unavailable":
-                engine._trading_paused = False
-                engine._pause_reason = ""
-        self.ctx.logger.info("Applied operator clear for broker_reconciliation_unavailable")
+            if engine._pause_reason != reason:
+                continue
+            engine._trading_paused = False
+            if reason in {"broker_quantity_unattributed", "tranche_rebuild_ambiguous"}:
+                engine._tranche_sell_paused = False
+            engine._pause_reason = ""
+        self.ctx.logger.info(f"Applied operator clear for {reason}")
 
     def _record_balance_rate_limit(self) -> None:
         """Apply one shared exponential cooldown to all tasks on this account."""
@@ -915,6 +969,10 @@ class AccountEngine:
         # an accepted order, an unfilled row must not block a symbol forever.
         # Confirmed fills are never touched because their status is ``filled``.
         for order in self.ledger.execution_recovery_orders(self.ctx.strategy.symbol):
+            # A malformed terminal row must be recovered from execution
+            # history, but must never be sent to the broker cancellation path.
+            if order.status == "filled":
+                continue
             try:
                 created_at = datetime.fromisoformat(order.created_at)
             except ValueError:
@@ -952,6 +1010,19 @@ class AccountEngine:
                 completed_at = asyncio.get_running_loop().time()
                 self._balance_gate.last_cancel_request_at = completed_at
                 self._last_cancel_request_at = completed_at
+                error_text = str(exc)
+                if any(code in error_text for code in ("429", "1700", "1701", "1702")):
+                    emit_rate_limit_event(
+                        self.ctx.logger,
+                        market=self.ctx.client.market,
+                        mode=self.ctx.client.mode,
+                        account_id=self.ctx.account_id,
+                        appkey=self.ctx.client.token_mgr.appkey,
+                        api_id=getattr(exc, "api_id", None),
+                        return_code=getattr(exc, "return_code", None),
+                        error_text=error_text,
+                        trigger="cancellation_deferred",
+                    )
                 if "RC4033" in str(exc) or "RC4032" in str(exc):
                     # Neither response proves an unfilled order. Preserve it
                     # for matching against delayed execution history across
@@ -1095,20 +1166,35 @@ class AccountEngine:
     def _begin_manual_lifecycle_activation(self, symbol: str) -> None:
         """Create a fresh boundary before adopting an HTS manual holding."""
         symbol = str(symbol).upper().lstrip("A")
-        now = datetime.now(timezone.utc).isoformat()
-        self._symbol_lifecycles[symbol] = {"status": "pending", "started_at": now, "activated_at": now}
-        self.ledger.set_lifecycle_started_at(now)
-        self._lifecycle_pending_adoption = True
-        self._write_lifecycles()
+        with self._lifecycle_activation_lock:
+            existing = self._symbol_lifecycles.get(symbol)
+            if isinstance(existing, dict) and existing.get("status") == "pending" and existing.get("started_at"):
+                # Dashboard refreshes and the first balance sync can interleave.
+                # Reusing the pending boundary keeps one activation identity and
+                # prevents the broker snapshot from being classified as external.
+                self.ledger.set_lifecycle_started_at(str(existing["started_at"]))
+                self._lifecycle_pending_adoption = True
+                return
+            now = datetime.now(timezone.utc).isoformat()
+            self._symbol_lifecycles[symbol] = {
+                "status": "pending", "started_at": now, "activated_at": now,
+                "activation_id": uuid.uuid4().hex,
+            }
+            self.ledger.set_lifecycle_started_at(now)
+            self._lifecycle_pending_adoption = True
+            self._write_lifecycles()
 
-    def _adopt_manual_lifecycle(self, symbol: str, qty: float, avg_price: float) -> None:
+    def _adopt_manual_lifecycle(self, symbol: str, qty: float, avg_price: float) -> bool:
         """Initialize tranche 1 solely from the activation-time broker snapshot."""
         symbol = str(symbol).upper().lstrip("A")
         state = self._symbol_lifecycles.get(symbol, {})
+        if isinstance(state, dict) and state.get("status") == "open":
+            return False
         started_at = str(state.get("started_at") or datetime.now(timezone.utc).isoformat())
         self._symbol_lifecycles[symbol] = {
             "status": "open", "started_at": started_at,
             "activated_at": state.get("activated_at", started_at),
+            "activation_id": state.get("activation_id", uuid.uuid4().hex),
             "manual_qty": float(qty), "manual_price": float(avg_price),
         }
         self.ledger.set_lifecycle_started_at(started_at)
@@ -1122,9 +1208,11 @@ class AccountEngine:
         )
         self._store_tranche_base(symbol, float(avg_price))
         self._write_lifecycles()
+        self._manual_lifecycle_adoptions += 1
         self.ctx.logger.info(
             f"Manual tranche 1 adopted at lifecycle activation: {symbol} qty={qty:g}, price={avg_price:g}"
         )
+        return True
 
     def _refresh_open_lifecycle_manual_basis(self, symbol: str, qty: float, price: float) -> None:
         """Persist a manual lot only when no manual lot has been adopted yet.
@@ -1176,23 +1264,72 @@ class AccountEngine:
             self._update_position(intent, side)
             self.ctx.strategy.on_filled(action, row["step"], int(row["qty"]), row["price"])
 
-    def _store_tranche_base(self, symbol: str, price: float) -> None:
+    def _store_tranche_base(
+        self, symbol: str, price: float, *, only_if_absent: bool = False
+    ) -> None:
         """Persist a validated tranche-1 basis so a stale value cannot return."""
         symbol = str(symbol).upper().lstrip("A")
         price = float(price)
-        if price <= 0 or self._tranche_bases.get(symbol) == price:
+        if price <= 0:
             return
-        self._tranche_bases[symbol] = price
         try:
-            self._tranche_bases_path.parent.mkdir(exist_ok=True)
-            temp_path = self._tranche_bases_path.with_suffix(".json.tmp")
-            temp_path.write_text(json.dumps(self._tranche_bases, ensure_ascii=False), encoding="utf-8")
-            temp_path.replace(self._tranche_bases_path)
+            with _TRANCHE_BASES_WRITE_LOCK:
+                try:
+                    latest = json.loads(
+                        self._tranche_bases_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError):
+                    latest = {}
+                if not isinstance(latest, dict):
+                    latest = {}
+                if only_if_absent and symbol in latest:
+                    self._tranche_bases = latest
+                    return
+                if not only_if_absent and latest.get(symbol) == price:
+                    self._tranche_bases = latest
+                    return
+                latest[symbol] = price
+                self._tranche_bases_path.parent.mkdir(exist_ok=True)
+                temp_path = self._tranche_bases_path.with_name(
+                    f"{self._tranche_bases_path.name}.{uuid.uuid4().hex}.tmp"
+                )
+                temp_path.write_text(
+                    json.dumps(latest, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                temp_path.replace(self._tranche_bases_path)
+                self._tranche_bases = latest
         except OSError as exc:
             # The in-memory recovery result remains safe even if persistence is
             # temporarily unavailable; never let a cache-write issue affect the
             # broker reconciliation path.
             self.ctx.logger.warning(f"Could not persist validated tranche base for {symbol}: {exc}")
+
+    def _remove_tranche_base(self, symbol: str) -> None:
+        symbol = str(symbol).upper().lstrip("A")
+        try:
+            with _TRANCHE_BASES_WRITE_LOCK:
+                try:
+                    latest = json.loads(
+                        self._tranche_bases_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError):
+                    latest = {}
+                if not isinstance(latest, dict):
+                    latest = {}
+                latest.pop(symbol, None)
+                self._tranche_bases_path.parent.mkdir(exist_ok=True)
+                temp_path = self._tranche_bases_path.with_name(
+                    f"{self._tranche_bases_path.name}.{uuid.uuid4().hex}.tmp"
+                )
+                temp_path.write_text(
+                    json.dumps(latest, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                temp_path.replace(self._tranche_bases_path)
+                self._tranche_bases = latest
+        except OSError as exc:
+            self.ctx.logger.warning(f"Could not remove tranche base for {symbol}: {exc}")
 
     def _validated_manual_tranche_base(
         self, symbol: str, broker_qty: float, broker_avg: float,
@@ -1284,17 +1421,16 @@ class AccountEngine:
                 quantities, balance_recognized, self._has_unresolved_order_for_cleanup, apply=True,
             )
             return
-        bases_changed = False
         for broker_holding in broker_holdings:
             symbol = broker_holding["symbol"]
-            if symbol not in self._tranche_bases and broker_holding["avgPrice"] > 0:
+            if broker_holding["avgPrice"] > 0:
                 # Capture the original broker cost once. Later grid fills alter
                 # account average cost, but must never rewrite tranche 1.
-                self._tranche_bases[symbol] = broker_holding["avgPrice"]
-                bases_changed = True
-        if bases_changed:
-            self._tranche_bases_path.parent.mkdir(exist_ok=True)
-            self._tranche_bases_path.write_text(json.dumps(self._tranche_bases), encoding="utf-8")
+                self._store_tranche_base(
+                    symbol,
+                    broker_holding["avgPrice"],
+                    only_if_absent=True,
+                )
         if self.ctx.client.market == "US":
             holding_row = next((item for item in broker_holdings
                                 if _same_symbol(item["symbol"], self.ctx.strategy.symbol)), None)
@@ -1372,6 +1508,16 @@ class AccountEngine:
             self.ctx.strategy.step_qty.clear()
             self.ctx.strategy.step_prices.clear()
             self.ctx.position = PositionState(symbol=self.ctx.strategy.symbol)
+            # OrphanStateCleaner persists the closed marker in another read of
+            # the lifecycle file. Refresh this engine's in-memory copy too;
+            # otherwise re-enabling the same symbol can incorrectly reuse the
+            # old open activation identity.
+            current = self._symbol_lifecycles.get(symbol_key, {})
+            self._symbol_lifecycles[symbol_key] = {
+                "status": "closed",
+                "started_at": current.get("started_at") if isinstance(current, dict) else None,
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+            }
             self._prepare_lifecycle_scope(symbol_key)
             self.ctx.logger.info(f"Automatic orphan cleanup completed for {symbol_key}: {current_orphan.get('removed', [])}")
             return
@@ -1417,6 +1563,7 @@ class AccountEngine:
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
             self._trading_paused = True
+            self._pause_reason = "broker_quantity_unattributed"
             self.ctx.logger.info(
                 f"Complete zero balance observed for {symbol_key}; orphan cleanup confirmation "
                 f"{current_orphan.get('zeroConfirmations', 0)}/2"
@@ -1466,24 +1613,23 @@ class AccountEngine:
                     total = sum(float(row.get("qty", 0)) for row in buys)
                     weighted = sum(float(row.get("qty", 0)) * float(row.get("price", 0)) for row in buys)
                     open_rows.append((step, min(float(open_qty), total), weighted / total if total else avg_price))
+            remaining = float(qty)
+            if not any(step == 1 for step, _, _ in open_rows) and remaining > 0:
+                confirmed_steps = [step for step, _, _ in open_rows]
+                message = (
+                    f"Ambiguous tranche rebuild for {self.ctx.strategy.symbol}: "
+                    f"broker_qty={qty:g}, known_qty={known_tranche_qty:g}, "
+                    f"confirmed_steps={confirmed_steps}; automated orders paused"
+                )
+                self._trading_paused = True
+                self._tranche_sell_paused = True
+                self._pause_reason = "tranche_rebuild_ambiguous"
+                self.ctx.logger.error(message)
+                await self.telegram.notify_error(message)
+                return
             self.ctx.strategy.step_qty.clear()
             self.ctx.strategy.step_prices.clear()
             self.ctx.position = PositionState(symbol=self.ctx.strategy.symbol)
-            remaining = float(qty)
-            if not any(step == 1 for step, _, _ in open_rows) and remaining > 0:
-                manual_qty = min(1.0, remaining)
-                self.ctx.strategy.step_qty[1] = int(manual_qty)
-                # A single remaining broker share is the current manual/HTS
-                # holding after the previous cycle closed. Validate any saved
-                # basis against the broker position plus the confirmed newer
-                # lots before using it; a base cached for an older lifecycle
-                # cannot be allowed to alter the reconstructed grid.
-                manual_price = self._validated_manual_tranche_base(
-                    self.ctx.strategy.symbol, qty, avg_price, open_rows, manual_qty
-                )
-                self._refresh_open_lifecycle_manual_basis(self.ctx.strategy.symbol, manual_qty, manual_price)
-                self.ctx.strategy.step_prices[1] = manual_price
-                remaining -= manual_qty
             for step, open_qty, price in open_rows:
                 if remaining <= 0:
                     break
@@ -1572,6 +1718,7 @@ class AccountEngine:
             # known tranche map and require reconciliation before resuming.
             self._tranche_sell_paused = True
             self._trading_paused = True
+            self._pause_reason = "broker_quantity_unattributed"
             self.ctx.logger.error(
                 f"Broker quantity changed without tranche attribution for {self.ctx.strategy.symbol}; "
                 "all automated orders paused to protect tranche-only quantities"
@@ -1603,6 +1750,7 @@ class AccountEngine:
                 )
             else:
                 self._trading_paused = True
+                self._pause_reason = "external_broker_balance_change"
                 msg = (f"Broker balance adopted: qty={qty}, avg={avg_price}; "
                        "automated orders paused because the position changed outside this program")
                 self.ctx.logger.error(msg)
@@ -1717,9 +1865,7 @@ class AccountEngine:
         except (OSError, json.JSONDecodeError, TypeError):
             pass
 
-        self._tranche_bases.pop(symbol, None)
-        self._tranche_bases_path.parent.mkdir(exist_ok=True)
-        self._tranche_bases_path.write_text(json.dumps(self._tranche_bases, ensure_ascii=False), encoding="utf-8")
+        self._remove_tranche_base(symbol)
         self._closure_absence_confirmations.pop(symbol, None)
         self._closure_absence_path.write_text(
             json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
@@ -1839,7 +1985,9 @@ class AccountEngine:
 
     def pause_buying(self): self._buying_paused = True
     def resume_buying(self): self._buying_paused = False
-    def resume_trading(self): self._trading_paused = False
+    def resume_trading(self):
+        self._trading_paused = False
+        self._pause_reason = ""
 
     def _heartbeat(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)

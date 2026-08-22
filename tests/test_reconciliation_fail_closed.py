@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from src.core.control_state import write_reconciliation_clear_event
+from src.core.control_state import write_pause_clear_event, write_reconciliation_clear_event
 from src.core.engine import AccountEngine, _AccountBalanceGate
 from src.utils.exceptions import RetryableError
 
@@ -16,6 +16,7 @@ def _engine(account, symbol, data_dir, reason=""):
     engine.data_dir = Path(data_dir)
     engine._trading_paused = bool(reason)
     engine._pause_reason = reason
+    engine._tranche_sell_paused = False
     engine._balance_gate = _AccountBalanceGate()
     engine._balance_gate.configure_reconciliation({
         "mode": "manual",
@@ -90,6 +91,48 @@ def test_persisted_clear_clears_only_reconciliation_pause(tmp_path):
     first._apply_reconciliation_clear_event()
     assert first._pause_reason == ""
     assert second._pause_reason == "broker_quantity_unattributed"
+
+
+def test_reason_scoped_clear_clears_matching_engines_only(tmp_path):
+    first = _engine("kr_mock", "033320", tmp_path, reason="broker_quantity_unattributed")
+    second = _engine("kr_mock", "003480", tmp_path, reason="tranche_rebuild_ambiguous")
+    third = _engine("kr_mock", "005930", tmp_path, reason="external_broker_balance_change")
+    first._tranche_sell_paused = True
+    second._tranche_sell_paused = True
+    gate = _AccountBalanceGate()
+    first._balance_gate = second._balance_gate = third._balance_gate = gate
+    gate.engines.update({first, second, third})
+
+    write_pause_clear_event("kr_mock", "tranche_rebuild_ambiguous", data_dir=tmp_path)
+    first._apply_reconciliation_clear_event()
+
+    assert first._pause_reason == "broker_quantity_unattributed"
+    assert first._trading_paused is True
+    assert second._pause_reason == ""
+    assert second._trading_paused is False
+    assert second._tranche_sell_paused is False
+    assert third._pause_reason == "external_broker_balance_change"
+    assert third._trading_paused is True
+
+
+def test_legacy_reconciliation_event_is_inferred(tmp_path):
+    engine = _engine("kr_mock", "033320", tmp_path, reason="broker_reconciliation_unavailable")
+    control_path = tmp_path / "control" / "kr_mock.control.json"
+    control_path.parent.mkdir()
+    control_path.write_text(
+        '{"account":"kr_mock","reconciliation_clear_event":{"event_id":"legacy-1"}}',
+        encoding="utf-8",
+    )
+
+    engine._apply_reconciliation_clear_event()
+
+    assert engine._pause_reason == ""
+    assert engine._trading_paused is False
+
+
+def test_pause_clear_writer_rejects_unknown_reason(tmp_path):
+    with unittest.TestCase().assertRaises(ValueError):
+        write_pause_clear_event("kr_mock", "not_a_pause_reason", data_dir=tmp_path)
 
 
 class SyncBrokerStateIntegrationTests(unittest.IsolatedAsyncioTestCase):

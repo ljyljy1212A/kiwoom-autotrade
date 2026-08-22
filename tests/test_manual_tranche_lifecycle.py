@@ -18,7 +18,7 @@ import src.core.engine as engine_module
 from src.core.account_manager import AccountContext
 from src.core.engine import AccountEngine
 from src.data.trade_ledger import PendingOrder
-from src.strategy.base import Action, MarketSnapshot, PositionState
+from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
 
 
@@ -57,6 +57,9 @@ class _Client:
 
 
 class _Notifier:
+    async def notify_order(self, *_args):
+        return None
+
     async def notify_fill(self, *_args):
         return None
 
@@ -75,6 +78,159 @@ class _Logger:
 
 
 class ManualTrancheLifecycleTest(unittest.TestCase):
+    def test_repeated_dashboard_refresh_keeps_one_pending_activation(self):
+        """Refreshes before the first balance must not replace the adoption boundary."""
+        async def scenario():
+            client = _Client()
+            cfg = _config()
+            account = "kr_pending_activation_race_test"
+            ctx = AccountContext(
+                account_id=account, display_name="pending activation race", client=client,
+                strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                                   lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
+            engine._auto_trading_enabled = True
+            engine.balance_min_interval_sec = 0
+            try:
+                Path(f"data/dashboard_settings_{account}.json").write_text(
+                    json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8"
+                )
+                Path(f"data/dashboard_control_{account}_000490.json").write_text(
+                    json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
+                    encoding="utf-8",
+                )
+                engine._refresh_dashboard_controls()
+                first = engine._symbol_lifecycles["000490"]["started_at"]
+                engine._refresh_dashboard_controls()
+                self.assertEqual(engine._symbol_lifecycles["000490"]["started_at"], first)
+                await engine.sync_broker_state(force_balance=True)
+                self.assertFalse(engine._trading_paused)
+                self.assertEqual(ctx.strategy.step_qty, {1: 1})
+            finally:
+                engine.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
+    def test_immediate_t2_trigger_submits_exactly_one_order(self):
+        async def scenario():
+            class OrderClient(_Client):
+                def __init__(self):
+                    super().__init__()
+                    self.submissions = []
+
+                async def place_order(self, **kwargs):
+                    self.submissions.append(dict(kwargs))
+                    return SimpleNamespace(ord_no="T2-ACCEPTED")
+
+            client = OrderClient()
+            cfg = _config()
+            account = "kr_exactly_one_t2_order_test"
+            ctx = AccountContext(
+                account_id=account, display_name="one T2 order", client=client,
+                strategy=InfiniteGridStrategy(cfg),
+                risk_manager=SimpleNamespace(approve=lambda *_args: (True, "")), dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                                   lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
+            engine.balance_min_interval_sec = 0
+            try:
+                Path(f"data/dashboard_settings_{account}.json").write_text(
+                    json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8"
+                )
+                Path(f"data/dashboard_control_{account}_000490.json").write_text(
+                    json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
+                    encoding="utf-8",
+                )
+                engine._refresh_dashboard_controls()
+                await engine.sync_broker_state(force_balance=True)
+                intent = OrderIntent(Action.BUY, "000490", 2, 9_900, meta={"step": 2})
+                await engine._handle_intent(intent, 9_900)
+                self.assertEqual(len(client.submissions), 1)
+                self.assertEqual(client.submissions[0]["qty"], 2)
+                self.assertEqual(client.submissions[0]["symbol"], "000490")
+            finally:
+                engine.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
+    def test_archive_reenable_adopts_fresh_lifecycle(self):
+        async def scenario():
+            client = _Client()
+            cfg = _config()
+            account = "kr_archive_reenable_test"
+            ctx = AccountContext(
+                account_id=account, display_name="archive re-enable", client=client,
+                strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                                   lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
+            engine.balance_min_interval_sec = 0
+            settings = Path(f"data/dashboard_settings_{account}.json")
+            control = Path(f"data/dashboard_control_{account}_000490.json")
+            lifecycle = Path(f"data/symbol_lifecycles_{account}.json")
+            try:
+                settings.write_text(json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8")
+                control.write_text(json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}), encoding="utf-8")
+                engine._refresh_dashboard_controls()
+                await engine.sync_broker_state(force_balance=True)
+                old_id = engine._symbol_lifecycles["000490"]["activation_id"]
+
+                client.qty = 0
+                engine._balance_gate.raw_balance = None
+                await engine.sync_broker_state(force_balance=True)
+                engine._balance_gate.raw_balance = None
+                await engine.sync_broker_state(force_balance=True)
+                archived_controls = list((Path("data") / "archive").rglob(f"dashboard_control_{account}_000490_*.json"))
+                self.assertTrue(archived_controls)
+                self.assertFalse(control.exists())
+                self.assertEqual(json.loads(settings.read_text(encoding="utf-8"))["profiles"], [])
+                self.assertEqual(json.loads(lifecycle.read_text(encoding="utf-8"))["000490"]["status"], "closed")
+
+                client.qty, client.avg = 2, 20_000
+                settings.write_text(json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8")
+                control.write_text(json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}), encoding="utf-8")
+                engine._refresh_dashboard_controls()
+                new_id = engine._symbol_lifecycles["000490"]["activation_id"]
+                await engine.sync_broker_state(force_balance=True)
+                self.assertNotEqual(new_id, old_id)
+                self.assertEqual(engine._symbol_lifecycles["000490"]["manual_qty"], 2.0)
+                self.assertEqual(engine._symbol_lifecycles["000490"]["activation_id"], new_id)
+            finally:
+                engine.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
     def test_sync_confirms_immediate_t2_before_balance_reconciliation(self):
         """A fill seen on the activation pass must be T2 before UI refresh."""
         async def scenario():
@@ -302,8 +458,8 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 engine_module.DATA_DIR = original_data_dir
                 os.chdir(previous)
 
-    def test_restart_preserves_manual_t1_sell_basis_after_later_partial_sell(self):
-        """A partial T3 exit must not turn Line 1 into the broker average."""
+    def test_restart_pauses_ambiguous_manual_t1_rebuild_after_later_partial_sell(self):
+        """Missing ledger-confirmed Line 1 provenance must fail closed on restart."""
         async def scenario():
             client = _Client()
             cfg = _config()
@@ -349,21 +505,10 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 restarted._refresh_dashboard_controls()
                 restarted._restore_from_ledger()
                 await restarted.sync_broker_state(force_balance=True)
-                self.assertEqual(ctx.strategy.step_qty[1], 1)
-                self.assertEqual(ctx.strategy.step_qty[2], 10)
-                self.assertEqual(ctx.strategy.step_qty.get(3, 0), 0)
-                self.assertEqual(ctx.position.step, 2)
-                self.assertEqual(ctx.strategy.step_prices[1], 10_000.0)
-                self.assertEqual(ctx.strategy.step_prices[2], 9_900.0)
-                target = ctx.strategy.sell_target_price(1)
-                self.assertEqual(target, 15_000.0)
-                intent = ctx.strategy.check_sell(
-                    MarketSnapshot("000490", 15_000.0, "t"),
-                    PositionState("000490", qty=11, avg_price=client.avg, step=1),
-                )
-                self.assertIsNotNone(intent)
-                self.assertEqual(intent.meta["step"], 1)
-                self.assertEqual(intent.qty, 1)
+                self.assertTrue(restarted._trading_paused)
+                self.assertEqual(restarted._pause_reason, "tranche_rebuild_ambiguous")
+                self.assertEqual(ctx.strategy.step_qty, {2: 20, 3: 0})
+                self.assertEqual(ctx.position.qty, 20.0)
             finally:
                 restarted.ledger.close()
 
@@ -433,6 +578,105 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 self.assertEqual(intent.meta["step"], 2)
             finally:
                 restarted.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
+    def test_mismatched_broker_quantity_stays_paused_with_reason(self):
+        async def scenario():
+            client = _Client()
+            cfg = _config()
+            account = "kr_mismatched_quantity_pause_test"
+            ctx = AccountContext(
+                account_id=account, display_name="mismatched quantity", client=client,
+                strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                                   lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
+            engine.balance_min_interval_sec = 0
+            try:
+                Path(f"data/dashboard_settings_{account}.json").write_text(
+                    json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8"
+                )
+                Path(f"data/dashboard_control_{account}_000490.json").write_text(
+                    json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
+                    encoding="utf-8",
+                )
+                engine._refresh_dashboard_controls()
+                await engine.sync_broker_state(force_balance=True)
+                order = PendingOrder("T2-MISMATCH", "000490", "BUY", 2, 9_900, "BUY", 2, {})
+                engine.ledger.add_pending(order)
+                await engine._apply_confirmed_fill(order, engine.ledger.record_fill(order, 2, 9_900, "2026-08-20"))
+                client.qty, client.avg = 4, 9_500  # expected 1 manual + 2 confirmed = 3
+                engine._balance_gate.raw_balance = None
+                await engine.sync_broker_state(force_balance=True)
+                self.assertTrue(engine._trading_paused)
+                self.assertEqual(engine._pause_reason, "broker_quantity_unattributed")
+            finally:
+                engine.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
+    def test_reentrant_three_way_activation_creates_one_adoption(self):
+        async def scenario():
+            client = _Client()
+            cfg = _config()
+            account = "kr_three_way_activation_race_test"
+            ctx = AccountContext(
+                account_id=account, display_name="three-way activation", client=client,
+                strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                                   lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
+            engine._auto_trading_enabled = True
+            engine.balance_min_interval_sec = 0
+            try:
+                Path(f"data/dashboard_settings_{account}.json").write_text(
+                    json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8"
+                )
+                Path(f"data/dashboard_control_{account}_000490.json").write_text(
+                    json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
+                    encoding="utf-8",
+                )
+                original_write = engine._write_lifecycles
+                reentered = False
+
+                def reentrant_write():
+                    nonlocal reentered
+                    if not reentered:
+                        reentered = True
+                        engine._refresh_dashboard_controls()
+                    original_write()
+
+                engine._write_lifecycles = reentrant_write
+                engine._refresh_dashboard_controls()
+                activation_id = engine._symbol_lifecycles["000490"]["activation_id"]
+                await engine.sync_broker_state(force_balance=True)
+                self.assertTrue(reentered)
+                self.assertEqual(engine._manual_lifecycle_adoptions, 1)
+                self.assertEqual({activation_id}, {engine._symbol_lifecycles["000490"]["activation_id"]})
+                self.assertFalse(engine._trading_paused)
+            finally:
+                engine.ledger.close()
 
         with tempfile.TemporaryDirectory() as directory:
             previous = os.getcwd()

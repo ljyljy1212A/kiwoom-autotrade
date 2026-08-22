@@ -150,6 +150,46 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query.message.edits, [])
         self.assertFalse(query.answered)
 
+    async def test_authorized_reason_scoped_clear_writes_allowlisted_event(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with patch.object(bot_module, "DATA_DIR", data_dir):
+                query = _CallbackQuery("clear_pause|kr_mock|tranche_rebuild_ambiguous")
+                update = SimpleNamespace(
+                    effective_chat=SimpleNamespace(id=111),
+                    effective_message=query.message,
+                    callback_query=query,
+                )
+
+                await bot._handle_callback(update, SimpleNamespace())
+
+                payload = json.loads(
+                    (data_dir / "control" / "kr_mock.control.json").read_text(encoding="utf-8")
+                )
+
+        self.assertEqual(payload["pause_clear_event"]["reason"], "tranche_rebuild_ambiguous")
+        self.assertTrue(query.answered)
+
+    async def test_invalid_reason_callback_does_not_write(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with patch.object(bot_module, "DATA_DIR", data_dir):
+                query = _CallbackQuery("clear_pause|kr_mock|not_allowed")
+                update = SimpleNamespace(
+                    effective_chat=SimpleNamespace(id=111),
+                    effective_message=query.message,
+                    callback_query=query,
+                )
+
+                await bot._handle_callback(update, SimpleNamespace())
+
+        self.assertFalse((data_dir / "control" / "kr_mock.control.json").exists())
+        self.assertTrue(query.answered)
+
 
 if __name__ == "__main__":
     unittest.main()

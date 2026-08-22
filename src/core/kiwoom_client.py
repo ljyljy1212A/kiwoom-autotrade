@@ -18,6 +18,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from src.core.broker_http import BrokerHTTPGate, http_operation
 from src.core.token_manager import TokenManager
+from src.core.rate_limit_observability import emit_rate_limit_event
 from src.core.process_lock import AccountOrderAuthority
 from src.core.us_market import normalize_us_symbol, validate_us_order
 from src.utils.exceptions import (
@@ -110,7 +111,16 @@ class KiwoomClient:
         self._order_authority = order_authority
         http_port = 10000 if mode == "mock" and market == "KR" else 443 if mode == "mock" and market == "US" else None
         self._http_gate = BrokerHTTPGate(http_port, logger)
-        self.token_mgr = TokenManager(self.domain, appkey, secretkey, logger, self._http_gate)
+        self.token_mgr = TokenManager(
+            self.domain,
+            appkey,
+            secretkey,
+            logger,
+            self._http_gate,
+            account_id=account_no,
+            market=market,
+            mode=mode,
+        )
         self._quote_min_interval_sec = max(0.5, float(os.environ.get("KIWOOM_REST_QUOTE_MIN_INTERVAL_SEC", "2.0")))
         self._order_min_interval_sec = max(
             0.0,
@@ -427,7 +437,19 @@ class KiwoomClient:
             except RetryableError:
                 # Network/5xx failures should pause briefly too; retries are
                 # already bounded inside _post and must not turn into tick spam.
-                gate.not_before = max(gate.not_before, time.monotonic() + min(gate.backoff_sec, self._quote_circuit_sec))
+                cooldown = min(gate.backoff_sec, self._quote_circuit_sec)
+                gate.not_before = max(gate.not_before, time.monotonic() + cooldown)
+                emit_rate_limit_event(
+                    self.logger,
+                    market=self.market,
+                    mode=self.mode,
+                    account_id=self.account_no,
+                    appkey=self.token_mgr.appkey,
+                    api_id=None,
+                    error_text="",
+                    trigger="retryable_backoff",
+                    cooldown_sec=cooldown,
+                )
                 raise
             else:
                 gate.consecutive_symbol_errors = 0
@@ -446,6 +468,18 @@ class KiwoomClient:
             gate.backoff_sec = min(cooldown * 2, 300.0)
             gate.consecutive_symbol_errors = 0
             if self.logger:
+                emit_rate_limit_event(
+                    self.logger,
+                    market=self.market,
+                    mode=self.mode,
+                    account_id=self.account_no,
+                    appkey=self.token_mgr.appkey,
+                    api_id=exc.api_id,
+                    return_code=exc.return_code,
+                    error_text=message,
+                    trigger="http_429" if str(exc.return_code) == "429" else "quota_1700",
+                    cooldown_sec=cooldown,
+                )
                 self.logger.warning(f"Quote quota circuit opened for {cooldown:g}s after {exc.api_id}: {exc}")
             return
         # A repeated 1903/venue-resolution failure is not retried on every
