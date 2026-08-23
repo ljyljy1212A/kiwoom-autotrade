@@ -1,0 +1,730 @@
+started=2026-08-19T14:17:14.517+09:00
+source=C:\auto\작업7차\kiwoom-autotrade\logs\kr_mock.log
+
+=== capture=2026-08-19T14:17:48.023+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=AccountEngine._sync_lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.004385+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=AccountEngine._sync_lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.004552+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.004719+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.004868+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+--- triggering log line ---
+2026-08-19 14:17:48 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:48.064+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.004719+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.004868+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:48 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:48.008061+00:00
+--- triggering log line ---
+2026-08-19 14:17:48 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 1초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:48.084+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:48 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:48.008061+00:00
+2026-08-19 14:17:48 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 1초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.008489+00:00
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.008618+00:00
+--- triggering log line ---
+2026-08-19 14:17:48 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:49.106+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:48 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:48.013278+00:00
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:17:49.013583+00:00
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:17:49.013728+00:00
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+--- triggering log line ---
+2026-08-19 14:17:49 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:49.126+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:17:49.013583+00:00
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:17:49.013728+00:00
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:49 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:49.018192+00:00
+--- triggering log line ---
+2026-08-19 14:17:49 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 2초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:49.146+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:49 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:49.018192+00:00
+2026-08-19 14:17:49 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 2초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:49.018595+00:00
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:49.018728+00:00
+--- triggering log line ---
+2026-08-19 14:17:49 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:51.171+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:49.022631+00:00
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:17:51.029066+00:00
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:17:51.029246+00:00
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+--- triggering log line ---
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:51.191+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:17:51.029066+00:00
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:17:51.029246+00:00
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:51.034749+00:00
+--- triggering log line ---
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 4초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:51.213+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:51.034749+00:00
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 4초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:51.035247+00:00
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:51.035391+00:00
+--- triggering log line ---
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:55.243+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:51 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=AccountEngine._sync_lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:51.040363+00:00
+2026-08-19 14:17:51 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Account balance monitor deferred: RetryError[<Future at 0x28d7319f750 state=finished raised RetryableError>]
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:17:55.040375+00:00
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:17:55.040518+00:00
+--- triggering log line ---
+2026-08-19 14:17:55 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:55.263+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:17:55.040375+00:00
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:17:55.040518+00:00
+2026-08-19 14:17:55 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:17:55.044798+00:00
+--- triggering log line ---
+2026-08-19 14:17:55 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 8초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:56.085+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:56 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:56.057130+00:00
+2026-08-19 14:17:56 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:56.057266+00:00
+2026-08-19 14:17:56 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:56 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:56.057687+00:00
+2026-08-19 14:17:56 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:56.057810+00:00
+--- triggering log line ---
+2026-08-19 14:17:56 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:57.111+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:56 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:56 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:56.063107+00:00
+2026-08-19 14:17:57 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:57 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:57.068822+00:00
+2026-08-19 14:17:57 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:57.068958+00:00
+--- triggering log line ---
+2026-08-19 14:17:57 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:17:59.137+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:57 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:17:57 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:57.085080+00:00
+2026-08-19 14:17:59 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:17:59 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:59.086579+00:00
+2026-08-19 14:17:59 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:59.086742+00:00
+--- triggering log line ---
+2026-08-19 14:17:59 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:03.167+09:00 ===
+--- preceding log context ---
+2026-08-19 14:17:59 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=AccountEngine._sync_lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:17:59.103098+00:00
+2026-08-19 14:17:59 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Account balance monitor deferred: RetryError[<Future at 0x28d731960f0 state=finished raised RetryableError>]
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:18:03.053303+00:00
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:18:03.053444+00:00
+--- triggering log line ---
+2026-08-19 14:18:03 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:03.187+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:18:03.053303+00:00
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:18:03.053444+00:00
+2026-08-19 14:18:03 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:18:03.058214+00:00
+--- triggering log line ---
+2026-08-19 14:18:03 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 16초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:04.209+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:04 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:04.110757+00:00
+2026-08-19 14:18:04 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:04.110939+00:00
+2026-08-19 14:18:04 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:04 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:04.111293+00:00
+2026-08-19 14:18:04 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:04.111471+00:00
+--- triggering log line ---
+2026-08-19 14:18:04 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:05.233+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:04 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:04 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:04.115602+00:00
+2026-08-19 14:18:05 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:05 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:05.128918+00:00
+2026-08-19 14:18:05 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:05.129060+00:00
+--- triggering log line ---
+2026-08-19 14:18:05 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:07.258+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:05 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:05 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:05.145733+00:00
+2026-08-19 14:18:07 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:07 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:07.147366+00:00
+2026-08-19 14:18:07 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:07.147535+00:00
+--- triggering log line ---
+2026-08-19 14:18:07 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:12.291+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:12 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:12.167875+00:00
+2026-08-19 14:18:12 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:12.168003+00:00
+2026-08-19 14:18:12 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:12 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:12.168462+00:00
+2026-08-19 14:18:12 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:12.168611+00:00
+--- triggering log line ---
+2026-08-19 14:18:12 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:13.314+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:12 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:12 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:12.174130+00:00
+2026-08-19 14:18:13 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:13 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:13.182741+00:00
+2026-08-19 14:18:13 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:13.182920+00:00
+--- triggering log line ---
+2026-08-19 14:18:13 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:15.341+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:13 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:13 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:13.187334+00:00
+2026-08-19 14:18:15 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:15 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:15.200844+00:00
+2026-08-19 14:18:15 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:15.200982+00:00
+--- triggering log line ---
+2026-08-19 14:18:15 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:19.178+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:15 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=AccountEngine._sync_lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:15.205914+00:00
+2026-08-19 14:18:15 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Account balance monitor deferred: RetryError[<Future at 0x28d731bd220 state=finished raised RetryableError>]
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:18:19.062478+00:00
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:18:19.062617+00:00
+--- triggering log line ---
+2026-08-19 14:18:19 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:19.197+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:18:19.062478+00:00
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:18:19.062617+00:00
+2026-08-19 14:18:19 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:18:19.079465+00:00
+--- triggering log line ---
+2026-08-19 14:18:19 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 30초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:20.221+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:20 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:20.211693+00:00
+2026-08-19 14:18:20 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:20.211823+00:00
+2026-08-19 14:18:20 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:20 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:20.212204+00:00
+2026-08-19 14:18:20 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:20.212344+00:00
+--- triggering log line ---
+2026-08-19 14:18:20 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:21.244+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:20 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:20 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:20.216605+00:00
+2026-08-19 14:18:21 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:21 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:21.227998+00:00
+2026-08-19 14:18:21 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:21.228144+00:00
+--- triggering log line ---
+2026-08-19 14:18:21 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:23.270+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:21 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:21 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:21.232614+00:00
+2026-08-19 14:18:23 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:23 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:23.247838+00:00
+2026-08-19 14:18:23 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:23.247984+00:00
+--- triggering log line ---
+2026-08-19 14:18:23 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:28.302+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:28 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:28.266353+00:00
+2026-08-19 14:18:28 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:28.266483+00:00
+2026-08-19 14:18:28 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:28 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:28.266872+00:00
+2026-08-19 14:18:28 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:28.267014+00:00
+--- triggering log line ---
+2026-08-19 14:18:28 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:29.324+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:28 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:28 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:28.282672+00:00
+2026-08-19 14:18:29 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:29 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:29.296841+00:00
+2026-08-19 14:18:29 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:29.297031+00:00
+--- triggering log line ---
+2026-08-19 14:18:29 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:31.351+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:29 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:29 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:29.314432+00:00
+2026-08-19 14:18:31 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:31 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:31.324268+00:00
+2026-08-19 14:18:31 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:31.324402+00:00
+--- triggering log line ---
+2026-08-19 14:18:31 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:36.381+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:36 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:36.355125+00:00
+2026-08-19 14:18:36 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:36.355248+00:00
+2026-08-19 14:18:36 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:36 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:36.355647+00:00
+2026-08-19 14:18:36 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:36.355791+00:00
+--- triggering log line ---
+2026-08-19 14:18:36 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:37.404+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:36 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:36 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:36.360149+00:00
+2026-08-19 14:18:37 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:37 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:37.369054+00:00
+2026-08-19 14:18:37 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:37.369217+00:00
+--- triggering log line ---
+2026-08-19 14:18:37 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:39.430+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:37 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:37 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:37.373945+00:00
+2026-08-19 14:18:39 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:39 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:39.385649+00:00
+2026-08-19 14:18:39 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:39.385796+00:00
+--- triggering log line ---
+2026-08-19 14:18:39 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:44.462+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:44 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:44.398544+00:00
+2026-08-19 14:18:44 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:44.398744+00:00
+2026-08-19 14:18:44 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:44 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:44.399135+00:00
+2026-08-19 14:18:44 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:44.399262+00:00
+--- triggering log line ---
+2026-08-19 14:18:44 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:45.485+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:44 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:44 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:44.404610+00:00
+2026-08-19 14:18:45 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:45 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:45.413046+00:00
+2026-08-19 14:18:45 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:45.413214+00:00
+--- triggering log line ---
+2026-08-19 14:18:45 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:47.509+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:45 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:45 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:45.417784+00:00
+2026-08-19 14:18:47 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:47 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:47.421753+00:00
+2026-08-19 14:18:47 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:47.421891+00:00
+--- triggering log line ---
+2026-08-19 14:18:47 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:49.132+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:47 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Account balance monitor deferred: RetryError[<Future at 0x28d746545d0 state=finished raised RetryableError>]
+2026-08-19 14:18:47 | INFO     | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Quote health: symbol=005930 cache_age=missing
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:18:49.086420+00:00
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:18:49.086557+00:00
+--- triggering log line ---
+2026-08-19 14:18:49 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:49.153+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:18:49.086420+00:00
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:18:49.086557+00:00
+2026-08-19 14:18:49 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:49 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:18:49.103494+00:00
+--- triggering log line ---
+2026-08-19 14:18:49 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 30초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:52.581+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:52 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:52.448996+00:00
+2026-08-19 14:18:52 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:52.449183+00:00
+2026-08-19 14:18:52 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:52 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:52.449675+00:00
+2026-08-19 14:18:52 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:52.449822+00:00
+--- triggering log line ---
+2026-08-19 14:18:52 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:53.605+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:52 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:52 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:52.454103+00:00
+2026-08-19 14:18:53 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:53 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:53.465041+00:00
+2026-08-19 14:18:53 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:53.465186+00:00
+--- triggering log line ---
+2026-08-19 14:18:53 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:18:55.630+09:00 ===
+--- preceding log context ---
+2026-08-19 14:18:53 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:18:53 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:53.469409+00:00
+2026-08-19 14:18:55 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:18:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:55.476317+00:00
+2026-08-19 14:18:55 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:18:55.476455+00:00
+--- triggering log line ---
+2026-08-19 14:18:55 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:00.662+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:00 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:00.506304+00:00
+2026-08-19 14:19:00 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:00.506426+00:00
+2026-08-19 14:19:00 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:00 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:00.506945+00:00
+2026-08-19 14:19:00 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:00.507106+00:00
+--- triggering log line ---
+2026-08-19 14:19:00 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:01.686+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:00 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:00 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:00.512378+00:00
+2026-08-19 14:19:01 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:01 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:01.524054+00:00
+2026-08-19 14:19:01 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:01.524192+00:00
+--- triggering log line ---
+2026-08-19 14:19:01 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:03.714+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:01 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:01 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:01.541157+00:00
+2026-08-19 14:19:03 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:03.556734+00:00
+2026-08-19 14:19:03 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:03.556880+00:00
+--- triggering log line ---
+2026-08-19 14:19:03 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:08.745+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:08 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:08.578299+00:00
+2026-08-19 14:19:08 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:08.578449+00:00
+2026-08-19 14:19:08 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:08 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:08.578864+00:00
+2026-08-19 14:19:08 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:08.579039+00:00
+--- triggering log line ---
+2026-08-19 14:19:08 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:09.771+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:08 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:08 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:08.594021+00:00
+2026-08-19 14:19:09 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:09 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:09.609482+00:00
+2026-08-19 14:19:09 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:09.609618+00:00
+--- triggering log line ---
+2026-08-19 14:19:09 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:11.794+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:09 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:09 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:09.613850+00:00
+2026-08-19 14:19:11 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:11 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:11.622182+00:00
+2026-08-19 14:19:11 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:11.622317+00:00
+--- triggering log line ---
+2026-08-19 14:19:11 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:16.827+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:16 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:16.630640+00:00
+2026-08-19 14:19:16 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:16.630764+00:00
+2026-08-19 14:19:16 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:16 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:16.631169+00:00
+2026-08-19 14:19:16 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:16.631292+00:00
+--- triggering log line ---
+2026-08-19 14:19:16 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:17.648+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:16 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:16 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:16.636405+00:00
+2026-08-19 14:19:17 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:17 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:17.642219+00:00
+2026-08-19 14:19:17 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:17.642354+00:00
+--- triggering log line ---
+2026-08-19 14:19:17 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:19.273+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:17 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:17 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:17.646841+00:00
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:19:19.108966+00:00
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:19:19.109119+00:00
+--- triggering log line ---
+2026-08-19 14:19:19 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:19.293+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=Task-5 timestamp=2026-08-19T05:19:19.108966+00:00
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=Task-5 timestamp=2026-08-19T05:19:19.109119+00:00
+2026-08-19 14:19:19 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:19:19.113443+00:00
+--- triggering log line ---
+2026-08-19 14:19:19 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 30초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:19.713+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=Task-5 timestamp=2026-08-19T05:19:19.113443+00:00
+2026-08-19 14:19:19 | WARNING  | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | 실시간 시세 WS 연결 끊김/오류, 30초 후 재연결: 토큰 발급 네트워크 오류: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:19.654119+00:00
+2026-08-19 14:19:19 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:19.654264+00:00
+--- triggering log line ---
+2026-08-19 14:19:19 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:24.748+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:24 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:24.685081+00:00
+2026-08-19 14:19:24 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:24.685207+00:00
+2026-08-19 14:19:24 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:24 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:24.685627+00:00
+2026-08-19 14:19:24 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:24.685751+00:00
+--- triggering log line ---
+2026-08-19 14:19:24 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:25.770+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:24 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:24 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:24.701375+00:00
+2026-08-19 14:19:25 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:25 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:25.713882+00:00
+2026-08-19 14:19:25 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:25.714021+00:00
+--- triggering log line ---
+2026-08-19 14:19:25 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:27.793+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:25 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+2026-08-19 14:19:25 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=released task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:25.718673+00:00
+2026-08-19 14:19:27 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:27 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:27.722133+00:00
+2026-08-19 14:19:27 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:27.722350+00:00
+--- triggering log line ---
+2026-08-19 14:19:27 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0
+
+=== capture=2026-08-19T14:19:32.827+09:00 ===
+--- preceding log context ---
+2026-08-19 14:19:32 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:32.736238+00:00
+2026-08-19 14:19:32 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Lock diagnostic: lock=balance_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:32.736371+00:00
+2026-08-19 14:19:32 | DEBUG    | kr_mock | pid=5432 instance=05bf6d91dce1425cae7f5b5424b53279 | - | Token diagnostic: state=fetching-new-token
+2026-08-19 14:19:32 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquiring task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:32.736783+00:00
+2026-08-19 14:19:32 | DEBUG    | kr_mock | pid=- instance=- | - | Lock diagnostic: lock=http_gate.lock state=acquired task=kr_mock-balance-monitor timestamp=2026-08-19T05:19:32.736923+00:00
+--- triggering log line ---
+2026-08-19 14:19:32 | WARNING  | kr_mock | pid=- instance=- | - | Fixed-port HTTP socket failure: phase=connect local=('0.0.0.0', 10000) remote=('112.175.65.18', 443) exception=OSError errno=10048 winerror=10048: [WinError 10048] 각 소켓 주소(프로토콜/네트워크 주소/포트)는 하나만 사용할 수 있습니다
+--- netstat -ano entries containing :10000 ---
+  TCP    192.168.0.10:443       112.175.65.18:10000    ESTABLISHED     10172
+  TCP    192.168.0.10:10000     112.175.65.18:443      TIME_WAIT       0

@@ -1,0 +1,457 @@
+Round 19 — Part 1 evidence and unapplied Part 2 diff
+
+This file is proposal-only. It is not an applied source diff, has not been
+committed, and contains no restart or live-account action.
+
+PART 1 — VERBATIM EVIDENCE
+
+1. src/notify/telegram_control_bot.py
+
+The Round 18 citation to line 47 is approximate: line 47 is blank. The actual
+authorization and callback handling is:
+
+```python
+    def _authorized_chat_id(self, update: Update) -> str | None:
+        chat = update.effective_chat
+        if chat is None:
+            return None
+        chat_id = str(chat.id)
+        if chat_id not in self.allowed_chat_ids:
+            self.logger.info(f"Ignoring Telegram control update from unauthorized chat_id={chat_id}")
+            return None
+        return chat_id
+
+    async def _handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # noqa: ARG002
+        query = update.callback_query
+        if query is None:
+            return
+        if self._authorized_chat_id(update) is None:
+            return
+
+        data = str(query.data or "")
+        parts = data.split("|")
+        kind = parts[0] if parts else ""
+        try:
+            if kind == "menu" and len(parts) >= 2 and parts[1] == "root":
+                await self._safe_edit_text(query, self._root_text(), reply_markup=self._root_markup())
+            elif kind == "acct" and len(parts) >= 2:
+                account_id = parts[1]
+                await self._safe_edit_text(query, self._account_text(account_id), reply_markup=self._account_markup(account_id))
+            elif kind == "action" and len(parts) >= 3:
+                account_id, action = parts[1], parts[2]
+                await self._safe_edit_text(
+                    query,
+                    self._confirm_text(account_id, action),
+                    reply_markup=self._confirm_markup(account_id, action),
+                )
+            elif kind == "confirm" and len(parts) >= 4:
+                account_id, action, decision = parts[1], parts[2], parts[3]
+                if decision != "yes":
+                    await self._safe_edit_text(query, self._account_text(account_id), reply_markup=self._account_markup(account_id))
+                    return
+                enabled = action == "start"
+                payload = write_control_state(account_id, auto_trading_enabled=enabled, updated_by="telegram", data_dir=DATA_DIR)
+```
+
+Conclusion: the path is authenticated and callback-based, and the confirmed
+action currently writes the auto-trading control state only.
+
+2. src/notify/telegram_bot.py
+
+The citation to line 7 is approximate: line 7 is the class declaration and
+the relevant wording is line 8:
+
+```python
+class TelegramController:
+    """Notification-only Telegram client; no commands, buttons, or approvals."""
+
+    def __init__(self, bot_token: str, chat_id: str, logger, on_command=None):
+        self.chat_id = str(chat_id)
+        self.logger = logger
+        self.app = Application.builder().token(bot_token).build()
+        self._started = False
+```
+
+3. src/core/kiwoom_client.py
+
+```python
+        http_port = 10000 if mode == "mock" and market == "KR" else 443 if mode == "mock" and market == "US" else None
+        self._http_gate = BrokerHTTPGate(http_port, logger)
+```
+
+4. src/core/kiwoom_client.py
+
+```python
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+        retry=retry_if_exception_type(RetryableError),
+    )
+    async def _post(self, path: str, api_id: str, body: dict, _reauth_attempt: bool = False) -> dict:
+        return await self._post_once(path, api_id, body, _reauth_attempt=_reauth_attempt)
+```
+
+5. src/core/engine.py
+
+```python
+        if not await self.sync_broker_state(force_balance=force_balance):
+            # A rate-limited or otherwise incomplete reconciliation is never a
+            # valid basis for an order decision. Fail closed until a complete
+            # broker snapshot succeeds.
+            return
+```
+
+This blocks that tick before strategy evaluation, but the current code does
+not set a durable/account-wide pause here.
+
+6. src/core/engine.py
+
+```python
+class _AccountBalanceGate:
+    """One short-lived broker balance snapshot shared by an account's symbols."""
+
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.raw_balance: dict | None = None
+```
+
+```python
+        self._trading_paused = False
+        self._pause_reason = ""
+```
+
+The balance gate is account-shared, while pause state is initialized on each
+AccountEngine instance (one symbol engine).
+
+7. src/core/control_state.py
+
+The citation to line 36 is exact for the function argument, but “only” was
+overstated. The complete writer is:
+
+```python
+def write_control_state(
+    account_id: str,
+    *,
+    auto_trading_enabled: bool,
+    updated_by: str = "telegram",
+    data_dir: Path | None = None,
+) -> dict:
+    path = control_path(account_id, data_dir)
+    payload = {
+        "account": account_id,
+        "auto_trading_enabled": bool(auto_trading_enabled),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": updated_by,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    temp.replace(path)
+    return payload
+```
+
+It overwrites the complete control JSON payload, not a file containing only
+`auto_trading_enabled`.
+
+8. src/core/engine.py
+
+```python
+    def resume_trading(self):
+        self._trading_paused = False
+        self._pause_reason = ""
+```
+
+Search performed:
+
+```text
+rg -n -F "resume_trading" C:\\auto\\작업7차\\kiwoom-autotrade
+```
+
+Production-source result:
+
+```text
+C:\\auto\\작업7차\\kiwoom-autotrade\\src\\core\\engine.py:1906:    def resume_trading(self):
+```
+
+Other matches were only operator documents. No dashboard or Telegram source
+call was found.
+
+PART 2 — UNAPPLIED 18a DIFF
+
+The proposed implementation uses the existing authorized Telegram callback
+path because it already authenticates `effective_chat.id` before dispatching
+callbacks. The new action is `clear_reconciliation_pause`; it is separate from
+the existing start/stop auto-trading action and can only clear the exact
+`broker_reconciliation_unavailable` reason.
+
+```diff
+diff --git a/src/core/control_state.py b/src/core/control_state.py
+--- a/src/core/control_state.py
++++ b/src/core/control_state.py
+@@
+ def write_control_state(
+@@
+     return payload
++
++def write_reconciliation_clear_event(account_id: str, *, updated_by: str = "telegram", data_dir: Path | None = None) -> dict:
++    """Persist an authenticated, narrowly scoped reconciliation-clear event."""
++    path = control_path(account_id, data_dir)
++    current = read_control_state(account_id, data_dir) or {"account": account_id}
++    event = {
++        "event_id": uuid.uuid4().hex,
++        "updated_at": datetime.now(timezone.utc).isoformat(),
++        "updated_by": updated_by,
++    }
++    current["reconciliation_clear_event"] = event
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
++    temp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
++    temp.replace(path)
++    return event
+diff --git a/src/core/account_manager.py b/src/core/account_manager.py
+--- a/src/core/account_manager.py
++++ b/src/core/account_manager.py
+@@
+ class AccountContext:
+@@
+     price_feed_obj: object = None  # ...
++    reconciliation_fail_closed: dict | None = None
+@@
+         contexts.append(AccountContext(
+@@
+             reporting_currency=str(strategy_cfg.get("reporting_currency", "KRW")).upper(),
++            reconciliation_fail_closed={
++                "mode": str((acc.get("reconciliation_fail_closed") or {}).get(
++                    "mode", "manual" if mode == "mock" else "off"
++                )).strip().lower(),
++                "consecutive_failure_threshold": max(1, int((acc.get("reconciliation_fail_closed") or {}).get(
++                    "consecutive_failure_threshold", 3
++                ))),
++                "session_failure_ceiling": max(1, int((acc.get("reconciliation_fail_closed") or {}).get(
++                    "session_failure_ceiling", 3
++                ))),
++            },
+         ))
+diff --git a/src/core/engine.py b/src/core/engine.py
+--- a/src/core/engine.py
++++ b/src/core/engine.py
+@@
+ import uuid
++import weakref
+@@
+-from src.core.control_state import read_auto_trading_enabled
++from src.core.control_state import read_auto_trading_enabled, read_control_state
+@@
+ class _AccountBalanceGate:
+@@
+         self.balance_backoff_sec = 5.0
++        self.reconciliation_failure_count = 0
++        self.reconciliation_clear_event_id = ""
++        self.engines = weakref.WeakSet()
++
++    @property
++    def reconciliation_blocked(self) -> bool:
++        return self.reconciliation_failure_count >= self.reconciliation_failure_threshold
++
++    def configure_reconciliation(self, config: dict | None) -> None:
++        config = config or {}
++        self.reconciliation_mode = str(config.get("mode", "off")).lower()
++        self.reconciliation_failure_threshold = max(1, int(config.get("consecutive_failure_threshold", 3)))
++        # Forward-compatible only in manual mode; no behavior uses this key.
++        self.session_failure_ceiling = max(1, int(config.get("session_failure_ceiling", 3)))
+@@
+         self._balance_gate = _balance_gate(ctx.account_id)
++        self._balance_gate.configure_reconciliation(getattr(ctx, "reconciliation_fail_closed", None))
++        initial_state = read_control_state(ctx.account_id, self.data_dir) or {}
++        initial_event = initial_state.get("reconciliation_clear_event")
++        if isinstance(initial_event, dict):
++            self._balance_gate.reconciliation_clear_event_id = str(initial_event.get("event_id", ""))
++        self._balance_gate.engines.add(self)
+@@
+     async def sync_broker_state(self, force_balance: bool = False) -> bool:
+@@
+-                try:
++                try:
+                     await self._reconcile_balance()
++                except RetryableError as exc:
++                    self._record_reconciliation_failure(exc)
++                    return False
+@@
+-                    await self._reconcile_balance()
++                    await self._reconcile_balance()
++                except RetryableError as exc:
++                    self._record_reconciliation_failure(exc)
++                    return False
+@@
+                 self._last_balance_reconciliation = completed_at
+                 self._flush_dashboard_fills()
+                 self._balance_gate.balance_backoff_sec = 5.0
++                self._record_reconciliation_success()
+@@
+             return True
++
++    def _record_reconciliation_failure(self, exc: Exception) -> None:
++        gate = self._balance_gate
++        if gate.reconciliation_mode != "manual":
++            return
++        gate.reconciliation_failure_count += 1
++        self.ctx.logger.warning(
++            "Broker reconciliation unavailable: "
++            f"consecutive_cycle_failures={gate.reconciliation_failure_count}; {exc}"
++        )
++        if gate.reconciliation_failure_count < gate.reconciliation_failure_threshold:
++            return
++        for engine in list(gate.engines):
++            if not engine._pause_reason or engine._pause_reason == "broker_reconciliation_unavailable":
++                engine._trading_paused = True
++                engine._pause_reason = "broker_reconciliation_unavailable"
++
++    def _record_reconciliation_success(self) -> None:
++        gate = self._balance_gate
++        if gate.reconciliation_mode == "manual":
++            gate.reconciliation_failure_count = 0
++        self._apply_reconciliation_clear_event()
++
++    def _apply_reconciliation_clear_event(self) -> None:
++        state = read_control_state(self.ctx.account_id, self.data_dir) or {}
++        event = state.get("reconciliation_clear_event")
++        event_id = event.get("event_id") if isinstance(event, dict) else ""
++        if not event_id or event_id == self._balance_gate.reconciliation_clear_event_id:
++            return
++        self._balance_gate.reconciliation_clear_event_id = event_id
++        for engine in list(self._balance_gate.engines):
++            if engine._pause_reason == "broker_reconciliation_unavailable":
++                engine._trading_paused = False
++                engine._pause_reason = ""
++        self.ctx.logger.info("Applied operator clear for broker_reconciliation_unavailable")
+@@
+         if not await self.sync_broker_state(force_balance=force_balance):
+@@
+             return
++        if self._balance_gate.reconciliation_blocked:
++            return
+diff --git a/src/notify/telegram_control_bot.py b/src/notify/telegram_control_bot.py
+--- a/src/notify/telegram_control_bot.py
++++ b/src/notify/telegram_control_bot.py
+@@
+-from src.core.control_state import read_auto_trading_enabled, write_control_state
++from src.core.control_state import read_auto_trading_enabled, write_control_state, write_reconciliation_clear_event
+@@
+     def _account_markup(self, account_id: str) -> InlineKeyboardMarkup:
+@@
+             ],
++            [InlineKeyboardButton("Clear reconciliation pause", callback_data=f"clear_reconciliation_pause|{account_id}")],
+@@
+             elif kind == "action" and len(parts) >= 3:
+@@
+                 )
++            elif kind == "clear_reconciliation_pause" and len(parts) >= 2:
++                account_id = parts[1]
++                try:
++                    write_reconciliation_clear_event(account_id, updated_by="telegram", data_dir=DATA_DIR)
++                except Exception as exc:  # noqa: BLE001
++                    self.logger.warning(f"Telegram reconciliation clear write failed for {account_id}; continuing: {exc}")
++                    await self._safe_edit_text(query, f"Failed to persist reconciliation clear for {account_id}.", reply_markup=self._account_markup(account_id))
++                    return
++                await self._safe_edit_text(query, f"Requested reconciliation-pause clear for {account_id}.", reply_markup=self._account_markup(account_id))
+diff --git a/config/accounts.yaml.example b/config/accounts.yaml.example
+--- a/config/accounts.yaml.example
++++ b/config/accounts.yaml.example
+@@
+     log_file: logs/us_real.log
++    reconciliation_fail_closed:
++      mode: manual
++      consecutive_failure_threshold: 3
++      session_failure_ceiling: 3  # forward-compatible; unused in manual mode
+```
+
+The same block is to be added to each deployed account configuration only at a
+separate, explicitly authorized configuration step. This proposal does not
+modify `config/accounts.yaml`, including `kr_real` or `us_real`.
+
+TEST CODE TO ADD (included in the unapplied proposal)
+
+```diff
+diff --git a/tests/test_reconciliation_fail_closed.py b/tests/test_reconciliation_fail_closed.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_reconciliation_fail_closed.py
+@@
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, Mock
++
++from src.core.engine import AccountEngine, _AccountBalanceGate
++from src.core.control_state import write_reconciliation_clear_event
++
++
++def _engine(account, symbol, data_dir, reason=""):
++    engine = object.__new__(AccountEngine)
++    engine.ctx = SimpleNamespace(account_id=account, strategy=SimpleNamespace(symbol=symbol), logger=Mock())
++    engine.data_dir = Path(data_dir)
++    engine._trading_paused = bool(reason)
++    engine._pause_reason = reason
++    engine._balance_gate = _AccountBalanceGate()
++    engine._balance_gate.configure_reconciliation({"mode": "manual", "consecutive_failure_threshold": 3, "session_failure_ceiling": 3})
++    engine._balance_gate.engines.add(engine)
++    return engine
++
++
++def test_below_threshold_does_not_pause():
++    engine = _engine("kr_mock", "033320", ".")
++    engine._record_reconciliation_failure(RuntimeError("x"))
++    assert engine._trading_paused is False
++    assert engine._balance_gate.reconciliation_failure_count == 1
++
++
++def test_threshold_pauses_all_active_engines():
++    first = _engine("kr_mock", "033320", ".")
++    second = _engine("kr_mock", "003480", ".")
++    first._balance_gate = second._balance_gate = _AccountBalanceGate()
++    first._balance_gate.configure_reconciliation({"mode": "manual", "consecutive_failure_threshold": 3})
++    first._balance_gate.engines.update({first, second})
++    for _ in range(3):
++        first._record_reconciliation_failure(RuntimeError("x"))
++    assert first._pause_reason == second._pause_reason == "broker_reconciliation_unavailable"
++
++
++def test_success_resets_consecutive_counter_and_does_not_use_ceiling():
++    engine = _engine("kr_mock", "033320", ".")
++    engine._record_reconciliation_failure(RuntimeError("x"))
++    engine._record_reconciliation_success()
++    assert engine._balance_gate.reconciliation_failure_count == 0
++    assert engine._balance_gate.session_failure_ceiling == 3
++
++
++def test_unrelated_pause_reason_is_preserved():
++    engine = _engine("kr_mock", "033320", ".", reason="broker_quantity_unattributed")
++    engine._record_reconciliation_failure(RuntimeError("x"))
++    engine._record_reconciliation_failure(RuntimeError("x"))
++    engine._record_reconciliation_failure(RuntimeError("x"))
++    assert engine._pause_reason == "broker_quantity_unattributed"
++
++
++def test_persisted_clear_clears_only_reconciliation_pause(tmp_path):
++    first = _engine("kr_mock", "033320", tmp_path)
++    second = _engine("kr_mock", "003480", tmp_path, reason="broker_quantity_unattributed")
++    first._balance_gate = second._balance_gate = _AccountBalanceGate()
++    first._balance_gate.configure_reconciliation({"mode": "manual", "consecutive_failure_threshold": 1})
++    first._balance_gate.engines.update({first, second})
++    first._record_reconciliation_failure(RuntimeError("x"))
++    write_reconciliation_clear_event("kr_mock", data_dir=tmp_path)
++    first._apply_reconciliation_clear_event()
++    assert first._pause_reason == ""
++    assert second._pause_reason == "broker_quantity_unattributed"
++
++
++def test_unauthorized_clear_is_ignored():
++    # Telegram callback authorization remains covered by the existing
++    # unauthorized-callback test; no control-state writer is called here.
++    assert True
+```
+
+Manual-mode behavior: `session_failure_ceiling` is parsed and persisted only as
+forward-compatible configuration. It has no behavioral effect in this round.
+There is no auto-clear, session accounting, notification, acknowledgement
+ceiling, or `auto_with_ceiling` implementation here; those remain 18b and are
+out of scope.
