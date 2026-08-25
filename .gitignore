@@ -3,7 +3,7 @@
 secrets/
 
 # Runtime state / data (DB, PID, lock, status, quotes, mock balances, etc.)
-data/
+/data/
 
 # Logs
 logs/

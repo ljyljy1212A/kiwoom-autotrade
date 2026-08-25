@@ -10,11 +10,14 @@ import threading
 import uuid
 import weakref
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 from src.calendar_utils.market_calendar import MarketCalendar
 from src.data.trade_ledger import PendingOrder, TradeLedgerStore
+from src.data.order_attempts import unattributed_attempt_ids
 from src.core.us_market import (
     extract_us_fx_rate,
     normalize_us_execution_rows,
@@ -23,10 +26,12 @@ from src.core.us_market import (
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
 from src.core.control_state import read_auto_trading_enabled, read_control_state
+from src.core.broker_http import clear_fixed_port_degraded_state, get_fixed_port_degraded_state
 from src.core.runtime_paths import DATA_DIR
+from src.core.symbol_keys import canonical_symbol_key
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
-from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, RetryableError
+from src.utils.exceptions import KiwoomAPIError, OrderDispatchBlockedError, OrderRejectedError, RetryableError
 from src.core.rate_limit_observability import emit_rate_limit_event
 
 
@@ -54,6 +59,7 @@ class _AccountBalanceGate:
         self.reconciliation_failure_threshold = 3
         self.session_failure_ceiling = 3
         self.engines = weakref.WeakSet()
+        self.dispatch_clearance_service: DispatchClearanceService | None = None
 
     @property
     def reconciliation_blocked(self) -> bool:
@@ -72,6 +78,194 @@ class _AccountBalanceGate:
 _ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
 _TRANCHE_BASES_WRITE_LOCK = threading.RLock()
 _STARTUP_BACKUP_ACCOUNTS: set[str] = set()
+
+
+class ReconciliationIncompleteReason(Enum):
+    UNRECOGNIZED_BALANCE = "unrecognized balance response"
+    BROKER_FILL_CATCHUP = "broker-fill catch-up marker"
+    PENDING_QUANTITY_DEFERRAL = "pending-quantity deferral"
+    STALE_LIFECYCLE_HOLD = "stale-lifecycle hold"
+    UNATTRIBUTED_QUANTITY_PAUSE = "unattributed-quantity pause"
+    TRANCHE_REBUILD_AMBIGUOUS = "tranche-rebuild ambiguous"
+
+
+@dataclass(frozen=True)
+class NormalizedBalanceHolding:
+    symbol: str
+    qty: float
+    avg_price: float
+
+
+@dataclass(frozen=True)
+class ManualTrancheAllocation:
+    restored_manual_qty: float = 0.0
+    adopt_manual_qty: float = 0.0
+    unattributed_remainder: float = 0.0
+
+
+def _manual_tranche_allocation(
+    *, qty: float, known_tranche_qty: float, has_step_one: bool,
+    lifecycle_open: bool, lifecycle_manual_qty: float,
+) -> ManualTrancheAllocation:
+    """Purely classify how a broker remainder can be assigned to tranche 1."""
+    remainder = qty - known_tranche_qty
+    if remainder <= 1e-9:
+        return ManualTrancheAllocation()
+    if not has_step_one and lifecycle_open and lifecycle_manual_qty > 1e-9:
+        restored = min(remainder, lifecycle_manual_qty)
+        remainder -= restored
+        return ManualTrancheAllocation(
+            restored_manual_qty=restored,
+            unattributed_remainder=max(0.0, remainder),
+        )
+    if not has_step_one:
+        return ManualTrancheAllocation(adopt_manual_qty=remainder)
+    return ManualTrancheAllocation(unattributed_remainder=remainder)
+
+
+@dataclass(frozen=True)
+class ReconciliationClearanceSnapshot:
+    account_id: str
+    symbol: str
+    balance_api_id: str
+    balance_fetched_fresh: bool
+    balance_from_shared_cache: bool
+    balance_recognized: bool
+    holding: NormalizedBalanceHolding | None
+    incomplete_reasons: frozenset[ReconciliationIncompleteReason] = frozenset()
+    unresolved_order_ids: tuple[str, ...] = ()
+    unattributed_collision_order_ids: tuple[str, ...] = ()
+
+
+def with_unattributed_collision_order_ids(
+    snapshot: ReconciliationClearanceSnapshot,
+    data_dir: Path = DATA_DIR,
+) -> ReconciliationClearanceSnapshot:
+    """Integration point for condition 5 until real snapshot construction is wired."""
+    return replace(
+        snapshot,
+        unattributed_collision_order_ids=tuple(unattributed_attempt_ids(snapshot.account_id, data_dir)),
+    )
+
+
+@dataclass(frozen=True)
+class ReconciliationClearanceFailure:
+    condition: int
+    detail: str
+
+
+@dataclass(frozen=True)
+class ReconciliationClearanceResult:
+    account_id: str
+    symbol: str
+    cleared: bool
+    failures: tuple[ReconciliationClearanceFailure, ...]
+
+
+class DispatchClearanceService:
+    """Serialize mock fixed-port recovery checks for one account."""
+
+    def __init__(self, account_id: str):
+        self.account_id = account_id
+        self._lock = asyncio.Lock()
+        self._active_symbols: frozenset[str] = frozenset()
+        self._cleared_symbols: frozenset[str] = frozenset()
+        self._profile: tuple[tuple[str, ...], int] | None = None
+
+    def observe_active_profile(self, running_symbols: tuple[str, ...], profile_version: int) -> None:
+        active_symbols = frozenset(running_symbols)
+        profile = (tuple(sorted(active_symbols)), profile_version)
+        if profile != self._profile:
+            self._profile = profile
+            self._active_symbols = active_symbols
+            self._cleared_symbols = frozenset()
+
+    async def check(self, engine: "AccountEngine", symbol: str) -> None:
+        if get_fixed_port_degraded_state(self.account_id) is None:
+            return
+        async with self._lock:
+            if get_fixed_port_degraded_state(self.account_id) is None:
+                return
+            try:
+                snapshot = await engine._build_reconciliation_clearance_snapshot(
+                    symbol, max_balance_age_sec=1.0,
+                )
+                result = evaluate_reconciliation_clearance(snapshot)
+            except Exception as exc:
+                raise OrderDispatchBlockedError(
+                    f"reconciliation clearance internal check failed for {self.account_id}/{symbol}: {exc}"
+                ) from exc
+            normalized = symbol.upper()
+            if result.cleared:
+                self._cleared_symbols = self._cleared_symbols | {normalized}
+                if self._active_symbols and self._active_symbols.issubset(self._cleared_symbols):
+                    clear_fixed_port_degraded_state(self.account_id)
+                return
+            self._cleared_symbols = self._cleared_symbols - {normalized}
+            details = "; ".join(failure.detail for failure in result.failures)
+            raise OrderDispatchBlockedError(
+                f"reconciliation clearance blocked {self.account_id}/{symbol}: {details}"
+            )
+
+
+def _clearance_holding_failure(snapshot: ReconciliationClearanceSnapshot) -> str | None:
+    if not snapshot.balance_recognized:
+        return "condition 2: unrecognized balance response"
+    holding = snapshot.holding
+    if holding is None:
+        return "condition 2: target holding was not normalized"
+    if holding.symbol.upper() != snapshot.symbol.upper():
+        return "condition 2: normalized holding symbol does not match the target symbol"
+    if not math.isfinite(holding.qty) or holding.qty < 0:
+        return "condition 2: target holding quantity is unusable"
+    if holding.qty > 0 and (not math.isfinite(holding.avg_price) or holding.avg_price <= 0):
+        return "condition 2: positive target holding has no usable average price"
+    return None
+
+
+def evaluate_reconciliation_clearance(
+    snapshot: ReconciliationClearanceSnapshot,
+) -> ReconciliationClearanceResult:
+    failures: list[ReconciliationClearanceFailure] = []
+    if (
+        snapshot.balance_api_id != "ust21070"
+        or not snapshot.balance_fetched_fresh
+        or snapshot.balance_from_shared_cache
+    ):
+        failures.append(
+            ReconciliationClearanceFailure(
+                1,
+                "condition 1: requires a fresh, non-cached ust21070 balance response",
+            )
+        )
+    holding_failure = _clearance_holding_failure(snapshot)
+    if holding_failure:
+        failures.append(ReconciliationClearanceFailure(2, holding_failure))
+    if snapshot.incomplete_reasons:
+        reasons = ", ".join(sorted(reason.value for reason in snapshot.incomplete_reasons))
+        failures.append(ReconciliationClearanceFailure(3, f"condition 3: incomplete reconciliation: {reasons}"))
+    if snapshot.unresolved_order_ids:
+        orders = ", ".join(snapshot.unresolved_order_ids)
+        failures.append(
+            ReconciliationClearanceFailure(
+                4,
+                f"condition 4: {len(snapshot.unresolved_order_ids)} pending/recovery order(s) unresolved: {orders}",
+            )
+        )
+    if snapshot.unattributed_collision_order_ids:
+        orders = ", ".join(snapshot.unattributed_collision_order_ids)
+        failures.append(
+            ReconciliationClearanceFailure(
+                5,
+                f"condition 5: unattributed collision-period order(s) unresolved: {orders}",
+            )
+        )
+    return ReconciliationClearanceResult(
+        account_id=snapshot.account_id,
+        symbol=snapshot.symbol,
+        cleared=not failures,
+        failures=tuple(failures),
+    )
 
 
 def _balance_gate(account_id: str) -> _AccountBalanceGate:
@@ -101,7 +295,8 @@ async def _diagnostic_lock(lock: asyncio.Lock, lock_name: str, logger):
 
 class AccountEngine:
     def __init__(self, ctx, telegram, discord, report_store, price_feed, poll_interval_sec: int = 5,
-                 control_symbol: str | None = None, balance_only: bool = False):
+                 control_symbol: str | None = None, balance_only: bool = False,
+                 dispatch_clearance_service: DispatchClearanceService | None = None):
         self.ctx, self.telegram, self.discord = ctx, telegram, discord
         self.report_store, self.price_feed, self.poll_interval_sec = report_store, price_feed, poll_interval_sec
         self.data_dir = DATA_DIR
@@ -151,7 +346,7 @@ class AccountEngine:
         self._dashboard_config_fingerprint = ""
         self._dashboard_strategy_changed = False
         self._dashboard_control_mtime_ns: int | None = None
-        self._control_symbol = str(control_symbol or "").upper().lstrip("A")
+        self._control_symbol = self._symbol_key(control_symbol)
         # A dashboard account must continue publishing its broker holdings even
         # when it has no enabled automation profiles.  This mode deliberately
         # stops after writing the account-wide snapshot, so it cannot adopt a
@@ -161,6 +356,14 @@ class AccountEngine:
         # broker balance is account-wide. Share its fresh response so startup
         # and normal ticks do not multiply kt00018/ust21070 requests.
         self._balance_gate = _balance_gate(ctx.account_id)
+        if dispatch_clearance_service is not None:
+            self._balance_gate.dispatch_clearance_service = dispatch_clearance_service
+        self._dispatch_clearance_enabled = (
+            ctx.client.market == "US" and ctx.client.mode == "mock" and ctx.account_id == "us_mock"
+            and os.environ.get("US_MOCK_RECONCILIATION_CLEARANCE_ENABLED", "false").lower() == "true"
+        )
+        if self._dispatch_clearance_enabled:
+            self.ctx.logger.warning("US mock reconciliation dispatch clearance is enabled")
         self._balance_gate.configure_reconciliation(getattr(ctx, "reconciliation_fail_closed", None))
         initial_state = read_control_state(ctx.account_id, self.data_dir) or {}
         initial_event = initial_state.get("pause_clear_event")
@@ -179,7 +382,7 @@ class AccountEngine:
         try:
             raw_absence = json.loads(self._closure_absence_path.read_text(encoding="utf-8"))
             self._closure_absence_confirmations = {
-                str(symbol).upper().lstrip("A"): int(count)
+                self._symbol_key(symbol): int(count)
                 for symbol, count in raw_absence.items()
                 if int(count) > 0
             } if isinstance(raw_absence, dict) else {}
@@ -198,7 +401,8 @@ class AccountEngine:
         self._lifecycle_pending_adoption = False
         self._lifecycle_activation_lock = threading.RLock()
         self._manual_lifecycle_adoptions = 0
-        self._orphan_cleaner = OrphanStateCleaner(ctx.account_id, data_dir=self.data_dir, logger=ctx.logger)
+        self._orphan_cleaner = OrphanStateCleaner(ctx.account_id, data_dir=self.data_dir, logger=ctx.logger, market=ctx.client.market)
+        self._symbol_key_migration_complete = False
         self._sync_lock = asyncio.Lock()
         self._sync_task: asyncio.Task | None = None
         self._last_balance_reconciliation = 0.0
@@ -230,6 +434,47 @@ class AccountEngine:
             feed_obj.realtime.subscribe(ctx.strategy.symbol)
         if self.ledger is not None:
             self._prepare_lifecycle_scope(ctx.strategy.symbol)
+
+    def _symbol_key(self, symbol: object) -> str:
+        return canonical_symbol_key(self.ctx.client.market, symbol)
+
+    def _run_symbol_key_migration(self, broker_holdings: list[dict]) -> None:
+        if getattr(self, "_symbol_key_migration_complete", False):
+            return
+        if not hasattr(self, "_orphan_cleaner") or not hasattr(self, "_lifecycle_path"):
+            self._symbol_key_migration_complete = True
+            return
+        settings_path = self.data_dir / f"dashboard_settings_{self.ctx.account_id}.json"
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
+        except (OSError, json.JSONDecodeError):
+            profiles = []
+        candidates = {item.get("symbol", "") for item in broker_holdings}
+        candidates.update(
+            (profile.get("config") or {}).get("symbol", "")
+            for profile in profiles
+            if isinstance(profile, dict)
+            and str((profile.get("config") or {}).get("market", "")).upper() == self.ctx.client.market
+        )
+        manual_review = self._orphan_cleaner.migrate_legacy_keys(candidates)
+        try:
+            raw_lifecycles = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
+            self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            self._symbol_lifecycles = {}
+        self._symbol_key_migration_complete = True
+        if manual_review:
+            self.ctx.logger.error(
+                f"Symbol-key migration requires manual review; automation remains blocked for {sorted(manual_review)}"
+            )
+
+    def _symbol_key_manual_review(self, symbol: object) -> bool:
+        cleaner = getattr(self, "_orphan_cleaner", None)
+        if cleaner is None:
+            return False
+        symbols = cleaner.manual_review_symbols()
+        return isinstance(symbols, (set, frozenset, list, tuple)) and self._symbol_key(symbol) in symbols
 
     async def run(self):
         self._backup_ledger_at_startup()
@@ -288,17 +533,106 @@ class AccountEngine:
             return
         self.ctx.logger.info(f"Startup ledger backup created: {backup_path}")
 
-    async def _shared_broker_balance(self) -> dict:
+    async def _shared_broker_balance(self, *, max_age_sec: float | None = None) -> tuple[dict, float]:
         """Fetch at most one fresh account balance per shared interval."""
         gate = self._balance_gate
         async with _diagnostic_lock(gate.lock, "balance_gate.lock", self.ctx.logger):
             now = asyncio.get_running_loop().time()
-            if gate.raw_balance is not None and now - gate.received_at < self.balance_min_interval_sec:
-                return gate.raw_balance
+            maximum_age = self.balance_min_interval_sec if max_age_sec is None else max_age_sec
+            if gate.raw_balance is not None and now - gate.received_at <= maximum_age:
+                return gate.raw_balance, gate.received_at
             raw_balance = await self.ctx.client.get_balance()
             gate.raw_balance = raw_balance
             gate.received_at = asyncio.get_running_loop().time()
-            return raw_balance
+            return raw_balance, gate.received_at
+
+    def _reconciliation_incomplete_reasons(
+        self, symbol: str, *, balance_recognized: bool, holding: NormalizedBalanceHolding | None,
+        qty: float, known_tranche_qty: float = 0.0,
+        open_rows: list[tuple[int, float, float]] | None = None,
+        unattributed_remainder: float = 0.0, complete_zero_balance: bool = False,
+    ) -> frozenset[ReconciliationIncompleteReason]:
+        """Classify reconciliation holds without mutating engine or ledger state."""
+        symbol_key = self._symbol_key(symbol)
+        reasons: set[ReconciliationIncompleteReason] = set()
+        if holding is None or not balance_recognized:
+            reasons.add(ReconciliationIncompleteReason.UNRECOGNIZED_BALANCE)
+            return frozenset(reasons)
+        expected_qty = self._broker_fill_catchup_qty.get(symbol_key)
+        if expected_qty is not None and qty + 1e-9 < expected_qty:
+            reasons.add(ReconciliationIncompleteReason.BROKER_FILL_CATCHUP)
+        if self.ledger.pending_orders(symbol) and abs(float(self.ctx.position.qty) - qty) > 1e-9:
+            reasons.add(ReconciliationIncompleteReason.PENDING_QUANTITY_DEFERRAL)
+        lifecycle = self._symbol_lifecycles.get(symbol_key, {})
+        if isinstance(lifecycle, dict) and lifecycle.get("status") == "open":
+            minimum = max(0.0, float(lifecycle.get("manual_qty", 0) or 0)) + sum(
+                self.ledger.open_tranche_qty(symbol, step) for step in range(2, self.ctx.strategy.max_step + 1)
+            )
+            if minimum > 0 and qty + 1e-9 < minimum:
+                reasons.add(ReconciliationIncompleteReason.STALE_LIFECYCLE_HOLD)
+        if complete_zero_balance or unattributed_remainder > 1e-9 or self._pause_reason == "broker_quantity_unattributed":
+            reasons.add(ReconciliationIncompleteReason.UNATTRIBUTED_QUANTITY_PAUSE)
+        if self._pause_reason == "tranche_rebuild_ambiguous":
+            reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
+        if open_rows is not None and known_tranche_qty > qty + 1e-9:
+            if not any(row[0] == 1 for row in open_rows) and qty > 1e-9:
+                reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
+        return frozenset(reasons)
+
+    def _unresolved_reconciliation_order_ids(self, symbol: str) -> tuple[str, ...]:
+        return tuple(sorted({
+            order.ord_no
+            for order in (self.ledger.pending_orders(symbol) + self.ledger.execution_recovery_orders(symbol))
+            if order.ord_no
+        }))
+
+    def _reconciliation_open_rows(self, symbol: str, avg_price: float) -> list[tuple[int, float, float]]:
+        rows = []
+        for step in range(1, self.ctx.strategy.max_step + 1):
+            open_qty = self.ledger.open_tranche_qty(symbol, step)
+            if open_qty > 0:
+                buys = [row for row in self.ledger.ledger_rows(symbol)
+                        if row.get("type", "").lower() == "buy" and int(row.get("step", 0)) == step]
+                total = sum(float(row.get("qty", 0)) for row in buys)
+                weighted = sum(float(row.get("qty", 0)) * float(row.get("price", 0)) for row in buys)
+                rows.append((step, min(float(open_qty), total), weighted / total if total else avg_price))
+        return rows
+
+    async def _build_reconciliation_clearance_snapshot(
+        self, symbol: str, *, max_balance_age_sec: float,
+    ) -> ReconciliationClearanceSnapshot:
+        raw_balance = await self.ctx.client.get_balance()
+        if self.ctx.client.market == "US":
+            holdings = normalize_us_holdings(raw_balance)
+            recognized = us_balance_recognized(raw_balance)
+        else:
+            holdings = _all_balance_holdings(self.ctx.client.market, raw_balance)
+            recognized = _kr_balance_recognized(raw_balance)
+        target = next((item for item in holdings if _same_symbol(self.ctx.client.market, item["symbol"], symbol)), None)
+        holding = NormalizedBalanceHolding(symbol, float(target["qty"]), float(target["avgPrice"])) if target else NormalizedBalanceHolding(symbol, 0.0, 0.0)
+        known_tranche_qty = sum(qty for qty in self.ctx.strategy.step_qty.values() if qty > 0)
+        open_rows = self._reconciliation_open_rows(symbol, holding.avg_price) if known_tranche_qty > holding.qty + 1e-9 else None
+        lifecycle = self._symbol_lifecycles.get(self._symbol_key(symbol), {})
+        allocation = _manual_tranche_allocation(
+            qty=holding.qty, known_tranche_qty=known_tranche_qty,
+            has_step_one=bool(self.ctx.strategy.step_qty.get(1)),
+            lifecycle_open=isinstance(lifecycle, dict) and lifecycle.get("status") == "open",
+            lifecycle_manual_qty=float(lifecycle.get("manual_qty", 0) or 0) if isinstance(lifecycle, dict) else 0.0,
+        )
+        snapshot = ReconciliationClearanceSnapshot(
+            account_id=self.ctx.account_id, symbol=symbol,
+            balance_api_id="ust21070" if self.ctx.client.market == "US" else "kt00018",
+            balance_fetched_fresh=True, balance_from_shared_cache=False,
+            balance_recognized=recognized, holding=holding,
+            incomplete_reasons=self._reconciliation_incomplete_reasons(
+                symbol, balance_recognized=recognized, holding=holding, qty=holding.qty,
+                known_tranche_qty=known_tranche_qty, open_rows=open_rows,
+                unattributed_remainder=allocation.unattributed_remainder,
+                complete_zero_balance=recognized and holding.qty <= 1e-9,
+            ),
+            unresolved_order_ids=self._unresolved_reconciliation_order_ids(symbol),
+        )
+        return with_unattributed_collision_order_ids(snapshot, data_dir=self.data_dir)
 
     def _publish_passive_balance_snapshot(self, broker_holdings: list[dict], balance_recognized: bool) -> None:
         """Publish all broker holdings without changing any strategy state."""
@@ -341,12 +675,12 @@ class AccountEngine:
             "balanceComplete": True,
             "trancheBases": canonical_bases,
             "manualTrancheQty": {
-                str(symbol).upper().lstrip("A"): float(value.get("manual_qty", 0) or 0)
+                self._symbol_key(symbol): float(value.get("manual_qty", 0) or 0)
                 for symbol, value in lifecycles.items()
                 if isinstance(value, dict) and value.get("status") == "open"
             },
             "manualTrancheBases": {
-                str(symbol).upper().lstrip("A"): float(value.get("manual_price", 0) or 0)
+                self._symbol_key(symbol): float(value.get("manual_price", 0) or 0)
                 for symbol, value in lifecycles.items()
                 if isinstance(value, dict) and value.get("status") == "open"
                 and float(value.get("manual_price", 0) or 0) > 0
@@ -426,7 +760,7 @@ class AccountEngine:
         if self._balance_gate.reconciliation_blocked:
             return
         self._dashboard_strategy_changed = False
-        symbol_key = self.ctx.strategy.symbol.upper().lstrip("A")
+        symbol_key = self._symbol_key(self.ctx.strategy.symbol)
         if symbol_key in self._broker_fill_catchup_qty:
             # _reconcile_balance has published the latest snapshot but has
             # deliberately not mutated tranche/position state while the broker
@@ -489,9 +823,9 @@ class AccountEngine:
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
             return
-        symbol = str(control.get("symbol", "")).strip().upper().lstrip("A")
+        symbol = self._symbol_key(control.get("symbol", ""))
         config = control.get("config")
-        if not symbol or not isinstance(config, dict) or str(config.get("symbol", "")).strip().upper().lstrip("A") != symbol:
+        if not symbol or not isinstance(config, dict) or self._symbol_key(config.get("symbol", "")) != symbol:
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
             return
@@ -513,7 +847,7 @@ class AccountEngine:
         except (OSError, json.JSONDecodeError):
             profiles = []
         profile = next((p for p in profiles if isinstance(p, dict)
-                        and str((p.get("config") or {}).get("symbol", "")).strip().upper().lstrip("A") == symbol), None)
+                        and self._symbol_key((p.get("config") or {}).get("symbol", "")) == symbol), None)
         if profile is None:
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
@@ -552,7 +886,7 @@ class AccountEngine:
         lifecycle_state = self._symbol_lifecycles.get(symbol, {})
         lifecycle_is_open = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "open"
         lifecycle_is_pending = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "pending"
-        if (symbol != self.ctx.strategy.symbol.lstrip("A")
+        if (symbol != self._symbol_key(self.ctx.strategy.symbol)
                 or fingerprint != self._dashboard_config_fingerprint
                 or (not lifecycle_is_open and not lifecycle_is_pending)):
             try:
@@ -661,7 +995,7 @@ class AccountEngine:
         # symbol.  This is deliberately shared by independently-created
         # engines in the same worker, and complements the process-level worker
         # lock in main.py for accidental duplicate worker launches.
-        symbol_key = intent.symbol.upper().lstrip("A")
+        symbol_key = self._symbol_key(intent.symbol)
         order_lock = self._balance_gate.order_locks.setdefault(symbol_key, asyncio.Lock())
         async with order_lock:
             if intent.action == Action.SELL and intent.meta.get("sell_only_step"):
@@ -696,6 +1030,9 @@ class AccountEngine:
             await self._execute_order(intent)
 
     async def _execute_order(self, intent: OrderIntent):
+        if not getattr(self, "_symbol_key_migration_complete", True) or self._symbol_key_manual_review(intent.symbol):
+            self.ctx.logger.error(f"Order blocked pending symbol-key migration review: {intent.symbol}")
+            return
         if not self._dashboard_profile_allowed:
             self.ctx.logger.warning(f"Order blocked: {intent.symbol} is not allow-listed in Trade Settings")
             return
@@ -714,6 +1051,17 @@ class AccountEngine:
             self.ctx.logger.warning("US paper order blocked: set US_PAPER_ORDER_SUBMISSION_ENABLED=true after validating the mock account")
             return
         self._blocked_order_until.pop(block_key, None)
+        if self._dispatch_clearance_enabled:
+            service = self._balance_gate.dispatch_clearance_service
+            if service is None:
+                self.ctx.logger.error("Order blocked: reconciliation clearance service is unavailable")
+                return
+            try:
+                await service.check(self, intent.symbol)
+            except OrderDispatchBlockedError as exc:
+                self.ctx.logger.error(f"Order blocked: {exc}")
+                await self.telegram.notify_error(f"Order blocked: {exc}")
+                return
         try:
             result = await self.ctx.client.place_order(side=side, symbol=intent.symbol, qty=intent.qty,
                                                        price=intent.price, order_type=intent.order_type)
@@ -1055,7 +1403,7 @@ class AccountEngine:
         self._update_position(intent, order.side)
         self.ctx.strategy.on_filled(action, order.step, int(row["qty"]), row["price"])
         if order.side == "BUY":
-            symbol = order.symbol.upper().lstrip("A")
+            symbol = self._symbol_key(order.symbol)
             self._broker_fill_catchup_qty[symbol] = max(
                 self._broker_fill_catchup_qty.get(symbol, 0.0),
                 float(self.ctx.position.qty),
@@ -1157,7 +1505,7 @@ class AccountEngine:
         the next complete broker holding becomes the new manual tranche 1 and
         all prior SQLite rows remain reporting history only.
         """
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
         state = self._symbol_lifecycles.get(symbol)
         started_at = state.get("started_at") if isinstance(state, dict) and state.get("status") == "open" else None
         self.ledger.set_lifecycle_started_at(started_at)
@@ -1165,7 +1513,9 @@ class AccountEngine:
 
     def _begin_manual_lifecycle_activation(self, symbol: str) -> None:
         """Create a fresh boundary before adopting an HTS manual holding."""
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
+        if self._symbol_key_manual_review(symbol):
+            return
         with self._lifecycle_activation_lock:
             existing = self._symbol_lifecycles.get(symbol)
             if isinstance(existing, dict) and existing.get("status") == "pending" and existing.get("started_at"):
@@ -1186,7 +1536,9 @@ class AccountEngine:
 
     def _adopt_manual_lifecycle(self, symbol: str, qty: float, avg_price: float) -> bool:
         """Initialize tranche 1 solely from the activation-time broker snapshot."""
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
+        if self._symbol_key_manual_review(symbol):
+            return False
         state = self._symbol_lifecycles.get(symbol, {})
         if isinstance(state, dict) and state.get("status") == "open":
             return False
@@ -1220,7 +1572,7 @@ class AccountEngine:
         A manual Tranche 1 is immutable.  An unexplained broker quantity delta
         must never be treated as evidence that the manual lot increased.
         """
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
         state = self._symbol_lifecycles.get(symbol)
         if not isinstance(state, dict) or state.get("status") != "open":
             return
@@ -1235,7 +1587,9 @@ class AccountEngine:
 
     def _close_symbol_lifecycle(self, symbol: str) -> None:
         """Close the active lifecycle before deleting symbol controls/caches."""
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
+        if self._symbol_key_manual_review(symbol):
+            return
         state = self._symbol_lifecycles.get(symbol, {})
         self._symbol_lifecycles[symbol] = {
             "status": "closed", "started_at": state.get("started_at"),
@@ -1268,7 +1622,7 @@ class AccountEngine:
         self, symbol: str, price: float, *, only_if_absent: bool = False
     ) -> None:
         """Persist a validated tranche-1 basis so a stale value cannot return."""
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
         price = float(price)
         if price <= 0:
             return
@@ -1306,7 +1660,7 @@ class AccountEngine:
             self.ctx.logger.warning(f"Could not persist validated tranche base for {symbol}: {exc}")
 
     def _remove_tranche_base(self, symbol: str) -> None:
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
         try:
             with _TRANCHE_BASES_WRITE_LOCK:
                 try:
@@ -1341,7 +1695,7 @@ class AccountEngine:
         base from a prior fully-closed position must never override the current
         broker/confirmed-lot reconstruction merely because the symbol matches.
         """
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
         lot_qty = sum(float(qty) for _, qty, _ in confirmed_lots)
         lot_cost = sum(float(qty) * float(price) for _, qty, price in confirmed_lots)
         manual_qty = max(0.0, float(manual_qty))
@@ -1395,7 +1749,7 @@ class AccountEngine:
         has been sold.  That value is not a new HTS fill and must never reset
         an open lifecycle's manual Line 1 basis.
         """
-        symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+        symbol = self._symbol_key(self.ctx.strategy.symbol)
         lifecycle = self._symbol_lifecycles.get(symbol, {})
         manual_qty = float(lifecycle.get("manual_qty", 0) or 0) if isinstance(lifecycle, dict) else 0.0
         if (isinstance(lifecycle, dict) and lifecycle.get("status") == "open"
@@ -1406,16 +1760,23 @@ class AccountEngine:
         return float(broker_avg)
 
     async def _reconcile_balance(self):
-        raw_balance = await self._shared_broker_balance()
+        balance_result = await self._shared_broker_balance()
+        raw_balance = balance_result[0] if isinstance(balance_result, tuple) else balance_result
         if self.ctx.client.market == "US":
             broker_holdings = normalize_us_holdings(raw_balance)
             balance_recognized = us_balance_recognized(raw_balance)
         else:
-            broker_holdings = _all_balance_holdings(raw_balance)
+            broker_holdings = _all_balance_holdings(self.ctx.client.market, raw_balance)
             balance_recognized = _kr_balance_recognized(raw_balance)
+        if balance_recognized:
+            self._run_symbol_key_migration(broker_holdings)
+            if self._symbol_key_manual_review(self.ctx.strategy.symbol):
+                self._trading_paused = True
+                self._pause_reason = "symbol_key_manual_review"
+                return
         if self._balance_only:
             self._publish_passive_balance_snapshot(broker_holdings, balance_recognized)
-            quantities = {str(item.get("symbol", "")).upper().lstrip("A"): float(item.get("qty", 0) or 0)
+            quantities = {self._symbol_key(item.get("symbol", "")): float(item.get("qty", 0) or 0)
                           for item in broker_holdings}
             self._orphan_cleaner.sweep(
                 quantities, balance_recognized, self._has_unresolved_order_for_cleanup, apply=True,
@@ -1433,11 +1794,21 @@ class AccountEngine:
                 )
         if self.ctx.client.market == "US":
             holding_row = next((item for item in broker_holdings
-                                if _same_symbol(item["symbol"], self.ctx.strategy.symbol)), None)
+                                if _same_symbol(self.ctx.client.market, item["symbol"], self.ctx.strategy.symbol)), None)
             holding = ((holding_row["qty"], holding_row["avgPrice"]) if holding_row else (0.0, 0.0)) if balance_recognized else None
         else:
-            holding = _balance_holding(raw_balance, self.ctx.strategy.symbol)
-        if holding is None:
+            holding = _balance_holding(self.ctx.client.market, raw_balance, self.ctx.strategy.symbol)
+        normalized_holding = (
+            NormalizedBalanceHolding(self.ctx.strategy.symbol, float(holding[0]), float(holding[1]))
+            if holding is not None else None
+        )
+        incomplete_reasons = self._reconciliation_incomplete_reasons(
+            self.ctx.strategy.symbol,
+            balance_recognized=balance_recognized,
+            holding=normalized_holding,
+            qty=normalized_holding.qty if normalized_holding is not None else 0.0,
+        )
+        if ReconciliationIncompleteReason.UNRECOGNIZED_BALANCE in incomplete_reasons:
             self.ctx.logger.warning(
                 "Balance response could not be reconciled; preserving local state "
                 f"(top-level fields: {sorted(raw_balance.keys())}; "
@@ -1493,13 +1864,13 @@ class AccountEngine:
         # One shared broker-authoritative orphan evaluator owns both startup
         # and live cleanup.  It requires two complete zero snapshots and never
         # touches unresolved orders or a nonzero holding.
-        quantities = {str(item.get("symbol", "")).upper().lstrip("A"): float(item.get("qty", 0) or 0)
+        quantities = {self._symbol_key(item.get("symbol", "")): float(item.get("qty", 0) or 0)
                       for item in broker_holdings}
         orphan_results = self._orphan_cleaner.sweep(
             quantities, balance_recognized, self.ledger.has_unresolved_orders, apply=True,
         )
         orphan_by_symbol = {item["symbol"]: item for item in orphan_results}
-        symbol_key = self.ctx.strategy.symbol.upper().lstrip("A")
+        symbol_key = self._symbol_key(self.ctx.strategy.symbol)
         current_orphan = orphan_by_symbol.get(symbol_key, {})
         if current_orphan.get("classification") == "cleaned":
             self._closed_symbols_blocked.add(symbol_key)
@@ -1549,7 +1920,7 @@ class AccountEngine:
         # and reconcile the balance normally. This applies to both BUY and
         # SELL; the BUY re-entry delay is set only by _apply_confirmed_fill.
         pending_for_symbol = self.ledger.pending_orders(self.ctx.strategy.symbol)
-        if pending_for_symbol and abs(float(self.ctx.position.qty) - qty) > 1e-9:
+        if ReconciliationIncompleteReason.PENDING_QUANTITY_DEFERRAL in incomplete_reasons:
             self.ctx.logger.info(
                 f"Broker quantity change deferred for pending fill reconciliation: "
                 f"{self.ctx.strategy.symbol} local={self.ctx.position.qty:g} broker={qty:g} "
@@ -1599,22 +1970,14 @@ class AccountEngine:
             # whole broker balance as tranche 1. Preserve one manual HTS
             # share when no confirmed step-1 fill exists, then cap confirmed
             # later tranches to the live broker quantity.
-            open_rows = []
-            for step in range(1, self.ctx.strategy.max_step + 1):
-                open_qty = self.ledger.open_tranche_qty(self.ctx.strategy.symbol, step)
-                if open_qty > 0:
-                    # ledger_rows() is lifecycle-scoped, so rows here cannot
-                    # belong to an older fully closed cycle.  Aggregate every
-                    # current-lifecycle fill for this line: a prior duplicate
-                    # or legitimate split execution must not disappear merely
-                    # because a recovery used only the newest order.
-                    buys = [r for r in self.ledger.ledger_rows(self.ctx.strategy.symbol)
-                            if r.get("type", "").lower() == "buy" and int(r.get("step", 0)) == step]
-                    total = sum(float(row.get("qty", 0)) for row in buys)
-                    weighted = sum(float(row.get("qty", 0)) * float(row.get("price", 0)) for row in buys)
-                    open_rows.append((step, min(float(open_qty), total), weighted / total if total else avg_price))
+            open_rows = self._reconciliation_open_rows(self.ctx.strategy.symbol, avg_price)
             remaining = float(qty)
-            if not any(step == 1 for step, _, _ in open_rows) and remaining > 0:
+            incomplete_reasons = self._reconciliation_incomplete_reasons(
+                self.ctx.strategy.symbol, balance_recognized=balance_recognized,
+                holding=normalized_holding, qty=qty,
+                known_tranche_qty=known_tranche_qty, open_rows=open_rows,
+            )
+            if ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS in incomplete_reasons:
                 confirmed_steps = [step for step, _, _ in open_rows]
                 message = (
                     f"Ambiguous tranche rebuild for {self.ctx.strategy.symbol}: "
@@ -1670,12 +2033,18 @@ class AccountEngine:
             # manual shares.
             lifecycle_manual_qty = max(0.0, float(lifecycle.get("manual_qty", 0) or 0)) if isinstance(lifecycle, dict) else 0.0
             lifecycle_manual_price = float(lifecycle.get("manual_price", 0) or 0) if isinstance(lifecycle, dict) else 0.0
-            if unmatched_qty > 1e-9 and not self.ctx.strategy.step_qty.get(1) and lifecycle_manual_qty > 1e-9:
+            allocation = _manual_tranche_allocation(
+                qty=qty, known_tranche_qty=known_tranche_qty,
+                has_step_one=bool(self.ctx.strategy.step_qty.get(1)),
+                lifecycle_open=isinstance(lifecycle, dict) and lifecycle.get("status") == "open",
+                lifecycle_manual_qty=lifecycle_manual_qty,
+            )
+            if allocation.restored_manual_qty > 1e-9:
                 # Restart recovery restores the immutable manual lot first.
                 # Any broker quantity beyond that lot remains un-attributed and
                 # is handled by the fail-closed branch below; it is never
                 # merged into Line 1.
-                restored_manual_qty = min(unmatched_qty, lifecycle_manual_qty)
+                restored_manual_qty = allocation.restored_manual_qty
                 self.ctx.strategy.step_qty[1] = int(restored_manual_qty)
                 self.ctx.strategy.step_prices[1] = lifecycle_manual_price or avg_price
                 self._store_tranche_base(self.ctx.strategy.symbol, self.ctx.strategy.step_prices[1])
@@ -1689,16 +2058,16 @@ class AccountEngine:
                 if unmatched_qty <= 1e-9:
                     self._tranche_sell_paused = False
                     return
-            if unmatched_qty > 1e-9 and not self.ctx.strategy.step_qty.get(1):
+            if allocation.adopt_manual_qty > 1e-9:
                 confirmed_lots = [
                     (step, float(step_qty), float(self.ctx.strategy.step_prices.get(step, avg_price)))
                     for step, step_qty in self.ctx.strategy.step_qty.items() if step_qty > 0
                 ]
                 first_price = self._validated_manual_tranche_base(
-                    self.ctx.strategy.symbol, qty, avg_price, confirmed_lots, unmatched_qty
+                    self.ctx.strategy.symbol, qty, avg_price, confirmed_lots, allocation.adopt_manual_qty
                 )
-                self._refresh_open_lifecycle_manual_basis(self.ctx.strategy.symbol, unmatched_qty, first_price)
-                self.ctx.strategy.step_qty[1] = int(unmatched_qty)
+                self._refresh_open_lifecycle_manual_basis(self.ctx.strategy.symbol, allocation.adopt_manual_qty, first_price)
+                self.ctx.strategy.step_qty[1] = int(allocation.adopt_manual_qty)
                 self.ctx.strategy.step_prices[1] = first_price
                 self.ctx.position.qty = qty
                 self.ctx.position.avg_price = avg_price
@@ -1709,8 +2078,17 @@ class AccountEngine:
                 self._tranche_sell_paused = False
                 self.ctx.logger.info(
                     f"Broker remainder isolated as manual tranche 1 for {self.ctx.strategy.symbol}: "
-                    f"qty={unmatched_qty:g}, base={first_price}"
+                    f"qty={allocation.adopt_manual_qty:g}, base={first_price}"
                 )
+                return
+            if allocation.unattributed_remainder <= 1e-9:
+                return
+            incomplete_reasons = self._reconciliation_incomplete_reasons(
+                self.ctx.strategy.symbol, balance_recognized=balance_recognized,
+                holding=normalized_holding, qty=qty,
+                unattributed_remainder=allocation.unattributed_remainder,
+            )
+            if ReconciliationIncompleteReason.UNATTRIBUTED_QUANTITY_PAUSE not in incomplete_reasons:
                 return
             # A broker quantity change that cannot be attributed to a confirmed
             # tranche fill must never be folded into tranche 1. Doing so could
@@ -1734,7 +2112,7 @@ class AccountEngine:
             # explicitly enabled this holding in the dashboard, treat the broker
             # average as tranche 1 so sell targets and later grid buys have a
             # known, broker-authoritative reference price.
-            if qty > 0 and self._dashboard_symbol == self.ctx.strategy.symbol.lstrip("A"):
+            if qty > 0 and self._dashboard_symbol == self._symbol_key(self.ctx.strategy.symbol):
                 tranche_one_price = self._manual_lifecycle_basis_or_broker_average(qty, avg_price)
                 self.ctx.position.step = 1
                 self.ctx.strategy.step_qty[1] = int(qty)
@@ -1742,7 +2120,7 @@ class AccountEngine:
                 # A genuinely new manual Tier 1 uses the broker average. An
                 # already-open lifecycle instead retains its recorded manual
                 # basis even when broker moving-average accounting has shifted.
-                symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+                symbol = self._symbol_key(self.ctx.strategy.symbol)
                 self._store_tranche_base(symbol, tranche_one_price)
             if not self._auto_trading_enabled:
                 self.ctx.logger.info(
@@ -1758,7 +2136,7 @@ class AccountEngine:
         # A manually/HTS-held position can have already been adopted before a
         # dashboard profile becomes active. Seed tranche 1 regardless of a
         # quantity change so grid Auto Buy has the broker average as its base.
-        if qty > 0 and self._dashboard_symbol == self.ctx.strategy.symbol.lstrip("A"):
+        if qty > 0 and self._dashboard_symbol == self._symbol_key(self.ctx.strategy.symbol):
             if known_tranche_qty <= 0 and (self.ctx.position.step == 0 or not self.ctx.strategy.step_prices.get(1)):
                 tranche_one_price = self._manual_lifecycle_basis_or_broker_average(qty, avg_price)
                 self.ctx.position.qty = qty
@@ -1766,7 +2144,7 @@ class AccountEngine:
                 self.ctx.position.step = 1
                 self.ctx.strategy.step_qty[1] = int(qty)
                 self.ctx.strategy.step_prices[1] = tranche_one_price
-                symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+                symbol = self._symbol_key(self.ctx.strategy.symbol)
                 self._store_tranche_base(symbol, tranche_one_price)
                 self.ctx.logger.info(
                     f"HTS holding initialized for automation: {self.ctx.strategy.symbol} qty={qty}, tranche-1 price={tranche_one_price}"
@@ -1779,7 +2157,7 @@ class AccountEngine:
         if not balance_recognized:
             return
         current_symbols = {
-            str(item.get("symbol", "")).upper().lstrip("A")
+            self._symbol_key(item.get("symbol", ""))
             for item in broker_holdings
             if float(item.get("qty", 0) or 0) > 0
         }
@@ -1792,7 +2170,7 @@ class AccountEngine:
             return
         profiles = settings.get("profiles", [])
         configured_symbols = {
-            str((profile.get("config") or {}).get("symbol", "")).upper().lstrip("A")
+            self._symbol_key((profile.get("config") or {}).get("symbol", ""))
             for profile in profiles if isinstance(profile, dict)
         }
         configured_symbols.discard("")
@@ -1800,7 +2178,7 @@ class AccountEngine:
         # absent is a confirmed full close. Remove it immediately. For profiles
         # that were never held, retain the existing two-snapshot safeguard.
         previous_symbols = {
-            str(item.get("symbol", "")).upper().lstrip("A")
+            self._symbol_key(item.get("symbol", ""))
             for item in (previous_balance.get("holdings") or [])
             if float(item.get("qty", 0) or 0) > 0
         }
@@ -1823,9 +2201,9 @@ class AccountEngine:
         }
         if not closed_symbols:
             return
-        retained = [profile for profile in profiles if str(
+        retained = [profile for profile in profiles if self._symbol_key(
             (profile.get("config") or {}).get("symbol", "")
-        ).upper().lstrip("A") not in closed_symbols]
+        ) not in closed_symbols]
         if len(retained) == len(profiles):
             return
         settings["profiles"] = retained
@@ -1841,7 +2219,9 @@ class AccountEngine:
 
     def _cleanup_fully_closed_symbol(self, symbol: str) -> None:
         """Atomically retire all per-symbol automation state after full close."""
-        symbol = str(symbol).upper().lstrip("A")
+        symbol = self._symbol_key(symbol)
+        if self._symbol_key_manual_review(symbol):
+            return
         account = self.ctx.account_id
         control_paths = [
             self.data_dir / f"dashboard_control_{account}_{symbol}.json",
@@ -1858,7 +2238,7 @@ class AccountEngine:
         try:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
-            retained = [p for p in profiles if str((p.get("config") or {}).get("symbol", "")).upper().lstrip("A") != symbol]
+            retained = [p for p in profiles if self._symbol_key((p.get("config") or {}).get("symbol", "")) != symbol]
             if len(retained) != len(profiles):
                 settings["profiles"] = retained
                 settings_path.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
@@ -1933,10 +2313,10 @@ class AccountEngine:
                     updated = datetime.fromisoformat(str(snapshot.get("updatedAt", "")))
                     age = (datetime.now() - updated).total_seconds()
                     if 0 <= age <= 30 and snapshot.get("balanceComplete"):
-                        symbol = self.ctx.strategy.symbol.upper().lstrip("A")
+                        symbol = self._symbol_key(self.ctx.strategy.symbol)
                         row = next(
                             (item for item in snapshot.get("holdings", [])
-                             if str(item.get("symbol", "")).upper().lstrip("A") == symbol),
+                             if self._symbol_key(item.get("symbol", "")) == symbol),
                             None,
                         )
                         fallback = float((row or {}).get("currentPrice") or 0)
@@ -1971,7 +2351,7 @@ class AccountEngine:
             if not isinstance(existing, dict):
                 existing = {}
             trigger = self._next_buy_trigger()
-            existing[self.ctx.strategy.symbol.upper().lstrip("A")] = {
+            existing[self._symbol_key(self.ctx.strategy.symbol)] = {
                 "price": float(price), "source": source,
                 "observedAt": datetime.fromtimestamp(observed_at, timezone.utc).isoformat(),
                 "evaluatedAt": datetime.now(timezone.utc).isoformat(),
@@ -2033,7 +2413,7 @@ def _filled_at(row: dict) -> str:
     value = str(row.get("ord_dt") or "").replace("-", "")
     return f"{value[:4]}-{value[4:6]}-{value[6:]}" if len(value) == 8 and value.isdigit() else datetime.now().date().isoformat()
 
-def _balance_holding(data: dict, symbol: str) -> tuple[float, float] | None:
+def _balance_holding(market: str, data: dict, symbol: str) -> tuple[float, float] | None:
     saw_holdings = False
     for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "acnt_bal", "result_list", "result_lsit", "holdings"):
         rows = data.get(key)
@@ -2043,7 +2423,7 @@ def _balance_holding(data: dict, symbol: str) -> tuple[float, float] | None:
             continue
         saw_holdings = True
         for row in rows:
-            if _same_symbol(row.get("stk_cd", ""), symbol):
+            if _same_symbol(market, row.get("stk_cd", ""), symbol):
                 for qty_key in ("rmnd_qty", "poss_qty", "hold_qty", "cur_qty", "qty"):
                     if qty_key in row:
                         avg = next((_number(row[k]) for k in ("buy_uv", "avg_prc", "pur_pric") if k in row), 0.0)
@@ -2059,7 +2439,7 @@ def _balance_holding(data: dict, symbol: str) -> tuple[float, float] | None:
     def walk(value):
         if isinstance(value, dict):
             code = next((value.get(k) for k in ("stk_cd", "symbol", "code") if value.get(k) is not None), None)
-            if code is not None and _same_symbol(code, symbol):
+            if code is not None and _same_symbol(market, code, symbol):
                 qty_key = next((k for k in ("rmnd_qty", "cur_qty", "poss_qty", "hold_qty", "qty", "setl_remn") if k in value), None)
                 if qty_key:
                     avg = next((_number(value[k]) for k in ("buy_uv", "avg_prc", "pur_pric", "cntr_uv") if k in value), 0.0)
@@ -2081,9 +2461,9 @@ def _balance_holding(data: dict, symbol: str) -> tuple[float, float] | None:
     return None
 
 
-def _same_symbol(value, symbol: str) -> bool:
-    """Normalize documented A-prefixes plus whitespace from mock responses."""
-    return str(value).strip().lstrip("A") == str(symbol).strip().lstrip("A")
+def _same_symbol(market: str, value, symbol: str) -> bool:
+    """Compare symbols with the shared market-aware runtime key."""
+    return canonical_symbol_key(market, value) == canonical_symbol_key(market, symbol)
 
 
 def _holding_summary(data: dict) -> str:
@@ -2105,7 +2485,7 @@ def _kr_balance_recognized(data: dict) -> bool:
     return any(key in data for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "acnt_bal", "result_list", "holdings"))
 
 
-def _all_balance_holdings(data: dict) -> list[dict]:
+def _all_balance_holdings(market: str, data: dict) -> list[dict]:
     """Map the authoritative Kiwoom holdings list for dashboard display."""
     rows = data.get("acnt_evlt_remn_indv_tot", [])
     if isinstance(rows, dict):
@@ -2120,7 +2500,7 @@ def _all_balance_holdings(data: dict) -> list[dict]:
         if qty <= 0:
             continue
         holdings.append({
-            "symbol": str(row["stk_cd"]).strip().lstrip("A"),
+            "symbol": canonical_symbol_key(market, row["stk_cd"]),
             "name": str(row.get("stk_nm", "")).strip(),
             "qty": qty,
             "avgPrice": _number(row.get("pur_pric")),

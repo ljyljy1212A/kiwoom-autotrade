@@ -4,6 +4,8 @@ import struct
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
@@ -11,7 +13,11 @@ from httpcore._async.http11 import AsyncHTTP11Connection, HTTPConnectionState
 from httpcore._models import Origin
 
 from src.core.broker_http import (
+    FixedPortCollisionError,
+    clear_fixed_port_degraded_state,
+    enter_fixed_port_degraded_state,
     FixedPortAsyncHTTPTransport,
+    get_fixed_port_degraded_state,
     _CloseCompletionState,
     _FixedPortAnyIOBackend,
     _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC,
@@ -303,6 +309,49 @@ class BrokerHTTPCloseTest(unittest.IsolatedAsyncioTestCase):
 
 
 class BrokerHTTPConnectRetryTest(unittest.TestCase):
+    def test_tags_exhausted_windows_address_in_use_collision(self):
+        self._assert_exhausted_collision_is_tagged(OSError(10048, "address already in use"), winerror=10048)
+
+    def test_tags_exhausted_posix_address_in_use_collision(self):
+        self._assert_exhausted_collision_is_tagged(OSError(98, "address already in use"))
+
+    def test_does_not_tag_timeout_or_connection_refused(self):
+        for failure in (TimeoutError("timed out"), ConnectionRefusedError(10061, "connection refused")):
+            with self.subTest(failure=type(failure).__name__):
+                self._assert_non_collision_error_is_unchanged(failure)
+
+    def _assert_exhausted_collision_is_tagged(self, failure, winerror=None):
+        from unittest.mock import Mock, patch
+
+        if winerror is not None:
+            failure.winerror = winerror
+        fake_socket = Mock()
+        fake_socket.connect.side_effect = [failure, failure]
+        with patch(
+            "src.core.broker_http.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
+        ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
+            "src.core.broker_http.time.sleep"
+        ), patch("src.core.broker_http.time.monotonic", side_effect=[0.0, 2.5]):
+            with self.assertRaises(FixedPortCollisionError) as raised:
+                _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
+
+        self.assertIs(raised.exception.original, failure)
+
+    def _assert_non_collision_error_is_unchanged(self, failure):
+        from unittest.mock import Mock, patch
+
+        fake_socket = Mock()
+        fake_socket.connect.side_effect = failure
+        with patch(
+            "src.core.broker_http.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
+        ), patch("src.core.broker_http.socket.socket", return_value=fake_socket):
+            with self.assertRaises(type(failure)) as raised:
+                _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
+
+        self.assertIs(raised.exception, failure)
+
     def test_retries_address_in_use_connect_and_recovers(self):
         from unittest.mock import Mock, call, patch
 
@@ -348,6 +397,52 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
         self.assertIs(raised.exception, failure)
         fake_socket.connect.assert_called_once_with(("127.0.0.1", 443))
         sleep.assert_not_called()
+
+
+class FixedPortDegradedStateTest(unittest.TestCase):
+    def tearDown(self):
+        clear_fixed_port_degraded_state("account-a")
+        clear_fixed_port_degraded_state("account-b")
+
+    def test_entry_populates_required_state_fields(self):
+        now = datetime(2026, 8, 25, tzinfo=timezone.utc)
+
+        state = enter_fixed_port_degraded_state("account-a", "rest", now=now)
+
+        self.assertEqual(state.account_id, "account-a")
+        self.assertEqual(state.entered_at, now)
+        self.assertEqual(state.last_collision_at, now)
+        self.assertEqual(state.operation, "rest")
+        self.assertEqual(state.next_recovery_probe_at, now)
+        self.assertFalse(state.entry_alert_fired)
+        self.assertIsNone(state.last_ongoing_status_at)
+
+    def test_concurrent_entry_keeps_one_account_state(self):
+        now = datetime(2026, 8, 25, tzinfo=timezone.utc)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            states = list(executor.map(lambda _: enter_fixed_port_degraded_state("account-a", "rest", now=now), range(32)))
+
+        state = get_fixed_port_degraded_state("account-a")
+        self.assertIsNotNone(state)
+        self.assertTrue(all(entry == state for entry in states))
+        self.assertEqual(state.entered_at, now)
+        self.assertEqual(state.last_collision_at, now)
+
+    def test_clear_removes_state_when_called_directly(self):
+        enter_fixed_port_degraded_state("account-a", "rest")
+
+        clear_fixed_port_degraded_state("account-a")
+
+        self.assertIsNone(get_fixed_port_degraded_state("account-a"))
+
+    def test_entry_is_scoped_to_its_account(self):
+        first = datetime(2026, 8, 25, tzinfo=timezone.utc)
+        second = first + timedelta(seconds=1)
+        enter_fixed_port_degraded_state("account-a", "rest", now=first)
+        enter_fixed_port_degraded_state("account-b", "token", now=second)
+
+        self.assertEqual(get_fixed_port_degraded_state("account-a").operation, "rest")
+        self.assertEqual(get_fixed_port_degraded_state("account-b").operation, "token")
 
 
 if __name__ == "__main__":

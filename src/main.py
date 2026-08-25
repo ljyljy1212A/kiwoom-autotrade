@@ -24,9 +24,10 @@ from dotenv import load_dotenv
 
 from src.core.broker_http import _connect_with_reuseaddr
 from src.core.process_lock import AccountOrderAuthority, ProcessLock
+from src.core.symbol_keys import canonical_symbol_key
 from src.core.runtime_paths import DATA_DIR, LOG_DIR, PROJECT_ROOT
 from src.core.account_manager import load_accounts, run_all
-from src.core.engine import AccountEngine
+from src.core.engine import AccountEngine, DispatchClearanceService
 from src.core.realtime_feed import PriceFeed
 from src.calendar_utils.market_calendar import _FALLBACK_HOURS
 from src.strategy.base import PositionState
@@ -75,18 +76,16 @@ class WorkerIdentity:
 @dataclass
 class _EngineSlot:
     state: EngineState
+    original_symbol: str
     task: asyncio.Task | None = None
 
 
-def _strip_kr_symbol_prefix(symbol: str) -> str:
+def _strip_kr_symbol_prefix(market: str, symbol: str) -> str:
     """Kiwoom account/balance responses prefix KR cash-equity codes with a
     single leading 'A' (e.g. 'A005930'). Strip only that one character --
     never use str.lstrip('A'), which would also mangle US tickers like
     'AAPL' or 'AMD' that happen to start with A."""
-    code = str(symbol).upper()
-    if code.startswith("A") and len(code) > 1:
-        return code[1:]
-    return code
+    return canonical_symbol_key(market, symbol)
 
 
 class SymbolEngineRegistry:
@@ -101,46 +100,70 @@ class SymbolEngineRegistry:
         self._slots: dict[tuple[str, str], _EngineSlot] = {}
 
     @staticmethod
-    def key(account_id: str, symbol: str) -> tuple[str, str]:
-        return str(account_id), _strip_kr_symbol_prefix(symbol)
+    def key(account_id: str, market: str, symbol: str) -> tuple[str, str]:
+        return str(account_id), _strip_kr_symbol_prefix(market, symbol)
 
-    def claim(self, account_id: str, symbol: str) -> bool:
-        key = self.key(account_id, symbol)
+    def claim(self, account_id: str, market: str, symbol: str) -> bool:
+        key = self.key(account_id, market, symbol)
         slot = self._slots.get(key)
         if slot is not None and slot.state is not EngineState.STOPPED:
             return False
-        self._slots[key] = _EngineSlot(EngineState.STARTING)
+        self._slots[key] = _EngineSlot(EngineState.STARTING, symbol)
         return True
 
-    def bind_task(self, account_id: str, symbol: str, task: asyncio.Task) -> None:
-        slot = self._slots.get(self.key(account_id, symbol))
+    def bind_task(self, account_id: str, market: str, symbol: str, task: asyncio.Task) -> None:
+        slot = self._slots.get(self.key(account_id, market, symbol))
         if slot is None or slot.state is not EngineState.STARTING or slot.task is not None:
             raise RuntimeError(f"Cannot bind unclaimed engine slot: {account_id}/{symbol}")
         slot.task = task
 
-    def mark_running(self, account_id: str, symbol: str, task: asyncio.Task) -> None:
-        slot = self._slots.get(self.key(account_id, symbol))
+    def mark_running(self, account_id: str, market: str, symbol: str, task: asyncio.Task) -> None:
+        slot = self._slots.get(self.key(account_id, market, symbol))
         if slot is None or slot.task is not task or slot.state is not EngineState.STARTING:
             raise RuntimeError(f"Cannot run unclaimed engine slot: {account_id}/{symbol}")
         slot.state = EngineState.RUNNING
 
-    def request_stop(self, account_id: str, symbol: str, task: asyncio.Task) -> bool:
-        slot = self._slots.get(self.key(account_id, symbol))
+    def request_stop(self, account_id: str, market: str, symbol: str, task: asyncio.Task) -> bool:
+        slot = self._slots.get(self.key(account_id, market, symbol))
         if slot is None or slot.task is not task or slot.state not in (EngineState.STARTING, EngineState.RUNNING):
             return False
         slot.state = EngineState.STOPPING
         return True
 
-    def release_from_task(self, account_id: str, symbol: str, task: asyncio.Task) -> None:
+    def release_from_task(self, account_id: str, market: str, symbol: str, task: asyncio.Task) -> None:
         """The sole STOPPED transition: registered task completion callback."""
-        slot = self._slots.get(self.key(account_id, symbol))
+        slot = self._slots.get(self.key(account_id, market, symbol))
         if slot is not None and slot.task is task:
             slot.state = EngineState.STOPPED
             slot.task = None
 
-    def state(self, account_id: str, symbol: str) -> EngineState | None:
-        slot = self._slots.get(self.key(account_id, symbol))
+    def state(self, account_id: str, market: str, symbol: str) -> EngineState | None:
+        slot = self._slots.get(self.key(account_id, market, symbol))
         return slot.state if slot else None
+
+    def running_symbols(self, account_id: str) -> tuple[str, ...]:
+        return tuple(sorted(slot.original_symbol for (slot_account, _), slot in self._slots.items()
+                            if slot_account == str(account_id) and slot.state is EngineState.RUNNING))
+
+
+class DispatchProfileVersion:
+    def __init__(self):
+        self.version = 0
+        self.last_profile_fingerprint: str | None = None
+
+    def observe(self, account_id: str, market: str, dashboard_settings_payload) -> int:
+        profiles = dashboard_settings_payload.get("profiles", []) if isinstance(dashboard_settings_payload, dict) else []
+        relevant = [profile for profile in profiles if isinstance(profile, dict)
+                    and isinstance(profile.get("config"), dict)
+                    and str(profile["config"].get("market", "")).upper() == market]
+        fingerprint = json.dumps({"account_id": str(account_id), "market": market, "profiles": relevant},
+                                 sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if self.last_profile_fingerprint is None:
+            self.last_profile_fingerprint = fingerprint
+        elif fingerprint != self.last_profile_fingerprint:
+            self.last_profile_fingerprint = fingerprint
+            self.version += 1
+        return self.version
 
 
 def _worker_pid_path(account_id: str) -> Path:
@@ -332,7 +355,7 @@ async def run_quote_health_monitor(ctx, feed: PriceFeed) -> None:
         await asyncio.sleep(60)
 
 
-def _symbol_has_unresolved_orders(account_id: str, symbol: str) -> bool:
+def _symbol_has_unresolved_orders(account_id: str, market: str, symbol: str) -> bool:
     """Whether a disabled profile still needs broker-order recovery.
 
     Execution controls must be allowed to turn off immediately, but disabling a
@@ -348,7 +371,7 @@ def _symbol_has_unresolved_orders(account_id: str, symbol: str) -> bool:
             return db.execute(
                 "SELECT 1 FROM pending_orders WHERE account_id=? AND symbol=? "
                 "AND status IN ('open','awaiting_execution_history') LIMIT 1",
-                (account_id, _strip_kr_symbol_prefix(symbol)),
+                (account_id, _strip_kr_symbol_prefix(market, symbol)),
             ).fetchone() is not None
         finally:
             db.close()
@@ -372,8 +395,8 @@ def _enabled_symbol_configs(account_id: str, market: str) -> list[dict]:
             continue
         if str(config.get("market", "")).upper() != market or not config.get("symbol"):
             continue
-        symbol = _strip_kr_symbol_prefix(config["symbol"])
-        needs_recovery = _symbol_has_unresolved_orders(account_id, symbol)
+        symbol = _strip_kr_symbol_prefix(market, config["symbol"])
+        needs_recovery = _symbol_has_unresolved_orders(account_id, market, symbol)
         if profile.get("enabled", True) is False and not needs_recovery:
             continue
         # Recovery tests and diagnostic monitoring may need a real per-symbol
@@ -391,6 +414,14 @@ def _enabled_symbol_configs(account_id: str, market: str) -> list[dict]:
     return result
 
 
+def _dashboard_settings_payload(account_id: str) -> dict:
+    try:
+        payload = json.loads((DATA_DIR / f"dashboard_settings_{account_id}.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 async def run_symbol_engines(ctx, telegram: TelegramController, discord: DiscordNotifier) -> None:
     """Keep one isolated engine/task per enabled symbol on an account."""
     price_feed = await make_price_feed(ctx)
@@ -400,23 +431,26 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
     )
     workers: dict[str, asyncio.Task] = {}
     registry = SymbolEngineRegistry()
+    profile_version_provider = DispatchProfileVersion()
+    dispatch_clearance_service = DispatchClearanceService(ctx.account_id)
     balance_monitor: asyncio.Task | None = None
 
     async def run_registered_symbol(symbol: str, config: dict) -> None:
         task = asyncio.current_task()
         assert task is not None
-        registry.mark_running(ctx.account_id, symbol, task)
+        registry.mark_running(ctx.account_id, ctx.client.market, symbol, task)
         # Construction occurs only after the registry has atomically claimed
         # the slot. No watcher/recovery path can construct a second engine for
         # the same account/symbol while this task owns it.
         symbol_ctx = replace(ctx, strategy=InfiniteGridStrategy(config),
                              position=PositionState(symbol=symbol), logger=ctx.logger.bind(symbol=symbol))
         engine = AccountEngine(symbol_ctx, telegram, discord, None,
-                               price_feed, control_symbol=symbol)
+                                price_feed, control_symbol=symbol,
+                                dispatch_clearance_service=dispatch_clearance_service)
         await engine.run()
 
     def release_registered_symbol(symbol: str, task: asyncio.Task) -> None:
-        registry.release_from_task(ctx.account_id, symbol, task)
+        registry.release_from_task(ctx.account_id, ctx.client.market, symbol, task)
         if workers.get(symbol) is task:
             workers.pop(symbol, None)
         ctx.logger.info(f"Symbol engine task completed: {symbol}; registry=STOPPED")
@@ -424,7 +458,13 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
     try:
         while True:
             configs = _enabled_symbol_configs(ctx.account_id, ctx.client.market)
-            wanted = {_strip_kr_symbol_prefix(config["symbol"]): config for config in configs}
+            profile_version = profile_version_provider.observe(
+                ctx.account_id, ctx.client.market, _dashboard_settings_payload(ctx.account_id),
+            )
+            dispatch_clearance_service.observe_active_profile(
+                registry.running_symbols(ctx.account_id), profile_version,
+            )
+            wanted = {_strip_kr_symbol_prefix(ctx.client.market, config["symbol"]): config for config in configs}
             # The monitor exists only for an account with no active strategy.
             # When any symbol engine is running, that engine already owns the
             # fresh account snapshot through the shared balance gate.
@@ -464,26 +504,26 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
                         "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
                         "config": config,
                     }, ensure_ascii=False), encoding="utf-8")
-                if not registry.claim(ctx.account_id, symbol):
+                if not registry.claim(ctx.account_id, ctx.client.market, symbol):
                     # The normal configuration scan sees an already-running
                     # symbol every second. Ownership is unchanged; avoid
                     # producing an unbounded debug log stream for that no-op.
                     continue
                 task = asyncio.create_task(run_registered_symbol(symbol, config), name=f"{ctx.account_id}-{symbol}")
-                registry.bind_task(ctx.account_id, symbol, task)
+                registry.bind_task(ctx.account_id, ctx.client.market, symbol, task)
                 task.add_done_callback(lambda done, item=symbol: release_registered_symbol(item, done))
                 workers[symbol] = task
                 ctx.logger.info(f"Started independent symbol engine: {symbol}")
             for symbol, task in list(workers.items()):
                 if symbol not in wanted and not task.done():
-                    if registry.request_stop(ctx.account_id, symbol, task):
+                    if registry.request_stop(ctx.account_id, ctx.client.market, symbol, task):
                         task.cancel()
                         ctx.logger.info(f"Stopping independent symbol engine: {symbol}; registry=STOPPING")
             await asyncio.sleep(1)
     finally:
         quote_health_monitor.cancel()
         for symbol, task in list(workers.items()):
-            if registry.request_stop(ctx.account_id, symbol, task):
+            if registry.request_stop(ctx.account_id, ctx.client.market, symbol, task):
                 task.cancel()
         if balance_monitor is not None:
             balance_monitor.cancel()

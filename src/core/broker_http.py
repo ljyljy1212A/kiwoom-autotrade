@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import socket
 import struct
+import threading
 import time
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -180,6 +182,73 @@ def _is_address_in_use(exc: OSError) -> bool:
     return getattr(exc, "winerror", None) == 10048 or getattr(exc, "errno", None) == 98
 
 
+class FixedPortCollisionError(OSError):
+    """An exhausted fixed-port address-in-use collision."""
+
+    def __init__(self, original: OSError):
+        super().__init__(*original.args)
+        self.original = original
+
+
+@dataclass(frozen=True)
+class FixedPortDegradedState:
+    account_id: str
+    entered_at: datetime
+    last_collision_at: datetime
+    operation: str
+    next_recovery_probe_at: datetime
+    entry_alert_fired: bool = False
+    last_ongoing_status_at: datetime | None = None
+
+
+_FIXED_PORT_DEGRADED_STATES: dict[str, FixedPortDegradedState] = {}
+_FIXED_PORT_DEGRADED_STATES_LOCK = threading.Lock()
+
+
+def is_fixed_port_collision_error(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, FixedPortCollisionError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def enter_fixed_port_degraded_state(
+    account_id: str,
+    operation: str,
+    *,
+    now: datetime | None = None,
+) -> FixedPortDegradedState:
+    timestamp = now or datetime.now(timezone.utc)
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        existing = _FIXED_PORT_DEGRADED_STATES.get(account_id)
+        if existing is None:
+            state = FixedPortDegradedState(
+                account_id=account_id,
+                entered_at=timestamp,
+                last_collision_at=timestamp,
+                operation=operation,
+                next_recovery_probe_at=timestamp,
+            )
+        else:
+            state = replace(existing, last_collision_at=max(existing.last_collision_at, timestamp))
+        _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        return state
+
+
+def get_fixed_port_degraded_state(account_id: str) -> FixedPortDegradedState | None:
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        return _FIXED_PORT_DEGRADED_STATES.get(account_id)
+
+
+def clear_fixed_port_degraded_state(account_id: str) -> None:
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        _FIXED_PORT_DEGRADED_STATES.pop(account_id, None)
+
+
 def _connect_with_reuseaddr(
     host: str,
     port: int,
@@ -218,7 +287,7 @@ def _connect_with_reuseaddr(
                     elapsed = time.monotonic() - retry_started
                     remaining = _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC - elapsed
                     if remaining <= 0:
-                        raise
+                        raise FixedPortCollisionError(exc) from exc
                     retry_count += 1
                     delay = min(retry_delay, remaining)
                     if logger is not None:

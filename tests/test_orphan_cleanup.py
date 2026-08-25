@@ -17,7 +17,7 @@ class OrphanCleanupTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.data = Path(self.tmp.name) / "data"
         self.data.mkdir()
-        self.cleaner = OrphanStateCleaner(self.account, self.data)
+        self.cleaner = OrphanStateCleaner(self.account, self.data, market="US")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -82,6 +82,36 @@ class OrphanCleanupTest(unittest.TestCase):
         result = self.cleaner.evaluate("IREN", 3, True, lambda _: True)
         self.assertEqual(result["classification"], "manual_review_required")
         self.assertEqual(json.loads((self.data / f"symbol_lifecycles_{self.account}.json").read_text())["IREN"]["manual_price"], 45.085)
+
+    def test_unambiguous_aapl_legacy_key_migrates_and_survives_restart(self):
+        self._state("PL")
+        ledger = TradeLedgerStore(str(self.data / f"trades_{self.account}.db"), self.account)
+        try:
+            order = PendingOrder("AAPL-1", "AAPL", "BUY", 1, 10, "BUY", 1, {})
+            ledger.add_pending(order)
+            self.assertEqual(self.cleaner.migrate_legacy_keys({"AAPL"}), frozenset())
+            lifecycle = json.loads((self.data / f"symbol_lifecycles_{self.account}.json").read_text())
+            self.assertIn("AAPL", lifecycle)
+            self.assertNotIn("PL", lifecycle)
+            self.assertTrue((self.data / f"dashboard_control_{self.account}_AAPL.json").exists())
+            self.assertFalse((self.data / f"dashboard_control_{self.account}_PL.json").exists())
+            self.assertEqual(ledger.pending_orders("AAPL")[0].ord_no, "AAPL-1")
+            restarted = OrphanStateCleaner(self.account, self.data, market="US")
+            self.assertEqual(restarted.migrate_legacy_keys({"AAPL"}), frozenset())
+            self.assertEqual(json.loads((self.data / f"symbol_lifecycles_{self.account}.json").read_text()), lifecycle)
+            self.assertTrue((self.data / "audit" / f"symbol_key_migration_{self.account}.jsonl").exists())
+        finally:
+            ledger.close()
+
+    def test_aapl_pl_collision_remains_manual_review_and_orphan_cleanup_skips_it(self):
+        self._state("PL")
+        manual_review = self.cleaner.migrate_legacy_keys({"AAPL", "PL"})
+        self.assertEqual(manual_review, frozenset({"AAPL", "PL"}))
+        lifecycle = json.loads((self.data / f"symbol_lifecycles_{self.account}.json").read_text())
+        self.assertIn("PL", lifecycle)
+        result = self.cleaner.sweep({}, True, lambda _: False)
+        self.assertEqual(result[0]["classification"], "manual_review_symbol_key")
+        self.assertEqual(json.loads((self.data / f"symbol_lifecycles_{self.account}.json").read_text()), lifecycle)
 
 
 if __name__ == "__main__":

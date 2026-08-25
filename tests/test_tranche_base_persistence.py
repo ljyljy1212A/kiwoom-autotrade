@@ -17,7 +17,7 @@ def _engine(path: Path, bases=None):
     engine = AccountEngine.__new__(AccountEngine)
     engine._tranche_bases_path = path
     engine._tranche_bases = dict(bases or {})
-    engine.ctx = SimpleNamespace(logger=_Logger())
+    engine.ctx = SimpleNamespace(logger=_Logger(), client=SimpleNamespace(market="KR"))
     return engine
 
 

@@ -16,7 +16,13 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from src.core.broker_http import BrokerHTTPGate, http_operation
+from src.core.broker_http import (
+    BrokerHTTPGate,
+    enter_fixed_port_degraded_state,
+    http_operation,
+    is_fixed_port_collision_error,
+)
+from src.data.order_attempts import OrderAttemptStore, order_attempt_store
 from src.core.token_manager import TokenManager
 from src.core.rate_limit_observability import emit_rate_limit_event
 from src.core.process_lock import AccountOrderAuthority
@@ -109,6 +115,7 @@ class KiwoomClient:
         self.mode = mode
         self.logger = logger
         self._order_authority = order_authority
+        self._order_attempt_store: OrderAttemptStore | None = None
         http_port = 10000 if mode == "mock" and market == "KR" else 443 if mode == "mock" and market == "US" else None
         self._http_gate = BrokerHTTPGate(http_port, logger)
         self.token_mgr = TokenManager(
@@ -150,6 +157,11 @@ class KiwoomClient:
 
     def bind_order_authority(self, authority: AccountOrderAuthority) -> None:
         self._order_authority = authority
+
+    def _attempt_store(self) -> OrderAttemptStore:
+        if self._order_attempt_store is None:
+            self._order_attempt_store = order_attempt_store(self.account_no)
+        return self._order_attempt_store
 
     async def _notify_exchange_failure(self, symbol: str, error: Exception) -> None:
         if symbol in self._exchange_alerted_symbols:
@@ -212,6 +224,8 @@ class KiwoomClient:
                 with http_operation("rest"):
                     resp = await client.post(url, json=body, headers=headers, timeout=15)
             except httpx.RequestError as e:
+                if is_fixed_port_collision_error(e):
+                    enter_fixed_port_degraded_state(self.account_no, "rest")
                 raise RetryableError(f"{api_id} 네트워크 오류: {e}") from e
 
         if resp.status_code >= 500:
@@ -309,7 +323,13 @@ class KiwoomClient:
                     await asyncio.sleep(wait_for)
                 self._order_authority.assert_owned()
                 self._order_gate.last_request_at = time.monotonic()
-                data = await self._post_once(path, api_id, body, allow_reauth_retry=False)
+                attempt = self._attempt_store().record_attempt(side, symbol, qty, price, order_type)
+                try:
+                    data = await self._post_once(path, api_id, body, allow_reauth_retry=False)
+                except Exception as exc:
+                    if is_fixed_port_collision_error(exc):
+                        self._attempt_store().mark_unattributed(attempt.attempt_id)
+                    raise
         except KiwoomAPIError as e:
             raise OrderRejectedError(str(e)) from e
 

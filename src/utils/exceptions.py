@@ -35,6 +35,10 @@ class OrderRejectedError(TradingSystemError):
     """주문이 거부된 경우 (증거금 부족, 시장 미개장 등)."""
 
 
+class OrderDispatchBlockedError(OrderRejectedError):
+    """A mock degraded-account reconciliation check could not clear dispatch."""
+
+
 class OrderAuthorityError(OrderRejectedError):
     """Order submission attempted without current account authority."""
 

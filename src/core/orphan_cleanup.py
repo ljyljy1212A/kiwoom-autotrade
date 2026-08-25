@@ -14,10 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.core.runtime_paths import DATA_DIR
-
-
-def _symbol(value: object) -> str:
-    return str(value or "").upper().lstrip("A")
+from src.core.symbol_keys import canonical_symbol_key, legacy_symbol_key
 
 
 class OrphanStateCleaner:
@@ -28,15 +25,23 @@ class OrphanStateCleaner:
     broker-authoritative quantity map; this class never guesses from a ledger.
     """
 
-    def __init__(self, account_id: str, data_dir: Path = DATA_DIR, logger=None):
+    def __init__(self, account_id: str, data_dir: Path = DATA_DIR, logger=None, market: str = "KR"):
         self.account_id = account_id
         self.data_dir = data_dir
         self.logger = logger
+        self.market = str(market).upper()
         self.bases_path = data_dir / f"tranche_bases_{account_id}.json"
         self.lifecycle_path = data_dir / f"symbol_lifecycles_{account_id}.json"
         self.settings_path = data_dir / f"dashboard_settings_{account_id}.json"
         self.state_path = data_dir / f"orphan_cleanup_{account_id}.json"
         self.audit_path = data_dir / "audit" / f"orphan_cleanup_{account_id}.jsonl"
+        self.migration_path = data_dir / f"symbol_key_migration_{account_id}.json"
+        self.migration_audit_path = data_dir / "audit" / f"symbol_key_migration_{account_id}.jsonl"
+        migration = self._read(self.migration_path, {})
+        self._manual_review = set(migration.get("manualReview", [])) if isinstance(migration, dict) else set()
+
+    def _symbol(self, value: object) -> str:
+        return canonical_symbol_key(self.market, value)
 
     @staticmethod
     def _read(path: Path, default):
@@ -57,7 +62,7 @@ class OrphanStateCleaner:
         prefix = f"dashboard_control_{self.account_id}_"
         controls: dict[str, list[Path]] = {}
         for path in self.data_dir.glob(f"{prefix}*.json"):
-            symbol = _symbol(path.stem[len(prefix):])
+            symbol = self._symbol(path.stem[len(prefix):])
             if symbol:
                 controls.setdefault(symbol, []).append(path)
         return controls
@@ -66,15 +71,15 @@ class OrphanStateCleaner:
         bases = self._read(self.bases_path, {})
         lifecycles = self._read(self.lifecycle_path, {})
         settings = self._read(self.settings_path, {})
-        symbols = {_symbol(key) for key in bases} | {_symbol(key) for key in lifecycles} | set(self._controls())
+        symbols = {self._symbol(key) for key in bases} | {self._symbol(key) for key in lifecycles} | set(self._controls())
         for profile in settings.get("profiles", []) if isinstance(settings, dict) else []:
             if isinstance(profile, dict):
-                symbols.add(_symbol((profile.get("config") or {}).get("symbol")))
+                symbols.add(self._symbol((profile.get("config") or {}).get("symbol")))
         return {symbol for symbol in symbols if symbol}
 
     def evaluate(self, symbol: str, broker_qty: float, balance_complete: bool,
                  has_unresolved_orders: Callable[[str], bool]) -> dict:
-        symbol = _symbol(symbol)
+        symbol = self._symbol(symbol)
         bases = self._read(self.bases_path, {})
         lifecycles = self._read(self.lifecycle_path, {})
         controls = self._controls().get(symbol, [])
@@ -99,15 +104,95 @@ class OrphanStateCleaner:
             "classification": classification,
         }
 
+    def manual_review_symbols(self) -> frozenset[str]:
+        return frozenset(self._manual_review)
+
+    def migrate_legacy_keys(self, candidates: set[str]) -> frozenset[str]:
+        """Atomically rekey uniquely attributable legacy state; retain ambiguity."""
+        canonical_candidates = {self._symbol(symbol) for symbol in candidates if symbol}
+        owners: dict[str, set[str]] = {}
+        for symbol in canonical_candidates:
+            owners.setdefault(legacy_symbol_key(symbol), set()).add(symbol)
+        stores = (self.bases_path, self.lifecycle_path, self.state_path)
+        changed = False
+        events: list[dict] = []
+        for path in stores:
+            data = self._read(path, {})
+            if not isinstance(data, dict):
+                continue
+            if path == self.state_path:
+                data = dict(data)
+                zeroes = data.get("zeroConfirmations", {})
+                if not isinstance(zeroes, dict):
+                    continue
+                target = dict(zeroes)
+            else:
+                target = dict(data)
+            for key in list(target):
+                candidate_owners = owners.get(key, set())
+                if len(candidate_owners) == 1:
+                    replacement = next(iter(candidate_owners))
+                    if replacement == key:
+                        continue
+                    if replacement in target:
+                        self._manual_review.update({key, replacement})
+                        events.append({"status": "manual_review", "key": key, "owners": sorted({key, replacement})})
+                        continue
+                    target[replacement] = target.pop(key)
+                    changed = True
+                    events.append({"status": "migrated", "oldKey": key, "newKey": replacement, "store": path.name})
+                elif len(candidate_owners) > 1:
+                    self._manual_review.update(candidate_owners | {key})
+                    events.append({"status": "manual_review", "key": key, "owners": sorted(candidate_owners)})
+                elif key != self._symbol(key):
+                    self._manual_review.add(key)
+                    events.append({"status": "manual_review", "key": key, "owners": []})
+            if path == self.state_path:
+                data["zeroConfirmations"] = target
+                target = data
+            if target != self._read(path, {}):
+                self._write_atomic(path, target)
+        control_prefix = f"dashboard_control_{self.account_id}_"
+        for path in self.data_dir.glob(f"{control_prefix}*.json"):
+            legacy_key = path.stem[len(control_prefix):]
+            candidate_owners = owners.get(legacy_key, set())
+            if len(candidate_owners) != 1:
+                if len(candidate_owners) > 1:
+                    self._manual_review.update(candidate_owners | {legacy_key})
+                    events.append({"status": "manual_review", "key": legacy_key, "owners": sorted(candidate_owners)})
+                continue
+            replacement = next(iter(candidate_owners))
+            if replacement == legacy_key:
+                continue
+            destination = self.data_dir / f"{control_prefix}{replacement}.json"
+            if destination.exists():
+                self._manual_review.update({legacy_key, replacement})
+                events.append({"status": "manual_review", "key": legacy_key, "owners": sorted({legacy_key, replacement})})
+                continue
+            control = self._read(path, {})
+            if isinstance(control, dict):
+                control["symbol"] = replacement
+                self._write_atomic(destination, control)
+                path.unlink()
+                events.append({"status": "migrated", "oldKey": legacy_key, "newKey": replacement, "store": path.name})
+        migration_state = {"manualReview": sorted(self._manual_review), "updatedAt": datetime.now(timezone.utc).isoformat()}
+        self._write_atomic(self.migration_path, migration_state)
+        for event in events:
+            self._migration_audit(event)
+        return frozenset(self._manual_review)
+
     def sweep(self, broker_qty_by_symbol: dict[str, float], balance_complete: bool,
               has_unresolved_orders: Callable[[str], bool], apply: bool = True) -> list[dict]:
         """Run the same evaluator for startup and live balance reconciliation."""
-        quantities = {_symbol(key): float(value) for key, value in broker_qty_by_symbol.items()}
+        quantities = {self._symbol(key): float(value) for key, value in broker_qty_by_symbol.items()}
         state = self._read(self.state_path, {})
         previous = state.get("zeroConfirmations", {}) if isinstance(state, dict) else {}
         confirmations: dict[str, int] = {}
         results: list[dict] = []
         for symbol in sorted(self._symbols() | set(quantities)):
+            if symbol in self._manual_review:
+                results.append({"symbol": symbol, "classification": "manual_review_symbol_key"})
+                continue
             result = self.evaluate(symbol, quantities.get(symbol, 0.0), balance_complete, has_unresolved_orders)
             if result["classification"] == "orphan_candidate":
                 count = int(previous.get(symbol, 0)) + 1
@@ -151,14 +236,14 @@ class OrphanStateCleaner:
             removed.append(f"control_archived:{path.name}")
         settings = self._read(self.settings_path, {})
         profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
-        retained = [profile for profile in profiles if _symbol((profile.get("config") or {}).get("symbol")) != symbol]
+        retained = [profile for profile in profiles if self._symbol((profile.get("config") or {}).get("symbol")) != symbol]
         if len(retained) != len(profiles):
             settings["profiles"] = retained
             self._write_atomic(self.settings_path, settings)
             removed.append("dashboard_profile")
         account_control = self.data_dir / f"dashboard_control_{self.account_id}.json"
         control = self._read(account_control, {})
-        if _symbol(control.get("symbol")) == symbol:
+        if self._symbol(control.get("symbol")) == symbol:
             self._write_atomic(account_control, {"symbol": "", "auto_buy": False, "auto_sell": False})
             removed.append("account_control")
         return removed
@@ -170,3 +255,9 @@ class OrphanStateCleaner:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
         if self.logger:
             self.logger.info(f"Orphan cleanup audit: {payload}")
+
+    def _migration_audit(self, result: dict) -> None:
+        payload = {"timestamp": datetime.now(timezone.utc).isoformat(), "account": self.account_id, "market": self.market, **result}
+        self.migration_audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.migration_audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
