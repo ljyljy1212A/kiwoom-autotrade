@@ -27,7 +27,11 @@ from src.core.us_market import (
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
 from src.core.control_state import read_auto_trading_enabled, read_control_state
-from src.core.broker_http import clear_fixed_port_degraded_state, get_fixed_port_degraded_state
+from src.core.broker_http import (
+    clear_fixed_port_degraded_state,
+    get_fixed_port_degraded_state,
+    record_fixed_port_recovery_probe_attempt,
+)
 from src.core.runtime_paths import DATA_DIR
 from src.core.symbol_keys import canonical_symbol_key
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
@@ -183,6 +187,15 @@ class DispatchClearanceService:
             self._active_symbols = active_symbols
             self._cleared_symbols = frozenset()
 
+    def _record_clearance_result(self, symbol: str, result: ReconciliationClearanceResult) -> None:
+        normalized = symbol.upper()
+        if result.cleared:
+            self._cleared_symbols = self._cleared_symbols | {normalized}
+            if self._active_symbols and self._active_symbols.issubset(self._cleared_symbols):
+                clear_fixed_port_degraded_state(self.account_id)
+            return
+        self._cleared_symbols = self._cleared_symbols - {normalized}
+
     async def check(self, engine: "AccountEngine", symbol: str) -> None:
         if get_fixed_port_degraded_state(self.account_id) is None:
             return
@@ -198,17 +211,35 @@ class DispatchClearanceService:
                 raise OrderDispatchBlockedError(
                     f"reconciliation clearance internal check failed for {self.account_id}/{symbol}: {exc}"
                 ) from exc
-            normalized = symbol.upper()
+            self._record_clearance_result(symbol, result)
             if result.cleared:
-                self._cleared_symbols = self._cleared_symbols | {normalized}
-                if self._active_symbols and self._active_symbols.issubset(self._cleared_symbols):
-                    clear_fixed_port_degraded_state(self.account_id)
                 return
-            self._cleared_symbols = self._cleared_symbols - {normalized}
             details = "; ".join(failure.detail for failure in result.failures)
             raise OrderDispatchBlockedError(
                 f"reconciliation clearance blocked {self.account_id}/{symbol}: {details}"
             )
+
+    async def probe_if_due(self, engine: "AccountEngine", symbol: str) -> None:
+        state = get_fixed_port_degraded_state(self.account_id)
+        if state is None or datetime.now(timezone.utc) < state.next_recovery_probe_at:
+            return
+        async with self._lock:
+            state = get_fixed_port_degraded_state(self.account_id)
+            now = datetime.now(timezone.utc)
+            if state is None or now < state.next_recovery_probe_at:
+                return
+            try:
+                snapshot = await engine._build_reconciliation_clearance_snapshot(
+                    symbol, max_balance_age_sec=1.0,
+                )
+                result = evaluate_reconciliation_clearance(snapshot)
+                self._record_clearance_result(symbol, result)
+            except Exception as exc:
+                engine.ctx.logger.error(
+                    f"reconciliation clearance internal check failed for {self.account_id}/{symbol}: {exc}"
+                )
+            finally:
+                record_fixed_port_recovery_probe_attempt(self.account_id, now=now)
 
 
 def _clearance_holding_failure(snapshot: ReconciliationClearanceSnapshot) -> str | None:
@@ -769,6 +800,13 @@ class AccountEngine:
         # never a source of silently stale financial state.
         self._refresh_runtime_control()
         self._refresh_dashboard_controls()
+        if get_fixed_port_degraded_state(self.ctx.account_id) is not None:
+            service = self._balance_gate.dispatch_clearance_service
+            if service is None:
+                return
+            await service.probe_if_due(self, self.ctx.strategy.symbol)
+            if get_fixed_port_degraded_state(self.ctx.account_id) is not None:
+                return
         # Controls may select a previously HTS-purchased ticker. Reconcile only
         # after loading them so its broker quantity/average are used immediately.
         force_balance = self._dashboard_strategy_changed

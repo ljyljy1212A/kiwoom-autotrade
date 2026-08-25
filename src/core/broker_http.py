@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 import anyio
@@ -24,6 +24,7 @@ from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
 _HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
 _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
 _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 2.5
+_FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC = 90.0
 _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
 _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
 
@@ -242,6 +243,24 @@ def enter_fixed_port_degraded_state(
 def get_fixed_port_degraded_state(account_id: str) -> FixedPortDegradedState | None:
     with _FIXED_PORT_DEGRADED_STATES_LOCK:
         return _FIXED_PORT_DEGRADED_STATES.get(account_id)
+
+
+def record_fixed_port_recovery_probe_attempt(
+    account_id: str,
+    *,
+    now: datetime | None = None,
+) -> FixedPortDegradedState | None:
+    timestamp = now or datetime.now(timezone.utc)
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        existing = _FIXED_PORT_DEGRADED_STATES.get(account_id)
+        if existing is None:
+            return None
+        state = replace(
+            existing,
+            next_recovery_probe_at=timestamp + timedelta(seconds=_FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC),
+        )
+        _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        return state
 
 
 def clear_fixed_port_degraded_state(account_id: str) -> None:
