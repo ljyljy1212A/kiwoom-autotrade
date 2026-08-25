@@ -160,7 +160,7 @@ def _record_stopped_status(account: str, pid: int) -> None:
     _write_atomic(_status_path(account), payload)
 
 
-def start(account: str, market: str) -> tuple[int, dict]:
+def start(account: str, market: str, measure_fixed_port_release: bool = False) -> tuple[int, dict]:
     current = status(account)
     if current["running"]:
         return 3, {**current, "started": False, "reason": "already-running"}
@@ -193,8 +193,11 @@ def start(account: str, market: str) -> tuple[int, dict]:
         # by its account lock and status file, not by a dashboard request.
         creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         popen_kwargs["creationflags"] = creationflags
+    command = [sys.executable, "-m", "src.main", "--market", market]
+    if measure_fixed_port_release:
+        command.append("--measure-fixed-port-release")
     child = subprocess.Popen(
-        [sys.executable, "-m", "src.main", "--market", market],
+        command,
         **popen_kwargs,
     )
     # ``src.main`` claims its OS account mutex and publishes PID/status
@@ -323,6 +326,7 @@ def main() -> int:
     parser.add_argument("action", choices=("start", "stop", "kill", "status"))
     parser.add_argument("--account", required=True)
     parser.add_argument("--market", choices=("KR", "US"), required=True)
+    parser.add_argument("--measure-fixed-port-release", action="store_true")
     args = parser.parse_args()
     account = args.account.strip()
     if not account:
@@ -330,7 +334,7 @@ def main() -> int:
     if args.action == "status":
         code, payload = 0, status(account)
     elif args.action == "start":
-        code, payload = start(account, args.market)
+        code, payload = start(account, args.market, args.measure_fixed_port_release)
     elif args.action == "stop":
         code, payload = stop(account)
     else:
