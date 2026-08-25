@@ -7,6 +7,7 @@ import math
 import os
 import sqlite3
 import threading
+import time
 import uuid
 import weakref
 from contextlib import asynccontextmanager
@@ -132,6 +133,8 @@ class ReconciliationClearanceSnapshot:
     balance_from_shared_cache: bool
     balance_recognized: bool
     holding: NormalizedBalanceHolding | None
+    balance_received_at: float | None = None
+    max_balance_age_sec: float | None = None
     incomplete_reasons: frozenset[ReconciliationIncompleteReason] = frozenset()
     unresolved_order_ids: tuple[str, ...] = ()
     unattributed_collision_order_ids: tuple[str, ...] = ()
@@ -223,21 +226,35 @@ def _clearance_holding_failure(snapshot: ReconciliationClearanceSnapshot) -> str
     return None
 
 
-def evaluate_reconciliation_clearance(
-    snapshot: ReconciliationClearanceSnapshot,
-) -> ReconciliationClearanceResult:
-    failures: list[ReconciliationClearanceFailure] = []
+def _clearance_freshness_failure(snapshot: ReconciliationClearanceSnapshot) -> str | None:
     if (
         snapshot.balance_api_id != "ust21070"
         or not snapshot.balance_fetched_fresh
         or snapshot.balance_from_shared_cache
     ):
-        failures.append(
-            ReconciliationClearanceFailure(
-                1,
-                "condition 1: requires a fresh, non-cached ust21070 balance response",
-            )
-        )
+        return "condition 1: requires a fresh, non-cached ust21070 balance response"
+    if snapshot.balance_received_at is None or snapshot.max_balance_age_sec is None:
+        return "condition 1: balance receive time and maximum age are required"
+    try:
+        received_at = float(snapshot.balance_received_at)
+        max_age_sec = float(snapshot.max_balance_age_sec)
+        age_sec = time.monotonic() - received_at
+    except (TypeError, ValueError, OverflowError):
+        return "condition 1: balance receive time and maximum age are malformed"
+    if not math.isfinite(received_at) or not math.isfinite(max_age_sec) or max_age_sec < 0:
+        return "condition 1: balance receive time and maximum age are malformed"
+    if age_sec < 0 or age_sec > max_age_sec:
+        return "condition 1: balance response is stale"
+    return None
+
+
+def evaluate_reconciliation_clearance(
+    snapshot: ReconciliationClearanceSnapshot,
+) -> ReconciliationClearanceResult:
+    failures: list[ReconciliationClearanceFailure] = []
+    freshness_failure = _clearance_freshness_failure(snapshot)
+    if freshness_failure:
+        failures.append(ReconciliationClearanceFailure(1, freshness_failure))
     holding_failure = _clearance_holding_failure(snapshot)
     if holding_failure:
         failures.append(ReconciliationClearanceFailure(2, holding_failure))
@@ -602,6 +619,7 @@ class AccountEngine:
         self, symbol: str, *, max_balance_age_sec: float,
     ) -> ReconciliationClearanceSnapshot:
         raw_balance = await self.ctx.client.get_balance()
+        balance_received_at = time.monotonic()
         if self.ctx.client.market == "US":
             holdings = normalize_us_holdings(raw_balance)
             recognized = us_balance_recognized(raw_balance)
@@ -624,6 +642,8 @@ class AccountEngine:
             balance_api_id="ust21070" if self.ctx.client.market == "US" else "kt00018",
             balance_fetched_fresh=True, balance_from_shared_cache=False,
             balance_recognized=recognized, holding=holding,
+            balance_received_at=balance_received_at,
+            max_balance_age_sec=max_balance_age_sec,
             incomplete_reasons=self._reconciliation_incomplete_reasons(
                 symbol, balance_recognized=recognized, holding=holding, qty=holding.qty,
                 known_tranche_qty=known_tranche_qty, open_rows=open_rows,

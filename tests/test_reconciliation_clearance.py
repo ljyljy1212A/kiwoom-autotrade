@@ -1,4 +1,5 @@
 import asyncio
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -24,6 +25,8 @@ def _clear_snapshot(**changes):
         balance_from_shared_cache=False,
         balance_recognized=True,
         holding=NormalizedBalanceHolding("SOXL", 0.0, 0.0),
+        balance_received_at=time.monotonic(),
+        max_balance_age_sec=1.0,
     )
     return replace(snapshot, **changes)
 
@@ -69,6 +72,54 @@ def test_clearance_rejects_shared_balance_cache():
 
     assert [failure.condition for failure in result.failures] == [1]
     assert result.failures[0].detail == "condition 1: requires a fresh, non-cached ust21070 balance response"
+
+
+def test_clearance_accepts_balance_at_exact_age_boundary(monkeypatch):
+    monkeypatch.setattr("src.core.engine.time.monotonic", lambda: 1_001.0)
+
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(balance_received_at=1_000.0, max_balance_age_sec=1.0)
+    )
+
+    assert result.cleared is True
+
+
+def test_clearance_rejects_balance_one_unit_past_age_boundary(monkeypatch):
+    monkeypatch.setattr("src.core.engine.time.monotonic", lambda: 1_001.0)
+
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(balance_received_at=999.999, max_balance_age_sec=1.0)
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [1]
+
+
+def test_clearance_rejects_missing_balance_timestamp():
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(balance_received_at=None)
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [1]
+
+
+def test_clearance_rejects_malformed_balance_timestamp():
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(balance_received_at="not-a-timestamp")
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [1]
+
+
+def test_clearance_rejects_failed_balance_lookup():
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(balance_fetched_fresh=False, balance_received_at=None)
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [1]
 
 
 def test_clearance_rejects_unusable_target_holding():
