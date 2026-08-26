@@ -77,6 +77,8 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         real_buttons = [button.callback_data for row in bot._account_markup("kr_real").inline_keyboard for button in row]
         self.assertIn("attest_menu|kr_mock", mock_buttons)
         self.assertNotIn("attest_menu|kr_real", real_buttons)
+        self.assertIn("clear_pause|kr_mock|fixed_port_degraded", mock_buttons)
+        self.assertNotIn("clear_pause|kr_real|fixed_port_degraded", real_buttons)
 
     async def test_real_attestation_callbacks_do_not_open_store(self):
         logger = _Logger()
@@ -298,6 +300,28 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(payload["pause_clear_event"]["reason"], "tranche_rebuild_ambiguous")
+        self.assertTrue(query.answered)
+
+    async def test_fixed_port_clear_callback_writes_durable_allowlisted_reason(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with patch.object(bot_module, "DATA_DIR", data_dir):
+                query = _CallbackQuery("clear_pause|kr_mock|fixed_port_degraded")
+                update = SimpleNamespace(
+                    effective_chat=SimpleNamespace(id=111),
+                    effective_message=query.message,
+                    callback_query=query,
+                )
+
+                await bot._handle_callback(update, SimpleNamespace())
+
+                payload = json.loads(
+                    (data_dir / "control" / "kr_mock.control.json").read_text(encoding="utf-8")
+                )
+
+        self.assertEqual(payload["pause_clear_event"]["reason"], "fixed_port_degraded")
         self.assertTrue(query.answered)
 
     async def test_invalid_reason_callback_does_not_write(self):

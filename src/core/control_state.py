@@ -51,12 +51,47 @@ def write_control_state(
     return payload
 
 
+FIXED_PORT_DEGRADED_PAUSE_REASON = "fixed_port_degraded"
+
+
 PAUSE_CLEAR_REASONS = {
     "broker_reconciliation_unavailable",
     "broker_quantity_unattributed",
     "external_broker_balance_change",
     "tranche_rebuild_ambiguous",
+    FIXED_PORT_DEGRADED_PAUSE_REASON,
 }
+
+
+def write_fixed_port_degraded_event(
+    account_id: str,
+    kind: str,
+    operation: str,
+    entered_at: datetime,
+    *,
+    occurred_at: datetime | None = None,
+    updated_by: str = "engine",
+    data_dir: Path | None = None,
+) -> dict:
+    if kind not in {"entered", "ongoing", "recovered", "operator_resolved"}:
+        raise ValueError(f"Unsupported fixed-port event kind: {kind}")
+    path = control_path(account_id, data_dir)
+    current = read_control_state(account_id, data_dir) or {"account": account_id}
+    event = {
+        "event_id": uuid.uuid4().hex,
+        "kind": kind,
+        "account": account_id,
+        "operation": operation,
+        "entered_at": entered_at.isoformat(),
+        "occurred_at": (occurred_at or datetime.now(timezone.utc)).isoformat(),
+        "updated_by": updated_by,
+    }
+    current["fixed_port_event"] = event
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    temp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+    temp.replace(path)
+    return event
 
 
 def write_pause_clear_event(

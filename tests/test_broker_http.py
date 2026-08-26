@@ -18,6 +18,8 @@ from src.core.broker_http import (
     enter_fixed_port_degraded_state,
     FixedPortAsyncHTTPTransport,
     get_fixed_port_degraded_state,
+    mark_fixed_port_entry_alert_fired,
+    record_fixed_port_ongoing_status,
     _CloseCompletionState,
     _FixedPortAnyIOBackend,
     _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC,
@@ -416,6 +418,31 @@ class FixedPortDegradedStateTest(unittest.TestCase):
         self.assertEqual(state.next_recovery_probe_at, now)
         self.assertFalse(state.entry_alert_fired)
         self.assertIsNone(state.last_ongoing_status_at)
+
+    def test_entry_alert_transition_is_idempotent_and_account_scoped(self):
+        now = datetime(2026, 8, 25, tzinfo=timezone.utc)
+        enter_fixed_port_degraded_state("account-a", "rest", now=now)
+        enter_fixed_port_degraded_state("account-b", "token", now=now)
+
+        marked = mark_fixed_port_entry_alert_fired("account-a")
+
+        self.assertTrue(marked.entry_alert_fired)
+        self.assertTrue(get_fixed_port_degraded_state("account-a").entry_alert_fired)
+        self.assertFalse(get_fixed_port_degraded_state("account-b").entry_alert_fired)
+        self.assertEqual(marked, mark_fixed_port_entry_alert_fired("account-a"))
+
+    def test_ongoing_status_transition_is_deterministic_and_account_scoped(self):
+        entered_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
+        ongoing_at = entered_at + timedelta(minutes=15)
+        enter_fixed_port_degraded_state("account-a", "rest", now=entered_at)
+        enter_fixed_port_degraded_state("account-b", "token", now=entered_at)
+
+        updated = record_fixed_port_ongoing_status("account-a", now=ongoing_at)
+
+        self.assertEqual(ongoing_at, updated.last_ongoing_status_at)
+        self.assertEqual(ongoing_at, get_fixed_port_degraded_state("account-a").last_ongoing_status_at)
+        self.assertIsNone(get_fixed_port_degraded_state("account-b").last_ongoing_status_at)
+        self.assertEqual(updated, record_fixed_port_ongoing_status("account-a", now=ongoing_at))
 
     def test_concurrent_entry_keeps_one_account_state(self):
         now = datetime(2026, 8, 25, tzinfo=timezone.utc)

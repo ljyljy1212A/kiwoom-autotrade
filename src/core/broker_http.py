@@ -245,6 +245,31 @@ def get_fixed_port_degraded_state(account_id: str) -> FixedPortDegradedState | N
         return _FIXED_PORT_DEGRADED_STATES.get(account_id)
 
 
+def mark_fixed_port_entry_alert_fired(account_id: str) -> FixedPortDegradedState | None:
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        existing = _FIXED_PORT_DEGRADED_STATES.get(account_id)
+        if existing is None or existing.entry_alert_fired:
+            return existing
+        state = replace(existing, entry_alert_fired=True)
+        _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        return state
+
+
+def record_fixed_port_ongoing_status(
+    account_id: str,
+    *,
+    now: datetime | None = None,
+) -> FixedPortDegradedState | None:
+    timestamp = now or datetime.now(timezone.utc)
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        existing = _FIXED_PORT_DEGRADED_STATES.get(account_id)
+        if existing is None:
+            return None
+        state = replace(existing, last_ongoing_status_at=timestamp)
+        _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        return state
+
+
 def record_fixed_port_recovery_probe_attempt(
     account_id: str,
     *,

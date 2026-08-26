@@ -12,7 +12,7 @@ import uuid
 import weakref
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -26,10 +26,17 @@ from src.core.us_market import (
     us_balance_recognized,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
-from src.core.control_state import read_auto_trading_enabled, read_control_state
+from src.core.control_state import (
+    FIXED_PORT_DEGRADED_PAUSE_REASON,
+    read_auto_trading_enabled,
+    read_control_state,
+    write_fixed_port_degraded_event,
+)
 from src.core.broker_http import (
     clear_fixed_port_degraded_state,
     get_fixed_port_degraded_state,
+    mark_fixed_port_entry_alert_fired,
+    record_fixed_port_ongoing_status,
     record_fixed_port_recovery_probe_attempt,
 )
 from src.core.runtime_paths import DATA_DIR
@@ -38,6 +45,9 @@ from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import KiwoomAPIError, OrderDispatchBlockedError, OrderRejectedError, RetryableError
 from src.core.rate_limit_observability import emit_rate_limit_event
+
+
+_FIXED_PORT_ONGOING_EVENT_INTERVAL_SEC = 15 * 60
 
 
 class _AccountBalanceGate:
@@ -187,11 +197,19 @@ class DispatchClearanceService:
             self._active_symbols = active_symbols
             self._cleared_symbols = frozenset()
 
-    def _record_clearance_result(self, symbol: str, result: ReconciliationClearanceResult) -> None:
+    def _record_clearance_result(
+        self, engine: "AccountEngine", symbol: str, result: ReconciliationClearanceResult
+    ) -> None:
         normalized = symbol.upper()
         if result.cleared:
             self._cleared_symbols = self._cleared_symbols | {normalized}
             if self._active_symbols and self._active_symbols.issubset(self._cleared_symbols):
+                state = get_fixed_port_degraded_state(self.account_id)
+                if state is not None:
+                    write_fixed_port_degraded_event(
+                        self.account_id, "recovered", state.operation, state.entered_at,
+                        updated_by="engine", data_dir=engine.data_dir,
+                    )
                 clear_fixed_port_degraded_state(self.account_id)
             return
         self._cleared_symbols = self._cleared_symbols - {normalized}
@@ -211,7 +229,7 @@ class DispatchClearanceService:
                 raise OrderDispatchBlockedError(
                     f"reconciliation clearance internal check failed for {self.account_id}/{symbol}: {exc}"
                 ) from exc
-            self._record_clearance_result(symbol, result)
+            self._record_clearance_result(engine, symbol, result)
             if result.cleared:
                 return
             details = "; ".join(failure.detail for failure in result.failures)
@@ -233,7 +251,7 @@ class DispatchClearanceService:
                     symbol, max_balance_age_sec=1.0,
                 )
                 result = evaluate_reconciliation_clearance(snapshot)
-                self._record_clearance_result(symbol, result)
+                self._record_clearance_result(engine, symbol, result)
             except Exception as exc:
                 engine.ctx.logger.error(
                     f"reconciliation clearance internal check failed for {self.account_id}/{symbol}: {exc}"
@@ -800,7 +818,23 @@ class AccountEngine:
         # never a source of silently stale financial state.
         self._refresh_runtime_control()
         self._refresh_dashboard_controls()
-        if get_fixed_port_degraded_state(self.ctx.account_id) is not None:
+        state = get_fixed_port_degraded_state(self.ctx.account_id)
+        if state is not None:
+            now = datetime.now(timezone.utc)
+            if not state.entry_alert_fired:
+                write_fixed_port_degraded_event(
+                    self.ctx.account_id, "entered", state.operation, state.entered_at,
+                    occurred_at=now, updated_by="engine", data_dir=self.data_dir,
+                )
+                mark_fixed_port_entry_alert_fired(self.ctx.account_id)
+            elif now - (state.last_ongoing_status_at or state.entered_at) >= timedelta(
+                seconds=_FIXED_PORT_ONGOING_EVENT_INTERVAL_SEC
+            ):
+                write_fixed_port_degraded_event(
+                    self.ctx.account_id, "ongoing", state.operation, state.entered_at,
+                    occurred_at=now, updated_by="engine", data_dir=self.data_dir,
+                )
+                record_fixed_port_ongoing_status(self.ctx.account_id, now=now)
             service = self._balance_gate.dispatch_clearance_service
             if service is None:
                 return
@@ -1346,6 +1380,15 @@ class AccountEngine:
         if not event_id or not reason or event_id == self._balance_gate.pause_clear_event_id:
             return
         self._balance_gate.pause_clear_event_id = event_id
+        if reason == FIXED_PORT_DEGRADED_PAUSE_REASON:
+            fixed_port_state = get_fixed_port_degraded_state(self.ctx.account_id)
+            if fixed_port_state is not None:
+                write_fixed_port_degraded_event(
+                    self.ctx.account_id, "operator_resolved", fixed_port_state.operation,
+                    fixed_port_state.entered_at, updated_by="telegram",
+                    data_dir=getattr(self, "data_dir", DATA_DIR),
+                )
+                clear_fixed_port_degraded_state(self.ctx.account_id)
         for engine in list(self._balance_gate.engines):
             if engine._pause_reason != reason:
                 continue

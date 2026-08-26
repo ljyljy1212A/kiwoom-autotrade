@@ -137,6 +137,10 @@ class TelegramControlBot:
         ]
         if _is_mock_account(account_id):
             rows.insert(-1, [InlineKeyboardButton("Attest unattributed order", callback_data=f"attest_menu|{account_id}")])
+            rows.insert(-1, [InlineKeyboardButton(
+                "Clear fixed-port degraded state",
+                callback_data=f"clear_pause|{account_id}|fixed_port_degraded",
+            )])
         return InlineKeyboardMarkup(rows)
 
     def _confirm_text(self, account_id: str, action: str) -> str:
