@@ -319,6 +319,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             workers = _worker_statuses()
+            # workers[].state may be RUNNING or DEGRADED_FIXED_PORT; workers[].running remains liveness.
             self._json({"running": bool(workers), "accounts": [row["account"] for row in workers],
                         "markets": sorted({row.get("market") for row in workers if row.get("market")}),
                         "workers": workers})
