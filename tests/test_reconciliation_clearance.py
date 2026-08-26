@@ -13,7 +13,7 @@ from src.core.engine import (
     evaluate_reconciliation_clearance,
     with_unattributed_collision_order_ids,
 )
-from src.data.order_attempts import OrderAttemptStore
+from src.data.order_attempts import OrderAttestationOutcome, OrderAttemptStore
 
 
 def _clear_snapshot(**changes):
@@ -65,6 +65,35 @@ def test_snapshot_wiring_is_account_scoped_and_fails_condition_five(tmp_path):
     finally:
         account_a.close()
         account_b.close()
+
+
+def test_attesting_unattributed_order_clears_condition_five(tmp_path):
+    store = OrderAttemptStore(tmp_path / "order_attempts_account-a.db", "account-a")
+    try:
+        attempt = store.record_attempt("BUY", "SOXL", 1, 10.0, "00")
+        store.mark_unattributed(attempt.attempt_id)
+
+        blocked_snapshot = with_unattributed_collision_order_ids(
+            _clear_snapshot(account_id="account-a"), tmp_path
+        )
+
+        assert [failure.condition for failure in evaluate_reconciliation_clearance(blocked_snapshot).failures] == [5]
+
+        store.attest_unattributed(
+            attempt.attempt_id,
+            "operator-1",
+            OrderAttestationOutcome.FILLED,
+            "verified_broker_app",
+        )
+
+        cleared_snapshot = with_unattributed_collision_order_ids(
+            _clear_snapshot(account_id="account-a"), tmp_path
+        )
+
+        assert cleared_snapshot.unattributed_collision_order_ids == ()
+        assert evaluate_reconciliation_clearance(cleared_snapshot).cleared is True
+    finally:
+        store.close()
 
 
 def test_clearance_rejects_shared_balance_cache():
