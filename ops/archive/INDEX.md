@@ -19,6 +19,7 @@
 - `OPERATOR_RECORD_wrapup_v189.md` — v189 — Historical dashboard/balance endpoint and mock-worker state record.
 - `OPERATOR_RECORD_wrapup_v190.md` — v190 — Manual lifecycle adoption and trading-pause incident implementation handoff.
 - `OPERATOR_RECORD_wrapup_v191.md` — v191 — Read-only runtime and safety handoff after the lifecycle/pause work.
+- `ops/installer/watchdog_task.xml` — undated — Verified, importable Scheduled Task export for the watchdog auto-restart task, used by the future multi-PC installer.
 - `round6-kr_mock-staged-reproduction-report.md` — Round 6 — Staged `kr_mock` reproduction baseline that stopped before state-changing action.
 
 ## Fixed-port collision and socket investigations
