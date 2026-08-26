@@ -22,8 +22,9 @@ def _snapshot(*, clear):
     )
 
 
-def _engine(service, snapshot, *, enabled):
+def _engine(service, snapshot, *, enabled, data_dir):
     engine = object.__new__(AccountEngine)
+    engine.data_dir = data_dir
     place_order = AsyncMock(
         side_effect=AssertionError("must not submit") if enabled else None,
         return_value=SimpleNamespace(ord_no="ORDER-1"),
@@ -45,12 +46,12 @@ def _engine(service, snapshot, *, enabled):
     return engine
 
 
-async def _blocked_dispatch(enabled):
+async def _blocked_dispatch(enabled, data_dir):
     clear_fixed_port_degraded_state("us_mock")
     enter_fixed_port_degraded_state("us_mock", "rest")
     service = DispatchClearanceService("us_mock")
     service.observe_active_profile(("SOXL",), 0)
-    engine = _engine(service, _snapshot(clear=False), enabled=enabled)
+    engine = _engine(service, _snapshot(clear=False), enabled=enabled, data_dir=data_dir)
     intent = OrderIntent(Action.BUY, "SOXL", 1, 10.0, "00", {})
     try:
         with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
@@ -60,20 +61,20 @@ async def _blocked_dispatch(enabled):
         clear_fixed_port_degraded_state("us_mock")
 
 
-def test_degraded_dispatch_seam_blocks_before_place_order_when_enabled():
-    engine = asyncio.run(_blocked_dispatch(True))
+def test_degraded_dispatch_seam_blocks_before_place_order_when_enabled(tmp_path):
+    engine = asyncio.run(_blocked_dispatch(True, tmp_path))
 
     engine.ctx.client.place_order.assert_not_awaited()
     engine.telegram.notify_error.assert_awaited_once()
 
 
-def test_kill_switch_disables_degraded_dispatch_seam():
-    engine = asyncio.run(_blocked_dispatch(False))
+def test_kill_switch_disables_degraded_dispatch_seam(tmp_path):
+    engine = asyncio.run(_blocked_dispatch(False, tmp_path))
 
     engine.ctx.client.place_order.assert_awaited_once()
 
 
-def test_a_prefixed_symbol_completes_active_clearance_cycle():
+def test_a_prefixed_symbol_completes_active_clearance_cycle(tmp_path):
     async def check():
         clear_fixed_port_degraded_state("us_mock")
         enter_fixed_port_degraded_state("us_mock", "rest")
@@ -86,7 +87,7 @@ def test_a_prefixed_symbol_completes_active_clearance_cycle():
                 balance_recognized=True, holding=NormalizedBalanceHolding("AAPL", 0, 0),
                 balance_received_at=time.monotonic(), max_balance_age_sec=1.0,
             ),
-        ))
+        ), data_dir=tmp_path)
         try:
             await service.check(engine, "AAPL")
             assert get_fixed_port_degraded_state("us_mock") is None
@@ -104,7 +105,7 @@ class _FixedDateTime(datetime):
         return cls.current if tz is None else cls.current.astimezone(tz)
 
 
-def test_recovery_probe_is_suppressed_before_its_due_time():
+def test_recovery_probe_is_suppressed_before_its_due_time(tmp_path):
     async def probe():
         clear_fixed_port_degraded_state("us_mock")
         enter_fixed_port_degraded_state(
@@ -112,7 +113,7 @@ def test_recovery_probe_is_suppressed_before_its_due_time():
         )
         service = DispatchClearanceService("us_mock")
         service.observe_active_profile(("SOXL",), 0)
-        engine = _engine(service, _snapshot(clear=True), enabled=True)
+        engine = _engine(service, _snapshot(clear=True), enabled=True, data_dir=tmp_path)
         try:
             await service.probe_if_due(engine, "SOXL")
             engine._build_reconciliation_clearance_snapshot.assert_not_awaited()
@@ -122,13 +123,13 @@ def test_recovery_probe_is_suppressed_before_its_due_time():
     asyncio.run(probe())
 
 
-def test_recovery_probe_clears_when_due_and_fully_reconciled():
+def test_recovery_probe_clears_when_due_and_fully_reconciled(tmp_path):
     async def probe():
         clear_fixed_port_degraded_state("us_mock")
         enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
         service = DispatchClearanceService("us_mock")
         service.observe_active_profile(("SOXL",), 0)
-        engine = _engine(service, _snapshot(clear=True), enabled=True)
+        engine = _engine(service, _snapshot(clear=True), enabled=True, data_dir=tmp_path)
         try:
             with patch("src.core.engine.datetime", _FixedDateTime):
                 await service.probe_if_due(engine, "SOXL")
@@ -142,13 +143,13 @@ def test_recovery_probe_clears_when_due_and_fully_reconciled():
     asyncio.run(probe())
 
 
-def test_recovery_probe_retains_degraded_state_and_advances_schedule_when_blocked():
+def test_recovery_probe_retains_degraded_state_and_advances_schedule_when_blocked(tmp_path):
     async def probe():
         clear_fixed_port_degraded_state("us_mock")
         enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
         service = DispatchClearanceService("us_mock")
         service.observe_active_profile(("SOXL",), 0)
-        engine = _engine(service, _snapshot(clear=False), enabled=True)
+        engine = _engine(service, _snapshot(clear=False), enabled=True, data_dir=tmp_path)
         try:
             with patch("src.core.engine.datetime", _FixedDateTime):
                 await service.probe_if_due(engine, "SOXL")
@@ -161,7 +162,7 @@ def test_recovery_probe_retains_degraded_state_and_advances_schedule_when_blocke
     asyncio.run(probe())
 
 
-def test_concurrent_recovery_probes_produce_one_attempt():
+def test_concurrent_recovery_probes_produce_one_attempt(tmp_path):
     async def build_snapshot(symbol, *, max_balance_age_sec):
         await asyncio.sleep(0)
         return _snapshot(clear=False)
@@ -171,7 +172,7 @@ def test_concurrent_recovery_probes_produce_one_attempt():
         enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
         service = DispatchClearanceService("us_mock")
         service.observe_active_profile(("SOXL",), 0)
-        engine = _engine(service, _snapshot(clear=False), enabled=True)
+        engine = _engine(service, _snapshot(clear=False), enabled=True, data_dir=tmp_path)
         engine._build_reconciliation_clearance_snapshot.side_effect = build_snapshot
         try:
             with patch("src.core.engine.datetime", _FixedDateTime):
@@ -186,13 +187,13 @@ def test_concurrent_recovery_probes_produce_one_attempt():
     asyncio.run(probe())
 
 
-def test_recovery_probe_logs_snapshot_failures_without_propagating():
+def test_recovery_probe_logs_snapshot_failures_without_propagating(tmp_path):
     async def probe():
         clear_fixed_port_degraded_state("us_mock")
         enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
         service = DispatchClearanceService("us_mock")
         service.observe_active_profile(("SOXL",), 0)
-        engine = _engine(service, _snapshot(clear=True), enabled=True)
+        engine = _engine(service, _snapshot(clear=True), enabled=True, data_dir=tmp_path)
         engine._build_reconciliation_clearance_snapshot.side_effect = RuntimeError("snapshot failed")
         try:
             with patch("src.core.engine.datetime", _FixedDateTime):
