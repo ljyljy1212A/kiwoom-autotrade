@@ -19,6 +19,13 @@ class OrderAttestationOutcome(Enum):
     ABSENT = "absent"
 
 
+ATTESTATION_REASONS = {
+    "verified_broker_app",
+    "verified_account_statement",
+    "no_evidence_assume_absent",
+}
+
+
 @dataclass(frozen=True)
 class OrderDispatchAttempt:
     attempt_id: str
@@ -33,6 +40,7 @@ class OrderDispatchAttempt:
     attested_by: str | None
     attested_at: str | None
     attested_outcome: OrderAttestationOutcome | None
+    reason: str | None
 
 
 def _now() -> str:
@@ -64,7 +72,13 @@ class OrderAttemptStore:
             "CREATE INDEX IF NOT EXISTS idx_attempt_account_unattributed "
             "ON order_dispatch_attempts(account_id, unattributed_at, attested_at)"
         )
+        self._ensure_reason_column()
         self.db.commit()
+
+    def _ensure_reason_column(self) -> None:
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(order_dispatch_attempts)")}
+        if "reason" not in columns:
+            self.db.execute("ALTER TABLE order_dispatch_attempts ADD COLUMN reason TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -89,6 +103,7 @@ class OrderAttemptStore:
         return self.get_attempt(attempt_id)
 
     def mark_unattributed(self, attempt_id: str) -> OrderDispatchAttempt:
+        # A replay attempt raises ValueError; the Telegram call site presents that result to the operator.
         cursor = self.db.execute(
             """UPDATE order_dispatch_attempts SET unattributed_at=?
                WHERE account_id=? AND attempt_id=? AND attested_at IS NULL""",
@@ -104,20 +119,24 @@ class OrderAttemptStore:
         attempt_id: str,
         authenticated_operator_id: str,
         outcome: OrderAttestationOutcome,
+        reason: str,
     ) -> OrderDispatchAttempt:
         if not authenticated_operator_id.strip():
             raise ValueError("authenticated_operator_id is required")
         if not isinstance(outcome, OrderAttestationOutcome):
             raise ValueError("outcome must be an OrderAttestationOutcome")
+        if reason not in ATTESTATION_REASONS:
+            raise ValueError(f"reason must be one of {sorted(ATTESTATION_REASONS)}")
         cursor = self.db.execute(
             """UPDATE order_dispatch_attempts
-               SET attested_by=?, attested_at=?, attested_outcome=?
+               SET attested_by=?, attested_at=?, attested_outcome=?, reason=?
                WHERE account_id=? AND attempt_id=?
                  AND unattributed_at IS NOT NULL AND attested_at IS NULL""",
             (
                 authenticated_operator_id,
                 _now(),
                 outcome.value,
+                reason,
                 self.account_id,
                 attempt_id,
             ),
@@ -159,6 +178,7 @@ class OrderAttemptStore:
             attested_by=row["attested_by"],
             attested_at=row["attested_at"],
             attested_outcome=OrderAttestationOutcome(outcome) if outcome else None,
+            reason=row["reason"],
         )
 
 
@@ -170,5 +190,13 @@ def unattributed_attempt_ids(account_id: str, data_dir: Path = DATA_DIR) -> list
     store = order_attempt_store(account_id, data_dir)
     try:
         return store.unattributed_attempt_ids()
+    finally:
+        store.close()
+
+
+def list_unattributed_attempts(account_id: str, data_dir: Path = DATA_DIR) -> list[OrderDispatchAttempt]:
+    store = order_attempt_store(account_id, data_dir)
+    try:
+        return [store.get_attempt(attempt_id) for attempt_id in store.unattributed_attempt_ids()]
     finally:
         store.close()

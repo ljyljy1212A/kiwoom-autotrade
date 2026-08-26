@@ -29,12 +29,13 @@ class OrderAttemptStoreTest(unittest.TestCase):
         self.store.mark_unattributed(attempt.attempt_id)
 
         with self.assertRaises(ValueError):
-            self.store.attest_unattributed(attempt.attempt_id, "operator-1", "filled")
+            self.store.attest_unattributed(attempt.attempt_id, "operator-1", "filled", "verified_broker_app")
 
         attested = self.store.attest_unattributed(
             attempt.attempt_id,
             "operator-1",
             OrderAttestationOutcome.FILLED,
+            "verified_broker_app",
         )
 
         self.store.close()
@@ -43,6 +44,7 @@ class OrderAttemptStoreTest(unittest.TestCase):
         self.assertEqual(persisted.attested_by, "operator-1")
         self.assertIsNotNone(persisted.attested_at)
         self.assertEqual(persisted.attested_outcome, OrderAttestationOutcome.FILLED)
+        self.assertEqual(persisted.reason, "verified_broker_app")
 
     def test_unattributed_query_needs_explicit_attestation_to_remove_marker(self):
         attempt = self.store.record_attempt("BUY", "SOXL", 2, 10.5, "00")
@@ -51,7 +53,7 @@ class OrderAttemptStoreTest(unittest.TestCase):
         self.assertEqual(self.store.unattributed_attempt_ids(), [attempt.attempt_id])
         self.assertEqual(self.store.unattributed_attempt_ids(), [attempt.attempt_id])
 
-        self.store.attest_unattributed(attempt.attempt_id, "operator-1", OrderAttestationOutcome.ABSENT)
+        self.store.attest_unattributed(attempt.attempt_id, "operator-1", OrderAttestationOutcome.ABSENT, "no_evidence_assume_absent")
         self.assertEqual(self.store.unattributed_attempt_ids(), [])
 
     def test_account_query_excludes_attested_attempts(self):
@@ -61,12 +63,31 @@ class OrderAttemptStoreTest(unittest.TestCase):
             second_attempt = second.record_attempt("SELL", "NVDA", 1, 100, "00")
             self.store.mark_unattributed(first_attempt.attempt_id)
             second.mark_unattributed(second_attempt.attempt_id)
-            second.attest_unattributed(second_attempt.attempt_id, "operator-2", OrderAttestationOutcome.REJECTED)
+            second.attest_unattributed(second_attempt.attempt_id, "operator-2", OrderAttestationOutcome.REJECTED, "verified_account_statement")
 
             self.assertEqual(unattributed_attempt_ids("account-a", self.data_dir), [first_attempt.attempt_id])
             self.assertEqual(unattributed_attempt_ids("account-b", self.data_dir), [])
         finally:
             second.close()
+
+    def test_attestation_accepts_cancelled_and_replay_guard(self):
+        accepted = self.store.record_attempt("BUY", "SOXL", 2, 10.5, "00")
+        cancelled = self.store.record_attempt("SELL", "NVDA", 1, 100, "00")
+        self.store.mark_unattributed(accepted.attempt_id)
+        self.store.mark_unattributed(cancelled.attempt_id)
+
+        self.store.attest_unattributed(accepted.attempt_id, "operator-1", OrderAttestationOutcome.ACCEPTED, "verified_broker_app")
+        self.store.attest_unattributed(cancelled.attempt_id, "operator-1", OrderAttestationOutcome.CANCELLED, "verified_account_statement")
+
+        with self.assertRaises(ValueError):
+            self.store.attest_unattributed(accepted.attempt_id, "operator-1", OrderAttestationOutcome.ACCEPTED, "verified_broker_app")
+
+    def test_attestation_rejects_invalid_reason(self):
+        attempt = self.store.record_attempt("BUY", "SOXL", 2, 10.5, "00")
+        self.store.mark_unattributed(attempt.attempt_id)
+
+        with self.assertRaises(ValueError):
+            self.store.attest_unattributed(attempt.attempt_id, "operator-1", OrderAttestationOutcome.FILLED, "not_allowed")
 
 
 class OrderAttemptRecordingTest(unittest.IsolatedAsyncioTestCase):

@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from src.core.control_state import write_control_state
 from src.notify import telegram_control_bot as bot_module
-from src.notify.telegram_control_bot import AccountInfo, TelegramControlBot
+from src.notify.telegram_control_bot import AccountInfo, TelegramControlBot, _is_mock_account, load_operator_labels
 
 
 class _Logger:
@@ -53,10 +53,138 @@ def _bot(chat_ids: set[str], accounts: list[AccountInfo], logger: _Logger) -> Te
     bot.allowed_chat_ids = chat_ids
     bot.accounts = {account.account_id: account for account in accounts}
     bot._account_order = [account.account_id for account in accounts]
+    bot.operator_labels = {"111": "Johon"}
     return bot
 
 
 class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
+    def test_mock_account_gate(self):
+        self.assertTrue(_is_mock_account("kr_mock"))
+        self.assertTrue(_is_mock_account("us_mock"))
+        self.assertFalse(_is_mock_account("kr_real"))
+        self.assertFalse(_is_mock_account("us_real"))
+
+    def test_load_operator_labels(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "accounts.yaml"
+            path.write_text('operators:\n  - chat_id: 8648973973\n    label: "Johon"\n', encoding="utf-8")
+            self.assertEqual(load_operator_labels(path), {"8648973973": "Johon"})
+
+    def test_attestation_menu_is_mock_only(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR"), AccountInfo("kr_real", "KR Real", "KR")], logger)
+        mock_buttons = [button.callback_data for row in bot._account_markup("kr_mock").inline_keyboard for button in row]
+        real_buttons = [button.callback_data for row in bot._account_markup("kr_real").inline_keyboard for button in row]
+        self.assertIn("attest_menu|kr_mock", mock_buttons)
+        self.assertNotIn("attest_menu|kr_real", real_buttons)
+
+    async def test_real_attestation_callbacks_do_not_open_store(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_real", "KR Real", "KR")], logger)
+        for data in (
+            "attest_pick|kr_real|0",
+            "attest_outcome|kr_real|0|filled",
+            "attest_reason|kr_real|0|filled|verified_broker_app",
+        ):
+            query = _CallbackQuery(data)
+            update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+            with patch.object(bot_module, "order_attempt_store") as store:
+                await bot._handle_callback(update, SimpleNamespace())
+            store.assert_not_called()
+            self.assertTrue(any("mock accounts" in text for text, _ in query.message.edits))
+
+    async def test_unknown_attestation_callbacks_do_not_query_attempts(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        for data in (
+            "attest_menu|unknown",
+            "attest_pick|unknown|0",
+            "attest_outcome|unknown|0|filled",
+            "attest_reason|unknown|0|filled|verified_broker_app",
+        ):
+            query = _CallbackQuery(data)
+            update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+            with patch.object(bot_module, "list_unattributed_attempts") as attempts, \
+                 patch.object(bot_module, "order_attempt_store") as store:
+                await bot._handle_callback(update, SimpleNamespace())
+            attempts.assert_not_called()
+            store.assert_not_called()
+            self.assertTrue(any("Unknown account" in text for text, _ in query.message.edits))
+
+    async def test_attest_pick_excludes_accepted_and_handles_out_of_range(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        attempt = SimpleNamespace(attempt_id="a" * 32, symbol="SOXL", side="BUY", qty=2)
+        query = _CallbackQuery("attest_pick|kr_mock|0")
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+        with patch.object(bot_module, "list_unattributed_attempts", return_value=[attempt]):
+            await bot._handle_callback(update, SimpleNamespace())
+        callbacks = [button.callback_data for row in query.message.edits[-1][1].inline_keyboard for button in row]
+        self.assertNotIn("attest_outcome|kr_mock|0|accepted", callbacks)
+
+        query = _CallbackQuery("attest_pick|kr_mock|1")
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+        with patch.object(bot_module, "list_unattributed_attempts", return_value=[attempt]):
+            await bot._handle_callback(update, SimpleNamespace())
+        self.assertTrue(any("list changed" in text for text, _ in query.message.edits))
+
+    async def test_attest_reason_rejects_unsupported_reason_without_store_write(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        attempt = SimpleNamespace(attempt_id="a" * 32, symbol="SOXL", side="BUY", qty=2)
+        query = _CallbackQuery("attest_reason|kr_mock|0|filled|not_allowed")
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+        with patch.object(bot_module, "list_unattributed_attempts", return_value=[attempt]), \
+             patch.object(bot_module, "order_attempt_store") as store:
+            await bot._handle_callback(update, SimpleNamespace())
+        store.assert_not_called()
+        self.assertTrue(any("Unsupported attestation selection" in text for text, _ in query.message.edits))
+
+    async def test_attest_reason_happy_path_uses_operator_label(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        attempt = SimpleNamespace(attempt_id="a" * 32, symbol="SOXL", side="BUY", qty=2)
+        store = Mock()
+        query = _CallbackQuery("attest_reason|kr_mock|0|filled|verified_broker_app")
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+        with patch.object(bot_module, "list_unattributed_attempts", return_value=[attempt]), \
+             patch.object(bot_module, "order_attempt_store", return_value=store):
+            await bot._handle_callback(update, SimpleNamespace())
+        store.attest_unattributed.assert_called_once_with(
+            attempt.attempt_id,
+            "Johon",
+            bot_module.OrderAttestationOutcome.FILLED,
+            "verified_broker_app",
+        )
+        self.assertTrue(any("Attested SOXL BUY" in text for text, _ in query.message.edits))
+
+    async def test_attest_reason_store_error_is_handled(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        attempt = SimpleNamespace(attempt_id="a" * 32, symbol="SOXL", side="BUY", qty=2)
+        store = Mock()
+        store.attest_unattributed.side_effect = RuntimeError("disk failure")
+        query = _CallbackQuery("attest_reason|kr_mock|0|filled|verified_broker_app")
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+        with patch.object(bot_module, "list_unattributed_attempts", return_value=[attempt]), \
+             patch.object(bot_module, "order_attempt_store", return_value=store):
+            await bot._handle_callback(update, SimpleNamespace())
+        self.assertTrue(any("Failed to persist attestation" in text for text, _ in query.message.edits))
+
+    async def test_attest_reason_replay_is_friendly(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        attempt = SimpleNamespace(attempt_id="a" * 32, symbol="SOXL", side="BUY", qty=2)
+        store = Mock()
+        store.attest_unattributed.side_effect = ValueError("already attested")
+        query = _CallbackQuery("attest_reason|kr_mock|0|filled|verified_broker_app")
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=111), effective_message=query.message, callback_query=query)
+        with patch.object(bot_module, "list_unattributed_attempts", return_value=[attempt]), \
+             patch.object(bot_module, "order_attempt_store", return_value=store):
+            await bot._handle_callback(update, SimpleNamespace())
+        self.assertTrue(any("already attested" in text for text, _ in query.message.edits))
+        self.assertTrue(query.answered)
+
     async def test_unauthorized_command_is_ignored(self):
         logger = _Logger()
         bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)

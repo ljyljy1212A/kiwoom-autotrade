@@ -18,6 +18,12 @@ from src.core.control_state import (
     write_reconciliation_clear_event,
 )
 from src.core.runtime_paths import DATA_DIR
+from src.data.order_attempts import (
+    ATTESTATION_REASONS,
+    OrderAttestationOutcome,
+    list_unattributed_attempts,
+    order_attempt_store,
+)
 from src.worker_supervisor import status as worker_status
 from src.utils.logger import get_logger
 
@@ -51,11 +57,26 @@ def load_account_info(config_path: Path = ACCOUNTS_PATH) -> list[AccountInfo]:
     return accounts
 
 
+def load_operator_labels(config_path: Path = ACCOUNTS_PATH) -> dict[str, str]:
+    with open(config_path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    return {
+        str(item.get("chat_id", "")).strip(): str(item.get("label", "")).strip()
+        for item in raw.get("operators", [])
+        if str(item.get("chat_id", "")).strip() and str(item.get("label", "")).strip()
+    }
+
+
+def _is_mock_account(account_id: str) -> bool:
+    return account_id.endswith("_mock")
+
+
 class TelegramControlBot:
     def __init__(self, bot_token: str, allowed_chat_ids: set[str], logger, accounts: list[AccountInfo]):
         self.logger = logger
         self.allowed_chat_ids = {str(chat_id).strip() for chat_id in allowed_chat_ids if str(chat_id).strip()}
         self.accounts = {account.account_id: account for account in accounts}
+        self.operator_labels = load_operator_labels()
         self._account_order = [account.account_id for account in accounts]
         self.app = Application.builder().token(bot_token).build()
         self.app.add_handler(CommandHandler("start", self._handle_start))
@@ -114,6 +135,8 @@ class TelegramControlBot:
             ],
             [InlineKeyboardButton("Back", callback_data="menu|root")],
         ]
+        if _is_mock_account(account_id):
+            rows.insert(-1, [InlineKeyboardButton("Attest unattributed order", callback_data=f"attest_menu|{account_id}")])
         return InlineKeyboardMarkup(rows)
 
     def _confirm_text(self, account_id: str, action: str) -> str:
@@ -141,6 +164,27 @@ class TelegramControlBot:
             )],
             [InlineKeyboardButton("Back", callback_data=f"acct|{account_id}")],
         ]
+        return InlineKeyboardMarkup(rows)
+
+    async def _validate_attestation_account(self, query, account_id: str) -> bool:
+        if account_id not in self.accounts:
+            await self._safe_edit_text(query, "Unknown account.", reply_markup=self._root_markup())
+            return False
+        if not _is_mock_account(account_id):
+            await self._safe_edit_text(
+                query,
+                "Attestation is only available for mock accounts.",
+                reply_markup=self._account_markup(account_id),
+            )
+            return False
+        return True
+
+    def _attestation_menu_markup(self, account_id: str, attempts) -> InlineKeyboardMarkup:
+        rows = [
+            [InlineKeyboardButton(f"{attempt.symbol} {attempt.side} x{attempt.qty}", callback_data=f"attest_pick|{account_id}|{index}")]
+            for index, attempt in enumerate(attempts)
+        ]
+        rows.append([InlineKeyboardButton("Back", callback_data=f"acct|{account_id}")])
         return InlineKeyboardMarkup(rows)
 
     async def _safe_reply_text(self, update: Update, text: str, reply_markup=None) -> None:
@@ -172,7 +216,8 @@ class TelegramControlBot:
         query = update.callback_query
         if query is None:
             return
-        if self._authorized_chat_id(update) is None:
+        chat_id = self._authorized_chat_id(update)
+        if chat_id is None:
             return
 
         data = str(query.data or "")
@@ -230,6 +275,138 @@ class TelegramControlBot:
                 await self._safe_edit_text(
                     query,
                     f"Requested {reason} clear for {account_id}.",
+                    reply_markup=self._account_markup(account_id),
+                )
+            elif kind == "attest_menu" and len(parts) >= 2:
+                account_id = parts[1]
+                if not await self._validate_attestation_account(query, account_id):
+                    return
+                attempts = list_unattributed_attempts(account_id)
+                if not attempts:
+                    await self._safe_edit_text(query, "No unattributed orders.", reply_markup=self._account_markup(account_id))
+                    return
+                await self._safe_edit_text(
+                    query,
+                    "Select an unattributed order.",
+                    reply_markup=self._attestation_menu_markup(account_id, attempts),
+                )
+            elif kind == "attest_pick" and len(parts) >= 3:
+                account_id = parts[1]
+                if not await self._validate_attestation_account(query, account_id):
+                    return
+                attempts = list_unattributed_attempts(account_id)
+                try:
+                    index = int(parts[2])
+                    attempt = attempts[index]
+                except (ValueError, IndexError):
+                    await self._safe_edit_text(
+                        query,
+                        "Attempt list changed, please retry.",
+                        reply_markup=self._attestation_menu_markup(account_id, attempts),
+                    )
+                    return
+                outcomes = [
+                    OrderAttestationOutcome.FILLED,
+                    OrderAttestationOutcome.REJECTED,
+                    OrderAttestationOutcome.CANCELLED,
+                    OrderAttestationOutcome.ABSENT,
+                ]
+                rows = [
+                    [InlineKeyboardButton(outcome.value, callback_data=f"attest_outcome|{account_id}|{index}|{outcome.value}")]
+                    for outcome in outcomes
+                ]
+                rows.append([InlineKeyboardButton("Back", callback_data=f"attest_menu|{account_id}")])
+                await self._safe_edit_text(
+                    query,
+                    f"Select outcome for {attempt.symbol} {attempt.side} x{attempt.qty}.",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                )
+            elif kind == "attest_outcome" and len(parts) >= 4:
+                account_id, index_text, outcome = parts[1], parts[2], parts[3]
+                if not await self._validate_attestation_account(query, account_id):
+                    return
+                attempts = list_unattributed_attempts(account_id)
+                try:
+                    index = int(index_text)
+                    attempt = attempts[index]
+                except (ValueError, IndexError):
+                    await self._safe_edit_text(
+                        query,
+                        "Attempt list changed, please retry.",
+                        reply_markup=self._attestation_menu_markup(account_id, attempts),
+                    )
+                    return
+                if outcome not in {item.value for item in (
+                    OrderAttestationOutcome.FILLED,
+                    OrderAttestationOutcome.REJECTED,
+                    OrderAttestationOutcome.CANCELLED,
+                    OrderAttestationOutcome.ABSENT,
+                )}:
+                    await self._safe_edit_text(query, "Unsupported attestation outcome.", reply_markup=self._account_markup(account_id))
+                    return
+                rows = [
+                    [InlineKeyboardButton(reason, callback_data=f"attest_reason|{account_id}|{index}|{outcome}|{reason}")]
+                    for reason in sorted(ATTESTATION_REASONS)
+                ]
+                rows.append([InlineKeyboardButton("Back", callback_data=f"attest_pick|{account_id}|{index}")])
+                await self._safe_edit_text(
+                    query,
+                    f"Select reason for {attempt.symbol} {attempt.side} x{attempt.qty}.",
+                    reply_markup=InlineKeyboardMarkup(rows),
+                )
+            elif kind == "attest_reason" and len(parts) >= 5:
+                account_id, index_text, outcome, reason = parts[1], parts[2], parts[3], parts[4]
+                if not await self._validate_attestation_account(query, account_id):
+                    return
+                attempts = list_unattributed_attempts(account_id)
+                try:
+                    index = int(index_text)
+                    attempt = attempts[index]
+                except (ValueError, IndexError):
+                    await self._safe_edit_text(
+                        query,
+                        "Attempt list changed, please retry.",
+                        reply_markup=self._attestation_menu_markup(account_id, attempts),
+                    )
+                    return
+                if outcome not in {item.value for item in (
+                    OrderAttestationOutcome.FILLED,
+                    OrderAttestationOutcome.REJECTED,
+                    OrderAttestationOutcome.CANCELLED,
+                    OrderAttestationOutcome.ABSENT,
+                )} or reason not in ATTESTATION_REASONS:
+                    await self._safe_edit_text(query, "Unsupported attestation selection.", reply_markup=self._account_markup(account_id))
+                    return
+                operator_label = self.operator_labels.get(chat_id, chat_id)
+                store = order_attempt_store(account_id)
+                try:
+                    try:
+                        store.attest_unattributed(
+                            attempt.attempt_id,
+                            operator_label,
+                            OrderAttestationOutcome(outcome),
+                            reason,
+                        )
+                    except ValueError:
+                        await self._safe_edit_text(
+                            query,
+                            "This attempt was already attested — no action taken.",
+                            reply_markup=self._account_markup(account_id),
+                        )
+                        return
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(f"Telegram attestation failed for {account_id} by {operator_label}; continuing: {exc}")
+                    await self._safe_edit_text(
+                        query,
+                        f"Failed to persist attestation for {account_id}.",
+                        reply_markup=self._account_markup(account_id),
+                    )
+                    return
+                finally:
+                    store.close()
+                await self._safe_edit_text(
+                    query,
+                    f"Attested {attempt.symbol} {attempt.side} x{attempt.qty} as {outcome}.",
                     reply_markup=self._account_markup(account_id),
                 )
             elif kind == "confirm" and len(parts) >= 4:
