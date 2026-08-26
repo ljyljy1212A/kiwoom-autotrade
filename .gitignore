@@ -17,3 +17,17 @@ __pycache__/
 .DS_Store
 Thumbs.db
 /CURRENT_STATE.md
+# Round-artifact scratch/debris (category 1 - untracked working artifacts)
+/round*.py
+/round*.txt
+/round*.diff
+/round*.bin
+/r7[0-9][0-9]_*.txt
+diagnostics/round*.py
+diagnostics/round*.txt
+diagnostics/backup_*/
+diagnostics/fixed_port_release_measurement_*.jsonl
+diagnostics/main_py_HEAD_reference*.txt
+ops/scratch/
+src/*.diff
+*.lnk
