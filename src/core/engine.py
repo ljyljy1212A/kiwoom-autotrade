@@ -1041,7 +1041,7 @@ class AccountEngine:
                 intent.price = normalized_price
             price = normalized_price
         if intent.action == Action.BUY:
-            remaining = self._buy_reentry_after.get(intent.symbol, 0.0) - asyncio.get_running_loop().time()
+            remaining = self._buy_reentry_after.get(self._symbol_key(intent.symbol), 0.0) - asyncio.get_running_loop().time()
             if remaining > 0:
                 self.ctx.logger.info(
                     f"Next grid BUY deferred for {intent.symbol}: {remaining:.1f}s reconciliation cooldown remains"
@@ -1132,7 +1132,7 @@ class AccountEngine:
         # newly-added US profile from becoming order-capable merely because the
         # global dashboard controls were previously enabled for Korean trading.
         side = "BUY" if intent.action == Action.BUY else "SELL"
-        block_key = (side, intent.symbol)
+        block_key = (side, self._symbol_key(intent.symbol))
         now = asyncio.get_running_loop().time()
         if self._blocked_order_until.get(block_key, 0.0) > now:
             return
@@ -1166,7 +1166,7 @@ class AccountEngine:
             await self.telegram.notify_error("Broker accepted an order without an order ID; no state was changed")
             return
         if side == "BUY":
-            self._last_auto_buy_price[intent.symbol] = float(intent.price or 0)
+            self._last_auto_buy_price[self._symbol_key(intent.symbol)] = float(intent.price or 0)
         # Order acceptance is intentionally the only outcome here.  No position or
         # strategy state changes until get_executed_orders confirms a fill.
         self.ledger.add_pending(PendingOrder(result.ord_no, intent.symbol, side, intent.qty, intent.price,
@@ -1178,7 +1178,7 @@ class AccountEngine:
     def _order_block_cooldown_active(self, intent: OrderIntent) -> bool:
         """Return whether a safety-blocked intent is still being throttled."""
         side = "BUY" if intent.action == Action.BUY else "SELL"
-        return self._blocked_order_until.get((side, intent.symbol), 0.0) > asyncio.get_running_loop().time()
+        return self._blocked_order_until.get((side, self._symbol_key(intent.symbol)), 0.0) > asyncio.get_running_loop().time()
 
     def _duplicate_buy_at_price(self, symbol: str, price: float) -> bool:
         """Prevent repeated buys caused by duplicate ticks during a VI burst."""
@@ -1190,7 +1190,7 @@ class AccountEngine:
         if self.ledger.has_pending_buy(symbol):
             return True
         tolerance = 1.0 if self.ctx.client.market == "KR" else 1e-6
-        previous = self._last_auto_buy_price.get(symbol)
+        previous = self._last_auto_buy_price.get(self._symbol_key(symbol))
         if previous is not None and abs(previous - price) <= tolerance:
             return True
         return self.ledger.has_pending_buy_at_price(symbol, price, tolerance)
@@ -1511,7 +1511,7 @@ class AccountEngine:
             )
             self._broker_fill_catchup_warned.discard(symbol)
         if order.side == "BUY" and self.buy_reentry_delay_sec > 0:
-            self._buy_reentry_after[order.symbol] = (
+            self._buy_reentry_after[self._symbol_key(order.symbol)] = (
                 asyncio.get_running_loop().time() + self.buy_reentry_delay_sec
             )
             self.ctx.logger.info(
