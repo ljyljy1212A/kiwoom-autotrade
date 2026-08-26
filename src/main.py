@@ -23,6 +23,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.core.broker_http import _connect_with_reuseaddr
+from src.core.broker_http import get_fixed_port_degraded_state
 from src.core.process_lock import AccountOrderAuthority, ProcessLock
 from src.core.symbol_keys import canonical_symbol_key
 from src.core.runtime_paths import DATA_DIR, LOG_DIR, PROJECT_ROOT
@@ -56,6 +57,7 @@ _WORKER_LOCKS: dict[str, ProcessLock] = {}
 class EngineState(str, Enum):
     STARTING = "STARTING"
     RUNNING = "RUNNING"
+    DEGRADED_FIXED_PORT = "DEGRADED_FIXED_PORT"
     STOPPING = "STOPPING"
     STOPPED = "STOPPED"
 
@@ -207,7 +209,8 @@ async def _publish_worker_heartbeat(identity: WorkerIdentity, interval_sec: floa
     """Refresh worker liveness metadata while the account mutex is owned."""
     while True:
         await asyncio.sleep(interval_sec)
-        _write_worker_status(identity, "RUNNING")
+        state = EngineState.DEGRADED_FIXED_PORT.value if get_fixed_port_degraded_state(identity.account_id) is not None else EngineState.RUNNING.value
+        _write_worker_status(identity, state)
 
 
 async def _watch_for_supervisor_stop(identity: WorkerIdentity, interval_sec: float = 0.2) -> None:
