@@ -431,6 +431,16 @@ class FixedPortDegradedStateTest(unittest.TestCase):
         self.assertFalse(get_fixed_port_degraded_state("account-b").entry_alert_fired)
         self.assertEqual(marked, mark_fixed_port_entry_alert_fired("account-a"))
 
+    def test_concurrent_entry_alert_transition_is_locked_and_idempotent(self):
+        now = datetime(2026, 8, 25, tzinfo=timezone.utc)
+        enter_fixed_port_degraded_state("account-a", "rest", now=now)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            states = list(executor.map(lambda _: mark_fixed_port_entry_alert_fired("account-a"), range(32)))
+
+        self.assertTrue(all(state.entry_alert_fired for state in states))
+        self.assertTrue(get_fixed_port_degraded_state("account-a").entry_alert_fired)
+
     def test_ongoing_status_transition_is_deterministic_and_account_scoped(self):
         entered_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
         ongoing_at = entered_at + timedelta(minutes=15)

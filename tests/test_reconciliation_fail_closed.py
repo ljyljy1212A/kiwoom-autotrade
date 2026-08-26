@@ -167,6 +167,9 @@ def test_fixed_port_clear_event_consumes_once_and_scopes_to_matching_account(tmp
         assert get_fixed_port_degraded_state("us_mock") is not None
         first_event = read_control_state("kr_mock", data_dir=tmp_path)["fixed_port_event"]
         assert first_event["kind"] == "operator_resolved"
+        assert first_event["account"] == "kr_mock"
+        assert first_event["updated_by"] == "telegram"
+        assert first_event["event_id"]
 
         matching_engine._apply_reconciliation_clear_event()
 

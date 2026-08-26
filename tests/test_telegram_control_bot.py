@@ -322,6 +322,7 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(payload["pause_clear_event"]["reason"], "fixed_port_degraded")
+        self.assertEqual(payload["pause_clear_event"]["updated_by"], "telegram")
         self.assertTrue(query.answered)
 
     async def test_invalid_reason_callback_does_not_write(self):
