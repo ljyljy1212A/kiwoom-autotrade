@@ -89,7 +89,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine._auto_trading_enabled = True
             engine.balance_min_interval_sec = 0
@@ -142,7 +142,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 risk_manager=SimpleNamespace(approve=lambda *_args: (True, "")), dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
             try:
@@ -184,7 +184,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
             settings = Path(f"data/dashboard_settings_{account}.json")
@@ -248,7 +248,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 client=client, strategy=InfiniteGridStrategy(cfg), risk_manager=None,
                 dedup=None, logger=_Logger(), position=PositionState(symbol="001210"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="001210")
             engine.balance_min_interval_sec = 0
             try:
@@ -302,7 +302,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 client=client, strategy=InfiniteGridStrategy(cfg), risk_manager=None,
                 dedup=None, logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
 
@@ -380,7 +380,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                     logger=_Logger(), position=PositionState(symbol="000490"),
                 )
-                instance = AccountEngine(context, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                instance = AccountEngine(context, _Notifier(), None,
                                          lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
                 instance.balance_min_interval_sec = 0
                 return context, instance
@@ -471,7 +471,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                     logger=_Logger(), position=PositionState(symbol="000490"),
                 )
-                instance = AccountEngine(context, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                instance = AccountEngine(context, _Notifier(), None,
                                          lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
                 instance.balance_min_interval_sec = 0
                 return context, instance
@@ -536,7 +536,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                     logger=_Logger(), position=PositionState(symbol="000490"),
                 )
-                instance = AccountEngine(context, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+                instance = AccountEngine(context, _Notifier(), None,
                                          lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
                 instance.balance_min_interval_sec = 0
                 return context, instance
@@ -600,7 +600,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
             try:
@@ -645,7 +645,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), SimpleNamespace(safe_send=lambda *_: None), None,
+            engine = AccountEngine(ctx, _Notifier(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine._auto_trading_enabled = True
             engine.balance_min_interval_sec = 0

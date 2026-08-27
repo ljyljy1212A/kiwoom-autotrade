@@ -160,11 +160,6 @@ class MainConcurrencyTests(unittest.TestCase):
                         return None
 
 
-                class DummyDiscord:
-                    def __init__(self, *args, **kwargs):
-                        pass
-
-
                 class NotifyingLock:
                     def __init__(self, account_id, base_dir):
                         self._lock = ProcessLock(account_id, base_dir)
@@ -210,8 +205,7 @@ class MainConcurrencyTests(unittest.TestCase):
                     patch.object(main_module, "_watch_for_supervisor_stop", new=AsyncMock()), \
                     patch.object(main_module, "_write_worker_status"), \
                     patch.object(main_module, "run_symbol_engines", new=AsyncMock()), \
-                    patch.object(main_module, "TelegramController", DummyTelegram), \
-                    patch.object(main_module, "DiscordNotifier", DummyDiscord):
+                    patch.object(main_module, "TelegramController", DummyTelegram):
                         await main_module.main()
 
 

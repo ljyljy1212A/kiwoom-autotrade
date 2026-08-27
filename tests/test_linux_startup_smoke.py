@@ -34,7 +34,6 @@ class LinuxStartupSmokeTests(unittest.TestCase):
                           return_value=SimpleNamespace(market="US")), \
              patch.object(app_main, "load_accounts", return_value=[ctx]), \
              patch.object(app_main, "TelegramController", return_value=telegram), \
-             patch.object(app_main, "DiscordNotifier", return_value=MagicMock()), \
              patch.object(app_main, "run_symbol_engines", new=AsyncMock(return_value=None)), \
              patch.object(app_main, "ProcessLock", return_value=worker_lock), \
              patch.object(app_main, "_acquire_worker_pid"), \

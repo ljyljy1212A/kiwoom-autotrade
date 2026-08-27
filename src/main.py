@@ -33,7 +33,6 @@ from src.core.realtime_feed import PriceFeed
 from src.calendar_utils.market_calendar import _FALLBACK_HOURS
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
-from src.notify.discord_notify import DiscordNotifier
 from src.notify.telegram_bot import TelegramController
 from src.utils.logger import get_logger
 
@@ -285,13 +284,13 @@ async def make_price_feed(ctx):
     return feed.get_price
 
 
-async def build_engine(ctx, telegram: TelegramController, discord: DiscordNotifier) -> AccountEngine:
+async def build_engine(ctx, telegram: TelegramController) -> AccountEngine:
     price_feed = await make_price_feed(ctx)
-    engine = AccountEngine(ctx, telegram, discord, None, price_feed)
+    engine = AccountEngine(ctx, telegram, None, price_feed)
     return engine
 
 
-async def run_account_balance_monitor(ctx, telegram: TelegramController, discord: DiscordNotifier) -> None:
+async def run_account_balance_monitor(ctx, telegram: TelegramController) -> None:
     """Keep the account-wide holdings snapshot fresh without active strategies.
 
     Trade Settings controls automation, not whether manually placed or mock
@@ -299,7 +298,7 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController, discord
     balance gate with symbol engines, so enabled profiles do not multiply REST
     balance requests.
     """
-    monitor = AccountEngine(ctx, telegram, discord, None, None, balance_only=True)
+    monitor = AccountEngine(ctx, telegram, None, None, balance_only=True)
     while True:
         ctx.logger.debug(
             f"Account balance monitor iteration starting (interval={monitor.poll_interval_sec:g}s)"
@@ -425,7 +424,7 @@ def _dashboard_settings_payload(account_id: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-async def run_symbol_engines(ctx, telegram: TelegramController, discord: DiscordNotifier) -> None:
+async def run_symbol_engines(ctx, telegram: TelegramController) -> None:
     """Keep one isolated engine/task per enabled symbol on an account."""
     price_feed = await make_price_feed(ctx)
     quote_health_monitor = asyncio.create_task(
@@ -447,7 +446,7 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
         # the same account/symbol while this task owns it.
         symbol_ctx = replace(ctx, strategy=InfiniteGridStrategy(config),
                              position=PositionState(symbol=symbol), logger=ctx.logger.bind(symbol=symbol))
-        engine = AccountEngine(symbol_ctx, telegram, discord, None,
+        engine = AccountEngine(symbol_ctx, telegram, None,
                                 price_feed, control_symbol=symbol,
                                 dispatch_clearance_service=dispatch_clearance_service)
         await engine.run()
@@ -473,7 +472,7 @@ async def run_symbol_engines(ctx, telegram: TelegramController, discord: Discord
             # fresh account snapshot through the shared balance gate.
             if not wanted and balance_monitor is None:
                 balance_monitor = asyncio.create_task(
-                    run_account_balance_monitor(ctx, telegram, discord),
+                    run_account_balance_monitor(ctx, telegram),
                     name=f"{ctx.account_id}-balance-monitor",
                 )
 
@@ -880,7 +879,6 @@ async def main():
     stop_watcher: asyncio.Task | None = None
     engines_task: asyncio.Task | None = None
     telegram: TelegramController | None = None
-    discord: DiscordNotifier | None = None
     worker_identity: WorkerIdentity | None = None
     lock_acquired = False
     try:
@@ -925,7 +923,6 @@ async def main():
         )
         for ctx in contexts:
             ctx.client.set_exchange_alert_callback(telegram.notify_error)
-        discord = DiscordNotifier(os.environ.get("DISCORD_WEBHOOK_URL"), SYS_LOG)
 
         stop_watcher = asyncio.create_task(
             _watch_for_supervisor_stop(worker_identity), name=f"{worker_identity.account_id}-supervisor-stop"
@@ -934,7 +931,7 @@ async def main():
         contexts[0].logger.info(f"{len(contexts)} account worker(s) started")
 
         async def _run_engines():
-            await asyncio.gather(*(run_symbol_engines(ctx, telegram, discord) for ctx in contexts))
+            await asyncio.gather(*(run_symbol_engines(ctx, telegram) for ctx in contexts))
 
         engines_task = asyncio.create_task(_run_engines(), name=f"{worker_identity.account_id}-engines")
         done, _ = await asyncio.wait((engines_task, stop_watcher), return_when=asyncio.FIRST_COMPLETED)

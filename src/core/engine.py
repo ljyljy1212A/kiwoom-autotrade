@@ -360,10 +360,10 @@ async def _diagnostic_lock(lock: asyncio.Lock, lock_name: str, logger):
 
 
 class AccountEngine:
-    def __init__(self, ctx, telegram, discord, report_store, price_feed, poll_interval_sec: int = 5,
+    def __init__(self, ctx, telegram, report_store, price_feed, poll_interval_sec: int = 5,
                  control_symbol: str | None = None, balance_only: bool = False,
                  dispatch_clearance_service: DispatchClearanceService | None = None):
-        self.ctx, self.telegram, self.discord = ctx, telegram, discord
+        self.ctx, self.telegram = ctx, telegram
         self.report_store, self.price_feed, self.poll_interval_sec = report_store, price_feed, poll_interval_sec
         self.data_dir = DATA_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1521,7 +1521,6 @@ class AccountEngine:
         # This applies equally to confirmed BUY and SELL fills.
         self._pending_dashboard_fills.append((order, dict(row)))
         await self.telegram.notify_fill(order.side, order.symbol, row["qty"], row["price"], order.ord_no)
-        self.discord.safe_send(f"Confirmed fill: {order.side} {order.symbol} x{row['qty']} @ {row['price']}")
 
     def _queue_dashboard_fill(self, order: PendingOrder, row: dict) -> None:
         """Schedule an isolated UI notification without blocking the worker loop."""
