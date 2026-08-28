@@ -26,7 +26,7 @@ from src.core.runtime_paths import DATA_DIR, LOG_DIR, PROJECT_ROOT
 from src.core.account_manager import load_accounts, run_all
 from src.core.engine import AccountEngine, DispatchClearanceService
 from src.core.realtime_feed import PriceFeed
-from src.calendar_utils.market_calendar import _FALLBACK_HOURS
+from src.calendar_utils.market_calendar import MarketCalendar, _FALLBACK_HOURS
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.notify.telegram_bot import TelegramController
@@ -343,13 +343,15 @@ def _seconds_until_next_regular_open(calendar) -> float:
 
 async def run_quote_health_monitor(ctx, feed: PriceFeed) -> None:
     """Periodically report the age of each subscribed WebSocket quote."""
+    calendar = MarketCalendar(market=ctx.client.market)
     while True:
         realtime = feed.realtime
         if realtime is not None:
+            session = calendar.session_name_now()
             for symbol in realtime.subscribed_symbols():
                 age = realtime.cache_age_sec(symbol)
                 age_text = "missing" if age is None else f"{age:.1f}s"
-                ctx.logger.info(f"Quote health: symbol={symbol} cache_age={age_text}")
+                ctx.logger.info(f"Quote health: symbol={symbol} cache_age={age_text} session={session}")
         await asyncio.sleep(60)
 
 
