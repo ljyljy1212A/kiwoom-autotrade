@@ -51,6 +51,12 @@ class _Notifier:
     async def notify_balance_change(self, *_args):
         return None
 
+    async def notify_symbol_closed(self, *_args):
+        return None
+
+    async def notify_symbol_reopened(self, *_args):
+        return None
+
 
 class _Logger:
     def __init__(self):

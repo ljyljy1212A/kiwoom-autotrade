@@ -39,7 +39,14 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine._last_auto_buy_price = {}
     engine._dispatch_clearance_enabled = enabled
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=service)
-    engine.telegram = SimpleNamespace(notify_error=AsyncMock(), notify_order=AsyncMock())
+    engine.telegram = SimpleNamespace(
+        notify_error=AsyncMock(),
+        notify_order=AsyncMock(),
+        notify_fill=AsyncMock(),
+        notify_balance_change=AsyncMock(),
+        notify_symbol_closed=AsyncMock(),
+        notify_symbol_reopened=AsyncMock(),
+    )
     engine.ledger = SimpleNamespace(add_pending=Mock())
     engine.sync_broker_state = AsyncMock()
     engine._build_reconciliation_clearance_snapshot = AsyncMock(return_value=snapshot)

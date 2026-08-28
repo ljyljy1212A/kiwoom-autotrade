@@ -159,6 +159,21 @@ class MainConcurrencyTests(unittest.TestCase):
                     async def notify_error(self, *args, **kwargs):
                         return None
 
+                    async def notify_order(self, side, symbol, qty, price, ord_no):
+                        return None
+
+                    async def notify_fill(self, side, symbol, qty, price, ord_no):
+                        return None
+
+                    async def notify_balance_change(self, message):
+                        return None
+
+                    async def notify_symbol_closed(self, symbol, account_id, qty, avg_price, reason):
+                        return None
+
+                    async def notify_symbol_reopened(self, symbol, account_id, reason):
+                        return None
+
 
                 class NotifyingLock:
                     def __init__(self, account_id, base_dir):

@@ -29,7 +29,12 @@ class _Ledger:
 
 class _Notifier:
     def __init__(self):
+        self.notify_order = AsyncMock()
+        self.notify_fill = AsyncMock()
         self.notify_error = AsyncMock()
+        self.notify_balance_change = AsyncMock()
+        self.notify_symbol_closed = AsyncMock()
+        self.notify_symbol_reopened = AsyncMock()
 
 
 def _engine(tmp_path, *, raw_balance=None, balance_only=False, position_qty=3,
