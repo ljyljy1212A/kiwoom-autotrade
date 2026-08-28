@@ -609,6 +609,7 @@ async def main():
         )
         await telegram.start_polling()
         contexts[0].logger.info(f"{len(contexts)} account worker(s) started")
+        asyncio.create_task(telegram.notify_worker_started(worker_identity.account_id, worker_identity.market))
 
         async def _run_engines():
             await asyncio.gather(*(run_symbol_engines(ctx, telegram) for ctx in contexts))

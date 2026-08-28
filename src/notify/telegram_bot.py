@@ -56,6 +56,13 @@ class TelegramController:
             f"Reason: {reason}\nSymbol is available for new orders again."
         )
 
+    async def notify_worker_started(self, account_id: str, market: str) -> None:
+        """Notify that a worker process has finished startup and begun running."""
+        await self.safe_send(
+            f"WORKER STARTED\n{account_id} ({market})\n"
+            f"Worker process has finished startup and is running."
+        )
+
     async def start_polling(self):
         # Initialize the bot client for outbound sends only. No polling means
         # Telegram commands and inbound messages are intentionally ignored.
