@@ -1301,9 +1301,22 @@ class AccountEngine:
                 for raw in execution_rows:
                     order = recovery_orders.get(str(raw.get("ord_no", "")))
                     if not order:
+                        self._log_skipped_execution_row(
+                            raw, "no_matching_pending_or_recovery_order"
+                        )
                         continue
                     total, price = _number(raw.get("cntr_qty")), _number(raw.get("cntr_pric") or raw.get("cntr_uv"))
-                    if total <= order.filled_qty or price <= 0:
+                    if total <= order.filled_qty:
+                        self._log_skipped_execution_row(
+                            raw, "non_incremental_cumulative_quantity",
+                            order=order, total=total, price=price,
+                        )
+                        continue
+                    if price <= 0:
+                        self._log_skipped_execution_row(
+                            raw, "non_positive_execution_price",
+                            order=order, total=total, price=price,
+                        )
                         continue
                     row = self.ledger.record_fill(order, total, price, _filled_at(raw))
                     if row:
@@ -1346,6 +1359,32 @@ class AccountEngine:
                 self._record_reconciliation_success()
             self._balance_sync_blocked = False
             return True
+
+    def _log_skipped_execution_row(
+        self,
+        raw: dict,
+        reason: str,
+        *,
+        order: PendingOrder | None = None,
+        total: float | None = None,
+        price: float | None = None,
+    ) -> None:
+        self.ctx.logger.warning(
+            json.dumps(
+                {
+                    "event": "execution_row_skipped",
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "reason": reason,
+                    "orderNo": order.ord_no if order is not None else str(raw.get("ord_no", "")),
+                    "total": total,
+                    "price": price,
+                    "raw": raw,
+                },
+                ensure_ascii=False,
+                default=str,
+                sort_keys=True,
+            )
+        )
 
     def _record_reconciliation_failure(self, exc: Exception) -> None:
         gate = self._balance_gate
