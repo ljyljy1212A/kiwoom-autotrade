@@ -44,6 +44,12 @@ class TelegramController:
     async def notify_balance_change(self, message: str):
         await self.safe_send(f"BALANCE CHANGE\n{message}")
 
+    async def notify_symbol_closed(self, symbol: str, account_id: str, qty: float, avg_price: float, reason: str) -> None:
+        await self.safe_send(
+            f"SYMBOL CLOSED\n{symbol} ({account_id})\nqty={qty:g}, avg price={avg_price:g}\n"
+            f"Reason: {reason}\nSymbol is now blocked from new orders."
+        )
+
     async def start_polling(self):
         # Initialize the bot client for outbound sends only. No polling means
         # Telegram commands and inbound messages are intentionally ignored.

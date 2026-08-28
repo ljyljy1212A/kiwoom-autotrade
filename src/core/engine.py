@@ -2028,6 +2028,9 @@ class AccountEngine:
                 "started_at": current.get("started_at") if isinstance(current, dict) else None,
                 "closed_at": datetime.now(timezone.utc).isoformat(),
             }
+            await self.telegram.notify_symbol_closed(
+                symbol_key, self.ctx.account_id, qty, avg_price, "orphan_cleaned"
+            )
             self._prepare_lifecycle_scope(symbol_key)
             self.ctx.logger.info(f"Automatic orphan cleanup completed for {symbol_key}: {current_orphan.get('removed', [])}")
             return
