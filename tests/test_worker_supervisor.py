@@ -126,6 +126,110 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         self.assertTrue(payload["started"])
         self.assertEqual(popen.call_args.kwargs["env"]["AUTO_TRADING_ENABLED"], "true")
 
+    @unittest.skipUnless(os.name == "nt", "Windows named mutex semantics are verified on Windows")
+    def test_concurrent_starts_report_one_started_and_one_lock_conflict(self):
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            account = f"concurrent_start_{uuid.uuid4().hex}"
+            children = []
+            results = []
+            errors = []
+            start_gate = threading.Barrier(3)
+            launch_gate = threading.Barrier(2)
+            real_popen = subprocess.Popen
+            worker_script = textwrap.dedent(
+                """
+                import json
+                import os
+                import sys
+                import time
+                from pathlib import Path
+                from src.core.process_lock import ProcessLock, ProcessLockError
+
+                account = sys.argv[1]
+                base_dir = Path(sys.argv[2])
+                lock = ProcessLock(account, base_dir)
+                status_path = base_dir / f"worker_{account}.status.json"
+                try:
+                    lock.acquire()
+                except ProcessLockError:
+                    deadline = time.monotonic() + 2
+                    while not status_path.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    raise SystemExit(3)
+
+                status_path.write_text(
+                    json.dumps(
+                        {
+                            "account": account,
+                            "pid": os.getpid(),
+                            "instanceId": "concurrent-test",
+                            "state": "RUNNING",
+                            "market": "KR",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                try:
+                    time.sleep(30)
+                finally:
+                    lock.release()
+                """
+            )
+
+            def spawn_mutex_owner(_command, **_kwargs):
+                launch_gate.wait(timeout=5)
+                child = real_popen(
+                    [sys.executable, "-c", worker_script, account, str(base_dir)],
+                    cwd=supervisor.ROOT,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                children.append(child)
+                return child
+
+            def call_start():
+                try:
+                    start_gate.wait(timeout=5)
+                    results.append(supervisor.start(account, "KR"))
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch.object(supervisor, "DATA_DIR", base_dir), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor.subprocess, "Popen", side_effect=spawn_mutex_owner):
+                threads = [threading.Thread(target=call_start) for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                start_gate.wait(timeout=5)
+                for thread in threads:
+                    thread.join(timeout=15)
+
+            try:
+                self.assertEqual(errors, [])
+                self.assertEqual(len(results), 2)
+
+                started = [(code, payload) for code, payload in results if payload.get("started")]
+                rejected = [(code, payload) for code, payload in results if not payload.get("started")]
+
+                self.assertEqual(len(started), 1)
+                self.assertEqual(started[0][0], 0)
+                self.assertEqual(len(rejected), 1)
+                self.assertEqual(rejected[0][0], 3)
+                self.assertIn(
+                    rejected[0][1].get("reason"),
+                    ("already-running", "worker-refused-or-exited"),
+                )
+                if rejected[0][1].get("reason") == "worker-refused-or-exited":
+                    self.assertEqual(rejected[0][1].get("failureClass"), "lock-conflict")
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=10)
+
 
 if __name__ == "__main__":
     unittest.main()
