@@ -50,6 +50,12 @@ class TelegramController:
             f"Reason: {reason}\nSymbol is now blocked from new orders."
         )
 
+    async def notify_symbol_reopened(self, symbol: str, account_id: str, reason: str) -> None:
+        await self.safe_send(
+            f"SYMBOL REOPENED\n{symbol} ({account_id})\n"
+            f"Reason: {reason}\nSymbol is available for new orders again."
+        )
+
     async def start_polling(self):
         # Initialize the bot client for outbound sends only. No polling means
         # Telegram commands and inbound messages are intentionally ignored.

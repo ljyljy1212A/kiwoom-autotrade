@@ -959,6 +959,15 @@ class AccountEngine:
             lifecycle = self._symbol_lifecycles.get(symbol, {})
             if isinstance(lifecycle, dict) and lifecycle.get("status") == "closed":
                 self._closed_symbols_blocked.discard(symbol)
+                try:
+                    asyncio.create_task(
+                        self.telegram.notify_symbol_reopened(
+                            symbol, self.ctx.account_id, "dashboard_reentry"
+                        ),
+                        name=f"symbol-reopened-{self.ctx.account_id}-{symbol}",
+                    )
+                except Exception as exc:
+                    self.ctx.logger.warning(f"Symbol reopened notification deferred: {exc}")
             else:
                 self._dashboard_auto_buy = self._dashboard_auto_sell = False
                 self._dashboard_profile_allowed = False
