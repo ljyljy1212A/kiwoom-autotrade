@@ -11,6 +11,7 @@ from src.core.engine import (
     ReconciliationClearanceSnapshot,
 )
 from src.strategy.base import Action, OrderIntent
+from tests.support.telegram_double import make_telegram_double
 
 
 def _snapshot(*, clear):
@@ -39,14 +40,7 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine._last_auto_buy_price = {}
     engine._dispatch_clearance_enabled = enabled
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=service)
-    engine.telegram = SimpleNamespace(
-        notify_error=AsyncMock(),
-        notify_order=AsyncMock(),
-        notify_fill=AsyncMock(),
-        notify_balance_change=AsyncMock(),
-        notify_symbol_closed=AsyncMock(),
-        notify_symbol_reopened=AsyncMock(),
-    )
+    engine.telegram = make_telegram_double()
     engine.ledger = SimpleNamespace(add_pending=Mock())
     engine.sync_broker_state = AsyncMock()
     engine._build_reconciliation_clearance_snapshot = AsyncMock(return_value=snapshot)

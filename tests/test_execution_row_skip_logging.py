@@ -14,6 +14,7 @@ from src.core.engine import AccountEngine
 from src.data.trade_ledger import PendingOrder
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
+from tests.support.telegram_double import make_telegram_double
 
 
 def _config() -> dict:
@@ -36,26 +37,6 @@ class _Client:
 
     async def get_executed_orders(self, _symbol: str) -> dict:
         return {"cntr": self.rows}
-
-
-class _Notifier:
-    async def notify_order(self, *_args):
-        return None
-
-    async def notify_fill(self, *_args):
-        return None
-
-    async def notify_error(self, *_args):
-        return None
-
-    async def notify_balance_change(self, *_args):
-        return None
-
-    async def notify_symbol_closed(self, *_args):
-        return None
-
-    async def notify_symbol_reopened(self, *_args):
-        return None
 
 
 class _Logger:
@@ -132,7 +113,7 @@ class ExecutionRowSkipLoggingTest(unittest.TestCase):
                 position=PositionState(symbol="000490"),
             )
             engine = AccountEngine(
-                ctx, _Notifier(), None, lambda _symbol: None,
+                ctx, make_telegram_double(), None, lambda _symbol: None,
                 poll_interval_sec=60, control_symbol="000490",
             )
             try:

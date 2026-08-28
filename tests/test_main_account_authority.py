@@ -107,6 +107,7 @@ class MainConcurrencyTests(unittest.TestCase):
 
                 from src import main as main_module
                 from src.core.process_lock import ProcessLock
+                from tests.support.telegram_double import make_telegram_double
 
 
                 class DummyLogger:
@@ -145,34 +146,14 @@ class MainConcurrencyTests(unittest.TestCase):
                         return None
 
 
-                class DummyTelegram:
-                    def __init__(self, *args, **kwargs):
-                        pass
+                async def blocking_start_polling():
+                    print("ready", flush=True)
+                    await asyncio.Event().wait()
 
-                    async def start_polling(self):
-                        print("ready", flush=True)
-                        await asyncio.Event().wait()
-
-                    async def stop(self):
-                        return None
-
-                    async def notify_error(self, *args, **kwargs):
-                        return None
-
-                    async def notify_order(self, side, symbol, qty, price, ord_no):
-                        return None
-
-                    async def notify_fill(self, side, symbol, qty, price, ord_no):
-                        return None
-
-                    async def notify_balance_change(self, message):
-                        return None
-
-                    async def notify_symbol_closed(self, symbol, account_id, qty, avg_price, reason):
-                        return None
-
-                    async def notify_symbol_reopened(self, symbol, account_id, reason):
-                        return None
+                def make_blocking_telegram(*_args, **_kwargs):
+                    telegram = make_telegram_double()
+                    telegram.start_polling.side_effect = blocking_start_polling
+                    return telegram
 
 
                 class NotifyingLock:
@@ -220,7 +201,11 @@ class MainConcurrencyTests(unittest.TestCase):
                     patch.object(main_module, "_watch_for_supervisor_stop", new=AsyncMock()), \
                     patch.object(main_module, "_write_worker_status"), \
                     patch.object(main_module, "run_symbol_engines", new=AsyncMock()), \
-                    patch.object(main_module, "TelegramController", DummyTelegram):
+                    patch.object(
+                        main_module,
+                        "TelegramController",
+                        side_effect=make_blocking_telegram,
+                    ):
                         await main_module.main()
 
 

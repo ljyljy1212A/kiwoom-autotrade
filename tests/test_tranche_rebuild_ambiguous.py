@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 from src.core.engine import AccountEngine, _AccountBalanceGate
 from src.strategy.base import PositionState
+from tests.support.telegram_double import make_telegram_double
 
 
 class _Ledger:
@@ -25,16 +26,6 @@ class _Ledger:
 
     def has_unresolved_orders(self, _symbol):
         return False
-
-
-class _Notifier:
-    def __init__(self):
-        self.notify_order = AsyncMock()
-        self.notify_fill = AsyncMock()
-        self.notify_error = AsyncMock()
-        self.notify_balance_change = AsyncMock()
-        self.notify_symbol_closed = AsyncMock()
-        self.notify_symbol_reopened = AsyncMock()
 
 
 def _engine(tmp_path, *, raw_balance=None, balance_only=False, position_qty=3,
@@ -81,7 +72,7 @@ def _engine(tmp_path, *, raw_balance=None, balance_only=False, position_qty=3,
     engine._validated_manual_tranche_base = Mock(return_value=101.0)
     engine._orphan_cleaner = Mock()
     engine._orphan_cleaner.sweep.return_value = []
-    engine.telegram = _Notifier()
+    engine.telegram = make_telegram_double()
     engine._shared_broker_balance = AsyncMock(return_value=(raw_balance if raw_balance is not None else {
         "acnt_evlt_remn_indv_tot": [{
             "stk_cd": "000490", "rmnd_qty": "2", "pur_pric": "100",

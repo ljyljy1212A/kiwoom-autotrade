@@ -33,3 +33,4 @@ ops/emergency_stop.ps1
 src/*.diff
 *.lnk
 pytest_round*.txt
+.pytest-tmp/

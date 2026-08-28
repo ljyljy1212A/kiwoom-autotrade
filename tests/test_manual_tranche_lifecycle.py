@@ -20,6 +20,7 @@ from src.core.engine import AccountEngine
 from src.data.trade_ledger import PendingOrder
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
+from tests.support.telegram_double import make_telegram_double
 
 
 def _config() -> dict:
@@ -56,26 +57,6 @@ class _Client:
         return {"cntr": []}
 
 
-class _Notifier:
-    async def notify_order(self, *_args):
-        return None
-
-    async def notify_fill(self, *_args):
-        return None
-
-    async def notify_error(self, *_args):
-        return None
-
-    async def notify_balance_change(self, *_args):
-        return None
-
-    async def notify_symbol_closed(self, *_args):
-        return None
-
-    async def notify_symbol_reopened(self, *_args):
-        return None
-
-
 class _Logger:
     def info(self, *_args): pass
     def warning(self, *_args): pass
@@ -95,7 +76,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine._auto_trading_enabled = True
             engine.balance_min_interval_sec = 0
@@ -148,7 +129,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 risk_manager=SimpleNamespace(approve=lambda *_args: (True, "")), dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
             try:
@@ -190,7 +171,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
             settings = Path(f"data/dashboard_settings_{account}.json")
@@ -254,7 +235,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 client=client, strategy=InfiniteGridStrategy(cfg), risk_manager=None,
                 dedup=None, logger=_Logger(), position=PositionState(symbol="001210"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="001210")
             engine.balance_min_interval_sec = 0
             try:
@@ -308,7 +289,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 client=client, strategy=InfiniteGridStrategy(cfg), risk_manager=None,
                 dedup=None, logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
 
@@ -386,7 +367,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                     logger=_Logger(), position=PositionState(symbol="000490"),
                 )
-                instance = AccountEngine(context, _Notifier(), None,
+                instance = AccountEngine(context, make_telegram_double(), None,
                                          lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
                 instance.balance_min_interval_sec = 0
                 return context, instance
@@ -477,7 +458,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                     logger=_Logger(), position=PositionState(symbol="000490"),
                 )
-                instance = AccountEngine(context, _Notifier(), None,
+                instance = AccountEngine(context, make_telegram_double(), None,
                                          lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
                 instance.balance_min_interval_sec = 0
                 return context, instance
@@ -542,7 +523,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                     logger=_Logger(), position=PositionState(symbol="000490"),
                 )
-                instance = AccountEngine(context, _Notifier(), None,
+                instance = AccountEngine(context, make_telegram_double(), None,
                                          lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
                 instance.balance_min_interval_sec = 0
                 return context, instance
@@ -606,7 +587,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine.balance_min_interval_sec = 0
             try:
@@ -651,7 +632,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
                 logger=_Logger(), position=PositionState(symbol="000490"),
             )
-            engine = AccountEngine(ctx, _Notifier(), None,
+            engine = AccountEngine(ctx, make_telegram_double(), None,
                                    lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
             engine._auto_trading_enabled = True
             engine.balance_min_interval_sec = 0
