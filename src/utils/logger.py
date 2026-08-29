@@ -20,7 +20,7 @@ def _init_console_once() -> None:
         return
     _logger.remove()
     _logger.add(
-        sys.stdout,
+        sys.stderr,
         level="INFO",
         colorize=True,
         format=(
