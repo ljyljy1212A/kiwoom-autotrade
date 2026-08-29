@@ -274,7 +274,7 @@ def stop(account, timeout: float | None = None):
             except (ProcessLookupError, OSError):
                 pass
 
-        _wait_for_stopped(account, pid, force_timeout)
+        stopped = _wait_for_stopped(account, pid, force_timeout)
 
     # 3. Clean up metadata now that exit is confirmed (or best-effort if not).
     try:
@@ -284,6 +284,8 @@ def stop(account, timeout: float | None = None):
     _remove_pid_after_confirmed_exit(account, pid)
     _record_stopped_status(account, pid)
     final_st = status(account)
+    if mode == "forced":
+        return (0 if stopped else 6), {**final_st, "mode": mode, "stopped": stopped}
     return 0, {**final_st, "mode": mode}
 
 

@@ -11,10 +11,10 @@ from src.core.process_lock import ProcessLock
 
 
 class SupervisorKillTests(unittest.TestCase):
-    def test_kill_stops_mock_lock_holder_and_releases_lock(self):
+    def _assert_worker_command_stops_mock_lock_holder_and_releases_lock(self, action: str):
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)
-            account_id = f"kill_{uuid.uuid4().hex}"
+            account_id = f"{action}_{uuid.uuid4().hex}"
             script = textwrap.dedent(
                 """
                 import os
@@ -59,7 +59,7 @@ class SupervisorKillTests(unittest.TestCase):
                 env["KIWOOM_DATA_DIR"] = str(data_dir)
                 env["KIWOOM_LOG_DIR"] = str(data_dir / "logs")
                 command = subprocess.run(
-                    [sys.executable, "-m", "src.worker_supervisor", "kill", "--account", account_id, "--market", "KR"],
+                    [sys.executable, "-m", "src.worker_supervisor", action, "--account", account_id, "--market", "KR"],
                     env=env,
                     capture_output=True,
                     text=True,
@@ -67,12 +67,26 @@ class SupervisorKillTests(unittest.TestCase):
                 )
                 code = command.returncode
                 payload = json.loads(command.stdout)
-                print(f"kill_command_returncode={code} stdout={command.stdout.strip()}")
+                print(f"{action}_command_returncode={code} stdout={command.stdout.strip()}")
 
-                self.assertEqual(code, 0, payload)
-                self.assertTrue(payload["stopped"])
-                self.assertFalse(child.poll() is None)
-                self.assertFalse(ProcessLock(account_id, data_dir).is_alive())
+                if action == "kill":
+                    self.assertEqual(code, 0, payload)
+                    self.assertTrue(payload["stopped"])
+                else:
+                    self.assertNotEqual(code, 0, payload)
+                    self.assertEqual(payload["account"], account_id)
+                    self.assertEqual(payload["pid"], pid)
+                    self.assertIsInstance(payload["running"], bool)
+                    self.assertEqual(payload["instanceId"], "test-instance")
+                    self.assertIn("state", payload)
+                    self.assertEqual(payload["mode"], "forced")
+                    self.assertFalse(payload["stopped"])
+                if action == "kill":
+                    self.assertFalse(child.poll() is None)
+                    self.assertFalse(ProcessLock(account_id, data_dir).is_alive())
+                else:
+                    self.assertTrue(child.poll() is None)
+                    self.assertTrue(ProcessLock(account_id, data_dir).is_alive())
                 self.assertEqual(
                     json.loads(in_flight_path.read_text(encoding="utf-8"))["state"],
                     "submitted-awaiting-confirmation",
@@ -81,6 +95,12 @@ class SupervisorKillTests(unittest.TestCase):
                 if child.poll() is None:
                     child.kill()
                     child.wait(timeout=10)
+
+    def test_kill_stops_mock_lock_holder_and_releases_lock(self):
+        self._assert_worker_command_stops_mock_lock_holder_and_releases_lock("kill")
+
+    def test_stop_stops_mock_lock_holder_and_releases_lock(self):
+        self._assert_worker_command_stops_mock_lock_holder_and_releases_lock("stop")
 
 
 if __name__ == "__main__":
