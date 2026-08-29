@@ -20,6 +20,7 @@ from pathlib import Path
 from src.core.process_lock import ProcessLock
 from src.core.control_state import read_auto_trading_enabled
 from src.core.runtime_paths import DATA_DIR
+from src.utils.logger import get_logger
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -258,12 +259,15 @@ def stop(account, timeout: float | None = None):
         # 2. Timeout exceeded: escalate to a platform-appropriate force-kill.
         mode = "forced"
         if sys.platform == "win32":
-            subprocess.run(
+            logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+            logger.info(f"Graceful stop timed out for {account}, escalating to taskkill: pid={pid} instance={instance_id}")
+            result = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            logger.info(f"taskkill result for {account}: pid={pid} instance={instance_id} returncode={result.returncode}")
         else:
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -292,17 +296,21 @@ def kill(account: str):
     identity = _owned_identity(account)
     if identity is None:
         return 5, {**curr, "mode": "unknown", "reason": "identity-unresolved"}
-    pid, _ = identity
+    pid, instance_id = identity
 
     if sys.platform == "win32":
-        subprocess.run(
+        logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+        logger.info(f"Force-killing {account} via taskkill: pid={pid} instance={instance_id}")
+        result = subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        logger.info(f"taskkill result for {account}: pid={pid} instance={instance_id} returncode={result.returncode}")
         if _pid_alive(pid):
             try:
+                logger.info(f"taskkill did not fully terminate {account}, falling back to SIGTERM: pid={pid} instance={instance_id}")
                 os.kill(pid, signal.SIGTERM)
             except (ProcessLookupError, OSError):
                 pass
