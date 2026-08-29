@@ -65,6 +65,50 @@ class _Logger:
 
 
 class ManualTrancheLifecycleTest(unittest.TestCase):
+    def test_balance_notification_waits_for_dashboard_position_initialization(self):
+        async def scenario():
+            client = _Client()
+            cfg = _config()
+            account = "kr_balance_notification_order_test"
+            ctx = AccountContext(
+                account_id=account, display_name="balance notification order", client=client,
+                strategy=InfiniteGridStrategy(cfg), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490", qty=0),
+            )
+            telegram = make_telegram_double()
+            observed = []
+
+            async def observe_notification(_message):
+                observed.append((ctx.position.qty, ctx.position.step, dict(ctx.strategy.step_qty)))
+
+            telegram.notify_balance_change.side_effect = observe_notification
+            engine = AccountEngine(ctx, telegram, None,
+                                   lambda _symbol: None, poll_interval_sec=60, control_symbol="000490")
+            engine._auto_trading_enabled = True
+            engine.balance_min_interval_sec = 0
+            engine._orphan_cleaner.sweep = lambda *_args, **_kwargs: []
+            engine._dashboard_symbol = "000490"
+            engine._lifecycle_pending_adoption = False
+            try:
+                await engine._reconcile_balance()
+                self.assertEqual(observed, [(1, 1, {1: 1})])
+                self.assertEqual(ctx.position.qty, 1)
+                self.assertEqual(ctx.position.step, 1)
+                telegram.notify_balance_change.assert_awaited_once()
+            finally:
+                engine.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
     def test_repeated_dashboard_refresh_keeps_one_pending_activation(self):
         """Refreshes before the first balance must not replace the adoption boundary."""
         async def scenario():

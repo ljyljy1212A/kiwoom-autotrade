@@ -1911,6 +1911,7 @@ class AccountEngine:
         return float(broker_avg)
 
     async def _reconcile_balance(self):
+        balance_change_msg: str | None = None
         balance_result = await self._shared_broker_balance()
         raw_balance = balance_result[0] if isinstance(balance_result, tuple) else balance_result
         if self.ctx.client.market == "US":
@@ -2286,7 +2287,7 @@ class AccountEngine:
                 msg = (f"Broker balance adopted: qty={qty}, avg={avg_price}; "
                        "automated orders paused because the position changed outside this program")
                 self.ctx.logger.error(msg)
-                await self.telegram.notify_balance_change(msg)
+                balance_change_msg = msg
         # A manually/HTS-held position can have already been adopted before a
         # dashboard profile becomes active. Seed tranche 1 regardless of a
         # quantity change so grid Auto Buy has the broker average as its base.
@@ -2303,6 +2304,8 @@ class AccountEngine:
                 self.ctx.logger.info(
                     f"HTS holding initialized for automation: {self.ctx.strategy.symbol} qty={qty}, tranche-1 price={tranche_one_price}"
                 )
+        if balance_change_msg is not None:
+            await self.telegram.notify_balance_change(balance_change_msg)
 
     def _remove_settings_for_confirmed_closures(
         self, previous_balance: dict, broker_holdings: list[dict], balance_recognized: bool
