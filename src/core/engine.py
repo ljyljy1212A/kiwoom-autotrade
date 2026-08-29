@@ -208,7 +208,7 @@ class DispatchClearanceService:
                 if state is not None:
                     write_fixed_port_degraded_event(
                         self.account_id, "recovered", state.operation, state.entered_at,
-                        updated_by="engine", data_dir=engine.data_dir,
+                        updated_by="engine", data_dir=engine.data_dir, symbol=symbol,
                     )
                 clear_fixed_port_degraded_state(self.account_id)
             return
@@ -825,6 +825,7 @@ class AccountEngine:
                 write_fixed_port_degraded_event(
                     self.ctx.account_id, "entered", state.operation, state.entered_at,
                     occurred_at=now, updated_by="engine", data_dir=self.data_dir,
+                    symbol=self.ctx.strategy.symbol,
                 )
                 mark_fixed_port_entry_alert_fired(self.ctx.account_id)
             elif now - (state.last_ongoing_status_at or state.entered_at) >= timedelta(
@@ -833,6 +834,7 @@ class AccountEngine:
                 write_fixed_port_degraded_event(
                     self.ctx.account_id, "ongoing", state.operation, state.entered_at,
                     occurred_at=now, updated_by="engine", data_dir=self.data_dir,
+                    symbol=self.ctx.strategy.symbol,
                 )
                 record_fixed_port_ongoing_status(self.ctx.account_id, now=now)
             service = self._balance_gate.dispatch_clearance_service
@@ -1002,6 +1004,7 @@ class AccountEngine:
             # Clear a stale account-level pause left by an earlier broker
             # mismatch; current balance and tranche safety gates still apply.
             self._trading_paused = False
+            self.ctx.logger.info(f"Cleared stale trading pause after dashboard profile activation for {strategy.symbol}")
             # A profile re-enabled after a full close is a fresh manual-first
             # lifecycle. Only an already-open lifecycle may restore fills;
             # otherwise the imminent broker snapshot adopts tranche 1 and old
@@ -1434,7 +1437,7 @@ class AccountEngine:
                 write_fixed_port_degraded_event(
                     self.ctx.account_id, "operator_resolved", fixed_port_state.operation,
                     fixed_port_state.entered_at, updated_by="telegram",
-                    data_dir=getattr(self, "data_dir", DATA_DIR),
+                    data_dir=getattr(self, "data_dir", DATA_DIR), symbol=self.ctx.strategy.symbol,
                 )
                 clear_fixed_port_degraded_state(self.ctx.account_id)
         for engine in list(self._balance_gate.engines):
@@ -2518,6 +2521,7 @@ class AccountEngine:
     def resume_buying(self): self._buying_paused = False
     def resume_trading(self):
         self._trading_paused = False
+        self.ctx.logger.info(f"Resuming trading for {self.ctx.strategy.symbol}; clearing pause reason: {self._pause_reason}")
         self._pause_reason = ""
 
     def _heartbeat(self):

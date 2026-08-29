@@ -72,6 +72,7 @@ def write_fixed_port_degraded_event(
     occurred_at: datetime | None = None,
     updated_by: str = "engine",
     data_dir: Path | None = None,
+    symbol: str | None = None,
 ) -> dict:
     if kind not in {"entered", "ongoing", "recovered", "operator_resolved"}:
         raise ValueError(f"Unsupported fixed-port event kind: {kind}")
@@ -81,6 +82,7 @@ def write_fixed_port_degraded_event(
         "event_id": uuid.uuid4().hex,
         "kind": kind,
         "account": account_id,
+        "symbol": symbol,
         "operation": operation,
         "entered_at": entered_at.isoformat(),
         "occurred_at": (occurred_at or datetime.now(timezone.utc)).isoformat(),
@@ -100,6 +102,7 @@ def write_pause_clear_event(
     *,
     updated_by: str = "telegram",
     data_dir: Path | None = None,
+    symbol: str | None = None,
 ) -> dict:
     """Persist an authenticated, reason-scoped pause-clear event."""
     if reason not in PAUSE_CLEAR_REASONS:
@@ -109,6 +112,7 @@ def write_pause_clear_event(
     event = {
         "event_id": uuid.uuid4().hex,
         "reason": reason,
+        "symbol": symbol,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": updated_by,
     }
