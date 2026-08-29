@@ -549,7 +549,8 @@ class AccountEngine:
         # Dashboard controls are an explicit execution authority, independent
         # of the worker-wide environment switch. Read them before reporting
         # startup mode so the log cannot falsely claim submissions are off.
-        self._refresh_dashboard_controls()
+        async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
+            self._refresh_dashboard_controls()
         if self._auto_trading_enabled:
             mode = "worker-wide Auto Trading enabled"
         elif self._dashboard_auto_buy or self._dashboard_auto_sell:
@@ -817,7 +818,8 @@ class AccountEngine:
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
         # never a source of silently stale financial state.
         self._refresh_runtime_control()
-        self._refresh_dashboard_controls()
+        async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
+            self._refresh_dashboard_controls()
         state = get_fixed_port_degraded_state(self.ctx.account_id)
         if state is not None:
             now = datetime.now(timezone.utc)
