@@ -49,7 +49,7 @@ class ProcessLock:
 
     @property
     def mutex_name(self) -> str:
-        return f"Local\\KiwoomAutotradeWorker_{self.account_id}"
+        return f"Global\\KiwoomAutotradeWorker_{self.account_id}"
 
     def acquire(self) -> None:
         if self._acquired:
