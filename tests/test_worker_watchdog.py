@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import tools.worker_watchdog as watchdog
 
@@ -12,6 +12,9 @@ class WorkerWatchdogTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.log_patch = patch.object(watchdog, "WATCHDOG_LOG", MagicMock())
+        self.log_patch.start()
+        self.addCleanup(self.log_patch.stop)
         self.state_path = Path(self.tmp.name) / "watchdog_state.json"
         self.status_dir = Path(self.tmp.name) / "status"
 
