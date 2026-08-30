@@ -7,7 +7,12 @@ import datetime as dt
 import json
 import shutil
 import sqlite3
+import sys
 from pathlib import Path
+
+_PROJECT_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT_FOR_IMPORT))
 
 from src.core.runtime_paths import backup_dir
 
