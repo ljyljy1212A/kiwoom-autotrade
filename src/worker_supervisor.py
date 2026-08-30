@@ -20,6 +20,7 @@ from pathlib import Path
 from src.core.process_lock import ProcessLock
 from src.core.control_state import read_auto_trading_enabled
 from src.core.runtime_paths import DATA_DIR
+from src.core.account_catalog import is_real_account
 from src.utils.logger import get_logger
 
 
@@ -229,7 +230,33 @@ def start(account: str, market: str) -> tuple[int, dict]:
     return 4, {**final, "started": False, "reason": "startup-timeout"}
 
 
+def _reject_real_account(account: str):
+    """Refuse to act on a real-mode account unless explicitly allowed.
+
+    Mirrors the dashboard's default-block real-account guard, but for the
+    raw supervisor CLI/process-control surface, which the dashboard's own
+    guard does not cover. Uses a distinct env var (ALLOW_LIVE_SUPERVISOR)
+    rather than the dashboard's ALLOW_LIVE_DASHBOARD, since these are
+    different risk surfaces and enabling one should not silently enable
+    the other.
+    """
+    if is_real_account(account) and os.environ.get("ALLOW_LIVE_SUPERVISOR", "false").lower() != "true":
+        return 7, {
+            "account": account,
+            "mode": "blocked",
+            "reason": "real-account-guard",
+            "error": (
+                f"Refusing to act on real account '{account}' without "
+                "ALLOW_LIVE_SUPERVISOR=true"
+            ),
+        }
+    return None
+
+
 def stop(account, timeout: float | None = None):
+    guard = _reject_real_account(account)
+    if guard is not None:
+        return guard
     curr = status(account)
     if not curr.get("running"):
         return 0, {**curr, "mode": "already_stopped"}
@@ -291,6 +318,9 @@ def stop(account, timeout: float | None = None):
 
 def kill(account: str):
     """Immediately terminate one worker without waiting for graceful shutdown."""
+    guard = _reject_real_account(account)
+    if guard is not None:
+        return guard
     curr = status(account)
     if not curr.get("running"):
         return 0, {**curr, "mode": "already_stopped"}
