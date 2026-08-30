@@ -41,3 +41,6 @@ tools/*_PYTHON*.txt
 *_PRE_FIX_BACKUP_*.xml
 tools/_r*_committed_blob.py
 wd_test2.py
+
+# Stale pytest tmp_path scratch output (Round 1271)
+pytest_tmp/
