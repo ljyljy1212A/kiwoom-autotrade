@@ -1,9 +1,9 @@
 import json
-import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import tools.worker_watchdog as watchdog
 
@@ -13,88 +13,128 @@ class WorkerWatchdogTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state_path = Path(self.tmp.name) / "watchdog_state.json"
+        self.status_dir = Path(self.tmp.name) / "status"
 
     def _patch_state_path(self):
         return patch.object(watchdog, "WATCHDOG_STATE", self.state_path)
 
-    def test_restart_suppression_trips_after_three_failures(self):
-        with self._patch_state_path(), \
+    def _write_status(self, account="kr_mock", market="KR", pid=222, state="RUNNING", updated_at=None):
+        self.status_dir.mkdir(exist_ok=True)
+        payload = {
+            "account": account,
+            "market": market,
+            "pid": pid,
+            "instanceId": "instance",
+            "startedAt": "started",
+            "state": state,
+            "updatedAt": (updated_at or datetime.now(timezone.utc)).isoformat(),
+        }
+        (self.status_dir / f"worker_{account}.status.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    def _patch_paths(self):
+        return self._patch_state_path(), patch.object(watchdog, "STATUS_DIR", self.status_dir)
+
+    def test_healthy_matching_fresh_heartbeat_resets_prior_failure_state(self):
+        self._write_status()
+        self.state_path.write_text(json.dumps({"kr_mock": {"consecutive_failures": 2, "alerted": True}}), encoding="utf-8")
+        state_patch, status_patch = self._patch_paths()
+        with state_patch, status_patch, \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"running": True, "pid": 222}), \
+             patch.object(watchdog.worker_supervisor, "start") as start, \
+             patch.object(watchdog, "_send_notification") as notify:
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        start.assert_not_called()
+        notify.assert_called_once()
+        payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["kr_mock"]["consecutive_failures"], 0)
+        self.assertFalse(payload["kr_mock"]["alerted"])
+
+    def test_dead_classification_relaunches_once_without_kill_path(self):
+        state_patch, status_patch = self._patch_paths()
+        with state_patch, status_patch, \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 333}), \
+             patch.object(watchdog.worker_supervisor, "start", return_value=(0, {"started": True})) as start, \
+             patch.object(watchdog, "_send_notification"):
+            watchdog.check_and_restart("us_mock", "US")
+
+        start.assert_called_once_with("us_mock", "US")
+
+    def test_lock_conflict_does_not_count_as_failure_or_notify_relaunch_failure(self):
+        self.state_path.write_text(
+            json.dumps({"kr_mock": {"consecutive_failures": 1}}), encoding="utf-8"
+        )
+        state_patch, status_patch = self._patch_paths()
+        with state_patch, status_patch, \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 333}), \
+             patch.object(
+                 watchdog.worker_supervisor,
+                 "start",
+                 return_value=(3, {"started": False, "failureClass": "lock-conflict"}),
+             ) as start, \
+             patch.object(watchdog, "_send_notification") as notify:
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        start.assert_called_once_with("kr_mock", "KR")
+        notify.assert_not_called()
+        payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["kr_mock"]["consecutive_failures"], 1)
+
+    def test_stale_live_worker_is_suspect_and_never_relaunched(self):
+        self._write_status(updated_at=datetime.now(timezone.utc) - timedelta(seconds=121))
+        state_patch, status_patch = self._patch_paths()
+        with state_patch, status_patch, \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"running": True, "pid": 222}), \
+             patch.object(watchdog.worker_supervisor, "start") as start, \
+             patch.object(watchdog, "_send_notification") as notify:
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        start.assert_not_called()
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.args[2], "suspect")
+
+    def test_third_nonhealthy_classification_trips_breaker_and_cooldown_blocks_relaunch(self):
+        state_patch, status_patch = self._patch_paths()
+        with state_patch, status_patch, \
              patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 111}), \
-             patch.object(watchdog.worker_supervisor, "start", return_value=(3, {"started": False, "reason": "refused"})) as start, \
-             patch.object(watchdog, "urlopen") as urlopen_mock, \
-             patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_CHAT_ID": "chat"}, clear=False), \
-             patch.object(watchdog.WATCHDOG_LOG, "warning"), \
-             patch.object(watchdog.WATCHDOG_LOG, "error"), \
-             patch.object(watchdog.WATCHDOG_LOG, "info"), \
-             patch.object(watchdog.WATCHDOG_LOG, "debug"), \
-             patch.object(watchdog.WATCHDOG_LOG, "critical"):
+             patch.object(watchdog.worker_supervisor, "start", return_value=(0, {"started": True})) as start, \
+             patch.object(watchdog, "_send_notification") as notify:
+            watchdog.check_and_restart("kr_mock", "KR")
             watchdog.check_and_restart("kr_mock", "KR")
             watchdog.check_and_restart("kr_mock", "KR")
             watchdog.check_and_restart("kr_mock", "KR")
 
         self.assertEqual(start.call_count, 2)
-        urlopen_mock.assert_called_once()
+        breaker_calls = [call for call in notify.call_args_list if call.args[2] == "circuit-breaker"]
+        self.assertEqual(len(breaker_calls), 1)
         payload = json.loads(self.state_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["kr_mock"]["consecutive_failures"], 3)
-        self.assertTrue(payload["kr_mock"]["alerted"])
+        self.assertEqual(payload["kr_mock"]["consecutive_failures"], 4)
+        self.assertTrue(payload["kr_mock"]["cooldown_until"])
 
-    def test_running_worker_resets_failure_state_without_restart(self):
+    def test_healthy_status_is_required_to_reset_cooldown_state(self):
         self.state_path.write_text(json.dumps({"kr_mock": {"consecutive_failures": 2, "alerted": True}}), encoding="utf-8")
-        with self._patch_state_path(), \
+        self._write_status(state="DEGRADED_FIXED_PORT")
+        state_patch, status_patch = self._patch_paths()
+        with state_patch, status_patch, \
              patch.object(watchdog.worker_supervisor, "status", return_value={"running": True, "pid": 222}), \
              patch.object(watchdog.worker_supervisor, "start") as start, \
-             patch.object(watchdog.WATCHDOG_LOG, "debug"):
+             patch.object(watchdog, "_send_notification"):
             watchdog.check_and_restart("kr_mock", "KR")
 
         start.assert_not_called()
         payload = json.loads(self.state_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["kr_mock"], {"consecutive_failures": 0, "alerted": False})
+        self.assertEqual(payload["kr_mock"]["consecutive_failures"], 3)
+        self.assertTrue(payload["kr_mock"]["alerted"])
 
-    def test_restart_path_delegates_only_to_supervisor_start_once(self):
-        with self._patch_state_path(), \
-             patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 333}), \
-             patch.object(watchdog.worker_supervisor, "start", return_value=(0, {"started": True})) as start, \
-             patch.object(watchdog.WATCHDOG_LOG, "warning"), \
-             patch.object(watchdog.WATCHDOG_LOG, "info"), \
-             patch.object(watchdog.WATCHDOG_LOG, "debug"), \
-             patch.object(watchdog.WATCHDOG_LOG, "error"):
-            watchdog.check_and_restart("us_mock", "US")
+    def test_unallowlisted_target_is_rejected_before_status_or_start(self):
+        with patch.object(watchdog.worker_supervisor, "status") as status, \
+             patch.object(watchdog.worker_supervisor, "start") as start:
+            watchdog.check_and_restart("kr_real", "KR")
 
-        start.assert_called_once_with("us_mock", "US")
-
-    def test_running_status_blocks_a_second_watchdog_start(self):
-        with self._patch_state_path(), \
-             patch.object(watchdog.worker_supervisor, "status", side_effect=[
-                 {"running": False, "pid": 333},
-                 {"running": True, "pid": 333},
-             ]) as status, \
-             patch.object(watchdog.worker_supervisor, "start", return_value=(0, {"started": True})) as start, \
-             patch.object(watchdog.WATCHDOG_LOG, "warning"), \
-             patch.object(watchdog.WATCHDOG_LOG, "info"), \
-             patch.object(watchdog.WATCHDOG_LOG, "debug"), \
-             patch.object(watchdog.WATCHDOG_LOG, "error"):
-            watchdog.check_and_restart("kr_mock", "KR")
-            watchdog.check_and_restart("kr_mock", "KR")
-
-        self.assertEqual(status.call_count, 2)
-        start.assert_called_once_with("kr_mock", "KR")
-
-    def test_lock_conflict_is_distinguished_and_not_counted_as_crash(self):
-        with self._patch_state_path(), \
-             patch.object(watchdog.worker_supervisor, "status", return_value={"running": False}), \
-             patch.object(
-                 watchdog.worker_supervisor,
-                 "start",
-                 return_value=(3, {"started": False, "failureClass": "lock-conflict"}),
-             ), \
-             patch.object(watchdog.WATCHDOG_LOG, "warning") as warning, \
-             patch.object(watchdog.WATCHDOG_LOG, "error"):
-            watchdog.check_and_restart("kr_mock", "KR")
-
-        payload = json.loads(self.state_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["kr_mock"]["consecutive_failures"], 0)
-        self.assertGreaterEqual(warning.call_count, 1)
-        self.assertIn("existing worker", warning.call_args.args[0])
+        status.assert_not_called()
+        start.assert_not_called()
 
 
 if __name__ == "__main__":
