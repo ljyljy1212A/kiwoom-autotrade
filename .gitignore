@@ -34,3 +34,10 @@ src/*.diff
 *.lnk
 pytest_round*.txt
 .pytest-tmp/
+
+# Recurring untracked diagnostic files (Round 1269)
+tools/*_diag_r*.py
+tools/*_PYTHON*.txt
+*_PRE_FIX_BACKUP_*.xml
+tools/_r*_committed_blob.py
+wd_test2.py
