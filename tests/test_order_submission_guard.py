@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -89,8 +91,8 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, 1)
 
-    async def test_rest_fixed_port_collision_enters_account_degraded_state(self):
-        account_id = "fixed-port-state-account"
+    async def test_us_mock_rest_fixed_port_collision_enters_account_degraded_state(self):
+        account_id = "us_mock"
         client = KiwoomClient("key", "secret", account_id, market="US", exchange="ND", mode="mock")
         client._headers = AsyncMock(return_value={})
         http_client = AsyncMock()
@@ -102,16 +104,44 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
                 raise httpx.ConnectError("fixed-port collision") from collision
 
         http_client.post.side_effect = fail_with_collision
-        try:
-            with patch.object(client_module.httpx, "AsyncClient", return_value=http_client):
-                with self.assertRaises(RetryableError):
-                    await client._post_once("/api/us/quote", "usa10001", {})
-            state = get_fixed_port_degraded_state(account_id)
-            self.assertIsNotNone(state)
-            self.assertEqual(state.operation, "rest")
-        finally:
-            clear_fixed_port_degraded_state(account_id)
-            await client._http_gate.close()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                with patch("src.core.broker_http.DATA_DIR", Path(temp_dir)):
+                    with patch.object(client_module.httpx, "AsyncClient", return_value=http_client):
+                        with self.assertRaises(RetryableError):
+                            await client._post_once("/api/us/quote", "usa10001", {})
+                    state = get_fixed_port_degraded_state(account_id)
+                    self.assertIsNotNone(state)
+                    self.assertEqual(state.operation, "rest")
+                    self.assertTrue((Path(temp_dir) / f"fixed_port_degraded_{account_id}.json").exists())
+            finally:
+                clear_fixed_port_degraded_state(account_id)
+                await client._http_gate.close()
+
+    async def test_kr_mock_rest_fixed_port_collision_keeps_pre_degraded_fallback(self):
+        account_id = "kr_mock"
+        client = KiwoomClient("key", "secret", account_id, market="KR", exchange="KRX", mode="mock")
+        client._headers = AsyncMock(return_value={})
+        http_client = AsyncMock()
+
+        async def fail_with_collision(*_args, **_kwargs):
+            try:
+                raise FixedPortCollisionError(OSError(98, "address already in use"))
+            except FixedPortCollisionError as collision:
+                raise httpx.ConnectError("fixed-port collision") from collision
+
+        http_client.post.side_effect = fail_with_collision
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                with patch("src.core.broker_http.DATA_DIR", Path(temp_dir)):
+                    with patch.object(client_module.httpx, "AsyncClient", return_value=http_client):
+                        with self.assertRaises(RetryableError):
+                            await client._post_once("/api/dostk/quote", "ka10001", {})
+                    self.assertIsNone(get_fixed_port_degraded_state(account_id))
+                    self.assertFalse((Path(temp_dir) / f"fixed_port_degraded_{account_id}.json").exists())
+            finally:
+                clear_fixed_port_degraded_state(account_id)
+                await client._http_gate.close()
 
     async def test_exchange_cache_hit_does_not_lookup(self):
         self.us._post = AsyncMock(side_effect=AssertionError("cache hit must not call lookup"))

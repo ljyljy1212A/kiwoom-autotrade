@@ -224,7 +224,11 @@ class KiwoomClient:
                 with http_operation("rest"):
                     resp = await client.post(url, json=body, headers=headers, timeout=15)
             except httpx.RequestError as e:
-                if is_fixed_port_collision_error(e):
+                if (
+                    getattr(self, "market", None) == "US"
+                    and getattr(self, "mode", None) == "mock"
+                    and is_fixed_port_collision_error(e)
+                ):
                     enter_fixed_port_degraded_state(self.account_no, "rest")
                 raise RetryableError(f"{api_id} 네트워크 오류: {e}") from e
 
