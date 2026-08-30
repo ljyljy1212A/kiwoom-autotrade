@@ -1521,14 +1521,20 @@ class AccountEngine:
         self._balance_gate.pause_clear_event_id = event_id
         if reason == FIXED_PORT_DEGRADED_PAUSE_REASON:
             return
+        matched = False
         for engine in list(self._balance_gate.engines):
             if engine._pause_reason != reason:
                 continue
+            matched = True
             engine._trading_paused = False
             if reason in {"broker_quantity_unattributed", "tranche_rebuild_ambiguous"}:
                 engine._tranche_sell_paused = False
             engine._pause_reason = ""
-        self.ctx.logger.info(f"Applied operator clear for {reason}")
+            engine.ctx.logger.info(
+                f"Applied operator clear for {reason} on {engine.ctx.strategy.symbol}"
+            )
+        if not matched:
+            self.ctx.logger.warning(f"Operator clear for {reason} matched no engines")
 
     def _record_balance_rate_limit(self) -> None:
         """Apply one shared exponential cooldown to all tasks on this account."""

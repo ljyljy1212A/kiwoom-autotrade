@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.core.runtime_paths import DATA_DIR
+from src.core.runtime_paths import DATA_DIR, DIAGNOSTICS_DIR
+
+
+logger = logging.getLogger(__name__)
 
 
 def control_path(account_id: str, data_dir: Path | None = None) -> Path:
@@ -121,6 +125,15 @@ def write_pause_clear_event(
     temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     temp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
     temp.replace(path)
+    try:
+        history_path = DIAGNOSTICS_DIR / "pause_clear_history" / account_id / f"{event['event_id']}.json"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_path.write_text(json.dumps(event, ensure_ascii=False), encoding="utf-8")
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            f"Pause-clear history write failed for {account_id}, "
+            f"event {event.get('event_id', '<unknown>')}: {exc}"
+        )
     return event
 
 

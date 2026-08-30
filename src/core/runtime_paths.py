@@ -14,6 +14,7 @@ def _resolve_path(env_name: str, default: Path) -> Path:
 
 DATA_DIR = _resolve_path("KIWOOM_DATA_DIR", PROJECT_ROOT / "data")
 LOG_DIR = _resolve_path("KIWOOM_LOG_DIR", PROJECT_ROOT / "logs")
+DIAGNOSTICS_DIR = PROJECT_ROOT / "diagnostics"
 
 
 def default_backup_dir() -> Path:
