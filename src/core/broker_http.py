@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import struct
 import threading
@@ -10,6 +11,7 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import AsyncIterator
 
 import anyio
@@ -19,6 +21,8 @@ import httpx
 from httpcore._backends.anyio import AnyIOBackend, AnyIOStream
 from httpcore._backends.base import SOCKET_OPTION
 from httpcore._exceptions import ConnectError, ConnectTimeout, map_exceptions
+
+from src.core.runtime_paths import DATA_DIR
 
 
 _HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
@@ -217,6 +221,87 @@ def is_fixed_port_collision_error(exc: BaseException) -> bool:
     return False
 
 
+def _fixed_port_degraded_state_path(account_id: str) -> Path:
+    return DATA_DIR / f"fixed_port_degraded_{account_id}.json"
+
+
+def _fixed_port_degraded_payload(state: FixedPortDegradedState) -> dict:
+    return {
+        "account": state.account_id,
+        "entered_at": state.entered_at.isoformat(),
+        "last_collision_at": state.last_collision_at.isoformat(),
+        "operation": state.operation,
+        "next_recovery_probe_at": state.next_recovery_probe_at.isoformat(),
+        "entry_alert_fired": state.entry_alert_fired,
+        "last_ongoing_status_at": (
+            state.last_ongoing_status_at.isoformat() if state.last_ongoing_status_at else None
+        ),
+    }
+
+
+def _persist_fixed_port_degraded_state(state: FixedPortDegradedState) -> None:
+    path = _fixed_port_degraded_state_path(state.account_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{time.time_ns()}.tmp")
+    temporary.write_text(json.dumps(_fixed_port_degraded_payload(state), ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
+def delete_persisted_fixed_port_degraded_state(account_id: str) -> None:
+    _fixed_port_degraded_state_path(account_id).unlink(missing_ok=True)
+
+
+def _parse_fixed_port_degraded_timestamp(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def restore_fixed_port_degraded_state(
+    account_id: str,
+    *,
+    now: datetime | None = None,
+) -> FixedPortDegradedState | None:
+    path = _fixed_port_degraded_state_path(account_id)
+    if not path.exists():
+        return None
+    timestamp = now or datetime.now(timezone.utc)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("account") != account_id:
+            raise ValueError("account does not match persisted marker")
+        operation = payload.get("operation")
+        if not isinstance(operation, str) or not operation:
+            raise ValueError("operation is missing")
+        entry_alert_fired = payload.get("entry_alert_fired")
+        if not isinstance(entry_alert_fired, bool):
+            raise ValueError("entry_alert_fired must be boolean")
+        ongoing_raw = payload.get("last_ongoing_status_at")
+        state = FixedPortDegradedState(
+            account_id=account_id,
+            entered_at=_parse_fixed_port_degraded_timestamp(payload.get("entered_at")),
+            last_collision_at=_parse_fixed_port_degraded_timestamp(payload.get("last_collision_at")),
+            operation=operation,
+            next_recovery_probe_at=_parse_fixed_port_degraded_timestamp(payload.get("next_recovery_probe_at")),
+            entry_alert_fired=entry_alert_fired,
+            last_ongoing_status_at=(
+                _parse_fixed_port_degraded_timestamp(ongoing_raw) if ongoing_raw is not None else None
+            ),
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        state = FixedPortDegradedState(
+            account_id=account_id,
+            entered_at=timestamp,
+            last_collision_at=timestamp,
+            operation="persisted-marker-corrupt",
+            next_recovery_probe_at=timestamp,
+        )
+    with _FIXED_PORT_DEGRADED_STATES_LOCK:
+        _FIXED_PORT_DEGRADED_STATES[account_id] = state
+    return state
+
+
 def enter_fixed_port_degraded_state(
     account_id: str,
     operation: str,
@@ -237,6 +322,7 @@ def enter_fixed_port_degraded_state(
         else:
             state = replace(existing, last_collision_at=max(existing.last_collision_at, timestamp))
         _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        _persist_fixed_port_degraded_state(state)
         return state
 
 
@@ -252,6 +338,7 @@ def mark_fixed_port_entry_alert_fired(account_id: str) -> FixedPortDegradedState
             return existing
         state = replace(existing, entry_alert_fired=True)
         _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        _persist_fixed_port_degraded_state(state)
         return state
 
 
@@ -267,6 +354,7 @@ def record_fixed_port_ongoing_status(
             return None
         state = replace(existing, last_ongoing_status_at=timestamp)
         _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        _persist_fixed_port_degraded_state(state)
         return state
 
 
@@ -285,6 +373,7 @@ def record_fixed_port_recovery_probe_attempt(
             next_recovery_probe_at=timestamp + timedelta(seconds=_FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC),
         )
         _FIXED_PORT_DEGRADED_STATES[account_id] = state
+        _persist_fixed_port_degraded_state(state)
         return state
 
 

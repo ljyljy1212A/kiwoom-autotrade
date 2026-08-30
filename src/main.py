@@ -19,7 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.core.broker_http import _connect_with_reuseaddr
-from src.core.broker_http import get_fixed_port_degraded_state
+from src.core.broker_http import get_fixed_port_degraded_state, restore_fixed_port_degraded_state
 from src.core.process_lock import AccountOrderAuthority, ProcessLock
 from src.core.symbol_keys import canonical_symbol_key
 from src.core.runtime_paths import DATA_DIR, LOG_DIR, PROJECT_ROOT
@@ -206,6 +206,14 @@ async def _publish_worker_heartbeat(identity: WorkerIdentity, interval_sec: floa
         await asyncio.sleep(interval_sec)
         state = EngineState.DEGRADED_FIXED_PORT.value if get_fixed_port_degraded_state(identity.account_id) is not None else EngineState.RUNNING.value
         _write_worker_status(identity, state)
+
+
+def _startup_worker_status_state(account_id: str) -> str:
+    return (
+        EngineState.DEGRADED_FIXED_PORT.value
+        if restore_fixed_port_degraded_state(account_id) is not None
+        else EngineState.RUNNING.value
+    )
 
 
 async def _watch_for_supervisor_stop(identity: WorkerIdentity, interval_sec: float = 0.2) -> None:
@@ -592,7 +600,7 @@ async def main():
             pass
         except OSError as exc:
             raise RuntimeError(f"Worker launch refused: cannot clear stale stop request: {exc}") from exc
-        _write_worker_status(worker_identity, "RUNNING")
+        _write_worker_status(worker_identity, _startup_worker_status_state(worker_identity.account_id))
         worker_heartbeat = asyncio.create_task(
             _publish_worker_heartbeat(worker_identity), name=f"{worker_identity.account_id}-worker-heartbeat"
         )

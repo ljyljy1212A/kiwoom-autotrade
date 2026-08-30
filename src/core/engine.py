@@ -34,6 +34,7 @@ from src.core.control_state import (
 )
 from src.core.broker_http import (
     clear_fixed_port_degraded_state,
+    delete_persisted_fixed_port_degraded_state,
     get_fixed_port_degraded_state,
     mark_fixed_port_entry_alert_fired,
     record_fixed_port_ongoing_status,
@@ -210,6 +211,7 @@ class DispatchClearanceService:
                         self.account_id, "recovered", state.operation, state.entered_at,
                         updated_by="engine", data_dir=engine.data_dir, symbol=symbol,
                     )
+                delete_persisted_fixed_port_degraded_state(self.account_id)
                 clear_fixed_port_degraded_state(self.account_id)
             return
         self._cleared_symbols = self._cleared_symbols - {normalized}
