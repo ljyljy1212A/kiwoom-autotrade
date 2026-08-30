@@ -19,15 +19,18 @@ def _init_console_once() -> None:
     if _INITIALIZED:
         return
     _logger.remove()
-    _logger.add(
-        sys.stderr,
-        level="INFO",
-        colorize=True,
-        format=(
-            "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | "
-            "<cyan>{extra[account]}</cyan> | {extra[worker_identity]} | {extra[symbol]} | {message}"
-        ),
-    )
+    try:
+        _logger.add(
+            sys.stderr,
+            level="INFO",
+            colorize=True,
+            format=(
+                "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | "
+                "<cyan>{extra[account]}</cyan> | {extra[worker_identity]} | {extra[symbol]} | {message}"
+            ),
+        )
+    except (TypeError, ValueError, OSError):
+        pass
     _INITIALIZED = True
 
 
