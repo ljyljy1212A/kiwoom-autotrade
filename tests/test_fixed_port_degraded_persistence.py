@@ -64,7 +64,7 @@ def test_clearance_success_deletes_persisted_marker(tmp_path):
     assert not _marker_path(tmp_path, "us_mock").exists()
 
 
-def test_telegram_pause_clear_keeps_persisted_marker(tmp_path):
+def test_normal_pause_clear_handler_does_not_bypass_fixed_port_clearance(tmp_path):
     broker_http.enter_fixed_port_degraded_state("us_mock", "rest")
     write_pause_clear_event(
         "us_mock", FIXED_PORT_DEGRADED_PAUSE_REASON, data_dir=tmp_path,
@@ -78,7 +78,7 @@ def test_telegram_pause_clear_keeps_persisted_marker(tmp_path):
 
     engine._apply_reconciliation_clear_event()
 
-    assert broker_http.get_fixed_port_degraded_state("us_mock") is None
+    assert broker_http.get_fixed_port_degraded_state("us_mock") is not None
     assert _marker_path(tmp_path, "us_mock").exists()
 
 

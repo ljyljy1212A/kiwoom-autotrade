@@ -180,6 +180,18 @@ class ReconciliationClearanceResult:
     failures: tuple[ReconciliationClearanceFailure, ...]
 
 
+@dataclass(frozen=True)
+class AccountClearanceFailure:
+    symbol: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class AccountClearanceResult:
+    cleared: bool
+    failures: tuple[AccountClearanceFailure, ...] = ()
+
+
 class DispatchClearanceService:
     """Serialize mock fixed-port recovery checks for one account."""
 
@@ -215,6 +227,47 @@ class DispatchClearanceService:
                 clear_fixed_port_degraded_state(self.account_id)
             return
         self._cleared_symbols = self._cleared_symbols - {normalized}
+
+    async def clear_current_active_profile(self, engines) -> AccountClearanceResult:
+        """Freshly clear every current active symbol before recovering this account."""
+        async with self._lock:
+            if get_fixed_port_degraded_state(self.account_id) is None:
+                return AccountClearanceResult(True)
+            active_symbols = tuple(sorted(symbol.upper() for symbol in self._active_symbols))
+            engines_by_symbol = {
+                engine.ctx.strategy.symbol.upper(): engine
+                for engine in engines
+                if engine.ctx.account_id == self.account_id
+            }
+            failures: list[AccountClearanceFailure] = []
+            if not active_symbols:
+                failures.append(AccountClearanceFailure("", "no active symbols in current profile"))
+            for symbol in active_symbols:
+                engine = engines_by_symbol.get(symbol)
+                if engine is None:
+                    failures.append(AccountClearanceFailure(symbol, "no live engine for active symbol"))
+                    continue
+                try:
+                    snapshot = await engine._build_reconciliation_clearance_snapshot(
+                        symbol, max_balance_age_sec=1.0,
+                    )
+                    result = evaluate_reconciliation_clearance(snapshot)
+                except Exception as exc:
+                    failures.append(AccountClearanceFailure(symbol, f"clearance snapshot failed: {exc}"))
+                    continue
+                failures.extend(AccountClearanceFailure(symbol, failure.detail) for failure in result.failures)
+            if failures:
+                return AccountClearanceResult(False, tuple(failures))
+            state = get_fixed_port_degraded_state(self.account_id)
+            if state is not None:
+                representative = engines_by_symbol[active_symbols[0]]
+                write_fixed_port_degraded_event(
+                    self.account_id, "recovered", state.operation, state.entered_at,
+                    updated_by="telegram", data_dir=representative.data_dir, symbol=active_symbols[0],
+                )
+                delete_persisted_fixed_port_degraded_state(self.account_id)
+                clear_fixed_port_degraded_state(self.account_id)
+            return AccountClearanceResult(True)
 
     async def check(self, engine: "AccountEngine", symbol: str) -> None:
         if get_fixed_port_degraded_state(self.account_id) is None:
@@ -822,6 +875,7 @@ class AccountEngine:
         self._refresh_runtime_control()
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
             self._refresh_dashboard_controls()
+        await self._apply_fixed_port_pause_clear_event()
         state = get_fixed_port_degraded_state(self.ctx.account_id)
         if state is not None:
             now = datetime.now(timezone.utc)
@@ -1423,7 +1477,7 @@ class AccountEngine:
         if gate.reconciliation_mode == "manual":
             gate.reconciliation_failure_count = 0
 
-    def _apply_reconciliation_clear_event(self) -> None:
+    def _pause_clear_event(self) -> tuple[str, str]:
         state = read_control_state(self.ctx.account_id, getattr(self, "data_dir", DATA_DIR)) or {}
         event = state.get("pause_clear_event")
         if not isinstance(event, dict):
@@ -1432,18 +1486,41 @@ class AccountEngine:
                 event = {**legacy_event, "reason": "broker_reconciliation_unavailable"}
         event_id = event.get("event_id") if isinstance(event, dict) else ""
         reason = str(event.get("reason", "")) if isinstance(event, dict) else ""
+        return event_id, reason
+
+    async def _apply_fixed_port_pause_clear_event(self) -> None:
+        event_id, reason = self._pause_clear_event()
+        if reason != FIXED_PORT_DEGRADED_PAUSE_REASON or not event_id:
+            return
+        if event_id == self._balance_gate.pause_clear_event_id:
+            return
+        self._balance_gate.pause_clear_event_id = event_id
+        service = self._balance_gate.dispatch_clearance_service
+        if service is None:
+            result = AccountClearanceResult(
+                False, (AccountClearanceFailure("", "reconciliation clearance service is unavailable"),),
+            )
+        else:
+            result = await service.clear_current_active_profile(self._balance_gate.engines)
+        if result.cleared:
+            message = f"Fixed-port recovery clearance succeeded for {self.ctx.account_id}."
+            self.ctx.logger.info(message)
+            await self.telegram.safe_send(message, event=f"fixed-port-recovered account={self.ctx.account_id}")
+            return
+        details = "; ".join(
+            f"{failure.symbol or self.ctx.account_id}: {failure.detail}" for failure in result.failures
+        )
+        message = f"Fixed-port recovery clear refused for {self.ctx.account_id}: {details}"
+        self.ctx.logger.error(message)
+        await self.telegram.safe_send(message, event=f"fixed-port-clear-refused account={self.ctx.account_id}")
+
+    def _apply_reconciliation_clear_event(self) -> None:
+        event_id, reason = self._pause_clear_event()
         if not event_id or not reason or event_id == self._balance_gate.pause_clear_event_id:
             return
         self._balance_gate.pause_clear_event_id = event_id
         if reason == FIXED_PORT_DEGRADED_PAUSE_REASON:
-            fixed_port_state = get_fixed_port_degraded_state(self.ctx.account_id)
-            if fixed_port_state is not None:
-                write_fixed_port_degraded_event(
-                    self.ctx.account_id, "operator_resolved", fixed_port_state.operation,
-                    fixed_port_state.entered_at, updated_by="telegram",
-                    data_dir=getattr(self, "data_dir", DATA_DIR), symbol=self.ctx.strategy.symbol,
-                )
-                clear_fixed_port_degraded_state(self.ctx.account_id)
+            return
         for engine in list(self._balance_gate.engines):
             if engine._pause_reason != reason:
                 continue
