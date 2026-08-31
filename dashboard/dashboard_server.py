@@ -469,50 +469,6 @@ class Handler(BaseHTTPRequestHandler):
                         "auto_remove_closed_positions": remove_closed,
                     }, ensure_ascii=False), encoding="utf-8"
                 )
-                # Every symbol owns a separate control file. This lets one
-                # market worker run BIVI, BQ, and other enabled symbols at
-                # the same time without replacing a global active symbol.
-                for profile in profiles:
-                    config = profile.get("config") if isinstance(profile, dict) else None
-                    if not isinstance(config, dict) or not config.get("symbol"):
-                        continue
-                    symbol = str(config["symbol"]).upper()
-                    enabled = profile.get("enabled", True) is not False
-                    symbol_control = {
-                        "symbol": symbol,
-                        "auto_buy": enabled and bool((config.get("auto_buy") or {}).get("enabled")),
-                        "auto_sell": enabled and bool((config.get("auto_sell") or {}).get("enabled")),
-                        "config": config,
-                    }
-                    (ROOT / "data" / f"dashboard_control_{account}_{symbol}.json").write_text(
-                        json.dumps(symbol_control, ensure_ascii=False), encoding="utf-8"
-                    )
-                # Saving a profile is itself an explicit activation action. This
-                # removes the former requirement to click the list row before
-                # Auto Buy/Sell could reach the running engine.
-                active = next((p for p in profiles if str(p.get("id", "")) == selected_id), None)
-                config = active.get("config") if isinstance(active, dict) else None
-                if isinstance(config, dict) and config.get("symbol"):
-                    control = {
-                        "symbol": str(config["symbol"]).upper(),
-                        "auto_buy": bool(config.get("auto_buy", {}).get("enabled", False)),
-                        "auto_sell": bool(config.get("auto_sell", {}).get("enabled", False)),
-                        "config": config,
-                    }
-                    (ROOT / "data" / f"dashboard_control_{account}.json").write_text(
-                        json.dumps(control, ensure_ascii=False), encoding="utf-8"
-                    )
-                    (ROOT / "data" / f"dashboard_control_{account}_{control['symbol']}.json").write_text(
-                        json.dumps(control, ensure_ascii=False), encoding="utf-8"
-                    )
-                else:
-                    # A manual profile deletion must also revoke the prior
-                    # runtime selection; otherwise the engine sees a stale
-                    # symbol and emits an avoidable allow-list warning.
-                    (ROOT / "data" / f"dashboard_control_{account}.json").write_text(
-                        json.dumps({"symbol": "", "auto_buy": False, "auto_sell": False}),
-                        encoding="utf-8",
-                    )
                 self._json({"profiles": profiles, "auto_remove_closed_positions": remove_closed})
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid settings payload"}, 400)

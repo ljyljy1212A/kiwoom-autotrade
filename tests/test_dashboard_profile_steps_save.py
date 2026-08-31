@@ -69,6 +69,39 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         self.assertFalse(profile["config"]["auto_buy"]["enabled"])
         self.assertFalse(profile["config"]["auto_sell"]["enabled"])
 
+    def test_settings_post_does_not_touch_control_files(self):
+        saved_profile = _profile(
+            enabled=False,
+            buy_steps=[{"step": 2, "drop_pct": -1, "amount": 100}],
+        )
+        payload = {"profiles": [saved_profile], "auto_remove_closed_positions": False}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            responses = self._post_settings(root, payload)
+
+            settings = json.loads((data / "dashboard_settings_us_mock.json").read_text(encoding="utf-8"))
+            self.assertEqual(settings, {"profiles": [saved_profile], "auto_remove_closed_positions": False})
+            self.assertFalse((data / "dashboard_control_us_mock.json").exists())
+            self.assertFalse((data / "dashboard_control_us_mock_SOXL.json").exists())
+            self.assertEqual(responses, [({"profiles": [saved_profile], "auto_remove_closed_positions": False}, 200)])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            global_path = data / "dashboard_control_us_mock.json"
+            symbol_path = data / "dashboard_control_us_mock_SOXL.json"
+            seed_global = b'{"seed":"global"}\n'
+            seed_symbol = b'{"seed":"symbol"}\n'
+            global_path.write_bytes(seed_global)
+            symbol_path.write_bytes(seed_symbol)
+
+            self._post_settings(root, payload)
+
+            self.assertEqual(global_path.read_bytes(), seed_global)
+            self.assertEqual(symbol_path.read_bytes(), seed_symbol)
+
     def test_enabled_profile_step_save_is_rejected_without_writing_settings(self):
         existing_profile = _profile(enabled=True, buy_steps=[])
         changed_profile = _profile(
