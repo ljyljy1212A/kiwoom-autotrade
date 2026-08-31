@@ -334,7 +334,7 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
         ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
             "src.core.broker_http.time.sleep"
-        ), patch("src.core.broker_http.time.monotonic", side_effect=[0.0, 2.5]):
+        ), patch("src.core.broker_http.time.monotonic", side_effect=[0.0, 8.0]):
             with self.assertRaises(FixedPortCollisionError) as raised:
                 _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
 
@@ -354,7 +354,7 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
 
         self.assertIs(raised.exception, failure)
 
-    def test_retries_address_in_use_connect_and_recovers(self):
+    def test_retries_address_in_use_connect_with_quarantine_and_jitter(self):
         from unittest.mock import Mock, call, patch
 
         busy_one = OSError(10048, "address already in use")
@@ -369,17 +369,44 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
         ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
             "src.core.broker_http.time.sleep"
-        ) as sleep:
+        ) as sleep, patch("src.core.broker_http.random.uniform", return_value=0.0):
             result = _connect_with_reuseaddr(
                 "127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], logger
             )
 
         self.assertIs(result, fake_socket)
         self.assertEqual(fake_socket.connect.call_count, 3)
-        sleep.assert_has_calls([call(0.05), call(0.1)])
+        sleep.assert_has_calls([call(0.2), call(0.05), call(0.1)])
+        self.assertTrue(
+            any("Fixed-port reconnect quarantine applied" in call.args[0] for call in logger.warning.call_args_list)
+        )
+        self.assertTrue(
+            any("delay_ms=200.0" in call.args[0] for call in logger.warning.call_args_list)
+        )
         self.assertTrue(
             any("Fixed-port HTTP connect recovered" in call.args[0] for call in logger.warning.call_args_list)
         )
+
+    def test_retries_continue_within_eight_second_budget(self):
+        from unittest.mock import Mock, patch
+
+        busy_one = OSError(10048, "address already in use")
+        busy_two = OSError(10048, "address already in use")
+        busy_one.winerror = busy_two.winerror = 10048
+        fake_socket = Mock()
+        fake_socket.connect.side_effect = [busy_one, busy_two, None]
+        with patch(
+            "src.core.broker_http.socket.getaddrinfo",
+            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
+        ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
+            "src.core.broker_http.time.sleep"
+        ), patch("src.core.broker_http.random.uniform", return_value=0.0), patch(
+            "src.core.broker_http.time.monotonic", side_effect=[0.0, 0.0, 0.0, 7.9]
+        ):
+            result = _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
+
+        self.assertIs(result, fake_socket)
+        self.assertEqual(fake_socket.connect.call_count, 3)
 
     def test_does_not_retry_non_address_in_use_connect_error(self):
         from unittest.mock import Mock, patch
@@ -392,13 +419,14 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
         ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
             "src.core.broker_http.time.sleep"
-        ) as sleep:
+        ) as sleep, patch("src.core.broker_http.random.uniform") as jitter:
             with self.assertRaises(OSError) as raised:
                 _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
 
         self.assertIs(raised.exception, failure)
         fake_socket.connect.assert_called_once_with(("127.0.0.1", 443))
         sleep.assert_not_called()
+        jitter.assert_not_called()
 
 
 class FixedPortDegradedStateTest(unittest.TestCase):

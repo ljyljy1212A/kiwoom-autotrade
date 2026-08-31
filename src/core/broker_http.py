@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import socket
 import struct
 import threading
@@ -27,10 +28,16 @@ from src.core.runtime_paths import DATA_DIR
 
 _HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
 _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
-_FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 2.5
+# Windows can retain a fixed source-port tuple briefly after a pooled connection
+# retires. Eight seconds covers the observed release tail without turning an
+# unavailable broker into an unbounded wait.
+_FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 8.0
 _FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC = 90.0
 _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
 _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
+_FIXED_PORT_CONNECT_RETRY_JITTER_MAX_SEC = 0.025
+_FIXED_PORT_RECONNECT_QUARANTINE_DELAY_SEC = 0.2
+_FIXED_PORT_RECONNECT_QUARANTINE_JITTER_MAX_SEC = 0.05
 
 
 class _CloseCompletionState:
@@ -409,6 +416,7 @@ def _connect_with_reuseaddr(
             retry_count = 0
             retry_started = None
             retry_delay = _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC
+            quarantine_applied = False
             while True:
                 try:
                     sock.connect(remote_address)
@@ -422,11 +430,35 @@ def _connect_with_reuseaddr(
                     if remaining <= 0:
                         raise FixedPortCollisionError(exc) from exc
                     retry_count += 1
-                    delay = min(retry_delay, remaining)
+                    if not quarantine_applied:
+                        quarantine_applied = True
+                        quarantine_jitter = random.uniform(
+                            0.0, _FIXED_PORT_RECONNECT_QUARANTINE_JITTER_MAX_SEC,
+                        )
+                        quarantine_delay = min(
+                            _FIXED_PORT_RECONNECT_QUARANTINE_DELAY_SEC + quarantine_jitter,
+                            remaining,
+                        )
+                        if logger is not None:
+                            logger.warning(
+                                "Fixed-port reconnect quarantine applied: "
+                                "trigger=address_in_use "
+                                f"delay_ms={quarantine_delay * 1000:.1f} "
+                                f"local={(bind_address, local_port)!r} "
+                                f"remote={remote_address!r}"
+                            )
+                        time.sleep(quarantine_delay)
+                        elapsed = time.monotonic() - retry_started
+                        remaining = _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC - elapsed
+                        if remaining <= 0:
+                            raise FixedPortCollisionError(exc) from exc
+                    jitter = random.uniform(0.0, _FIXED_PORT_CONNECT_RETRY_JITTER_MAX_SEC)
+                    delay = min(retry_delay + jitter, remaining)
                     if logger is not None:
                         logger.warning(
                             "Fixed-port HTTP connect retry: "
                             f"attempt={retry_count} delay_ms={delay * 1000:.1f} "
+                            f"jitter_ms={jitter * 1000:.1f} "
                             f"local={(bind_address, local_port)!r} "
                             f"remote={remote_address!r} winerror=10048"
                         )
