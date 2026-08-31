@@ -58,6 +58,17 @@ class ProcessLockTests(unittest.TestCase):
                         proc.wait(timeout=10)
 
 
+class ProcessLockMutexNameTests(unittest.TestCase):
+    def test_mutex_name_is_global_account_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            account = f"mutex_name_test_{uuid.uuid4().hex}"
+            self.assertEqual(
+                ProcessLock(account, base_dir).mutex_name,
+                f"Global\\KiwoomAutotradeWorker_{account}",
+            )
+
+
 @unittest.skipUnless(os.name == "nt", "Windows named mutex semantics are verified on Windows")
 class WindowsProcessLockTests(unittest.TestCase):
     def test_second_process_cannot_acquire_real_named_mutex(self):
