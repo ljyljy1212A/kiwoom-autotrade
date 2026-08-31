@@ -27,7 +27,7 @@ from src.utils.logger import get_logger
 ROOT = Path(__file__).resolve().parents[1]
 _GRACEFUL_STOP_TIMEOUT_SEC = 10.0
 _FORCE_STOP_TIMEOUT_SEC = 5.0
-_STARTUP_ACK_TIMEOUT_SEC = 10.0
+_STARTUP_ACK_TIMEOUT_SEC = 30.0
 
 
 def _worker_lock(account: str) -> ProcessLock:
