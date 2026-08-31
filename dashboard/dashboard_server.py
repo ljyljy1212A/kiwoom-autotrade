@@ -440,6 +440,19 @@ class Handler(BaseHTTPRequestHandler):
                     existing = json.loads(settings_path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     existing = {}
+                existing_profiles = {
+                    str(profile.get("id", "")): profile
+                    for profile in existing.get("profiles", [])
+                    if isinstance(profile, dict)
+                }
+                incoming_profiles = {
+                    str(profile.get("id", "")): profile
+                    for profile in profiles
+                }
+                for profile_id, existing_profile in existing_profiles.items():
+                    if (existing_profile.get("enabled", True) is not False
+                            and incoming_profiles.get(profile_id) != existing_profile):
+                        raise ValueError("Enabled profiles cannot be changed through /api/settings")
                 remove_closed = payload.get(
                     "auto_remove_closed_positions",
                     existing.get("auto_remove_closed_positions", True),
