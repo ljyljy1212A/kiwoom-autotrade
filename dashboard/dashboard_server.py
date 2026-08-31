@@ -317,6 +317,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/accounts":
             self._json({"accounts": _account_catalog(), "defaultAccounts": _default_accounts()})
             return
+        if path == "/api/health":
+            self._json({"service": "dashboard", "status": "ok"})
+            return
         if path == "/api/status":
             workers = _worker_statuses()
             # workers[].state may be RUNNING or DEGRADED_FIXED_PORT; workers[].running remains liveness.

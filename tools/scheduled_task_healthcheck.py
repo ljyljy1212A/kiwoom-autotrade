@@ -17,6 +17,9 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -47,6 +50,12 @@ class TaskSpec:
     target_path: Path
 
 
+@dataclass(frozen=True)
+class DashboardSpec:
+    url: str
+    timeout_seconds: float
+
+
 def _powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -75,13 +84,19 @@ def _run_powershell(command: str) -> tuple[str | None, str | None]:
     return result.stdout.strip(), None
 
 
-def _load_tasks(config_path: Path) -> list[TaskSpec]:
+def _load_config(config_path: Path) -> tuple[list[TaskSpec], DashboardSpec | None]:
     payload = json.loads(config_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError("healthcheck config must be a JSON list")
+    if isinstance(payload, list):
+        raw_tasks, raw_dashboard = payload, None
+    elif isinstance(payload, dict):
+        raw_tasks, raw_dashboard = payload.get("tasks"), payload.get("dashboard")
+    else:
+        raise ValueError("healthcheck config must be a JSON list or object")
+    if not isinstance(raw_tasks, list):
+        raise ValueError("healthcheck config tasks must be a JSON list")
 
     tasks: list[TaskSpec] = []
-    for item in payload:
+    for item in raw_tasks:
         if not isinstance(item, dict):
             raise ValueError("each healthcheck config entry must be an object")
 
@@ -112,7 +127,26 @@ def _load_tasks(config_path: Path) -> list[TaskSpec]:
             f"tasks; expected={dict(EXPECTED_TASK_NAMES)!r} "
             f"actual={dict(actual_names)!r}"
         )
-    return tasks
+
+    if raw_dashboard is None:
+        return tasks, None
+    if not isinstance(raw_dashboard, dict):
+        raise ValueError("dashboard healthcheck config must be an object")
+    url = raw_dashboard.get("url")
+    timeout_seconds = raw_dashboard.get("timeout_seconds")
+    if not isinstance(url, str) or not url:
+        raise ValueError("dashboard healthcheck config requires a non-empty url")
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool) or not 0 < timeout_seconds <= 10:
+        raise ValueError("dashboard healthcheck timeout_seconds must be greater than 0 and at most 10")
+    parsed = urlparse(url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port:
+        raise ValueError("dashboard healthcheck URL must be an http://127.0.0.1 loopback URL with a port")
+    return tasks, DashboardSpec(url=url, timeout_seconds=float(timeout_seconds))
+
+
+def _load_tasks(config_path: Path) -> list[TaskSpec]:
+    """Compatibility helper for callers that need only the existing task list."""
+    return _load_config(config_path)[0]
 
 
 def _last_task_result(task: TaskSpec) -> tuple[int | None, str | None]:
@@ -168,6 +202,30 @@ def _problems(task: TaskSpec) -> list[str]:
     return problems
 
 
+def _dashboard_problems(dashboard: DashboardSpec) -> list[str]:
+    try:
+        request = Request(dashboard.url, headers={"Accept": "application/json"})
+        with urlopen(request, timeout=dashboard.timeout_seconds) as response:
+            if response.status != 200:
+                return [f"HTTP status is {response.status}"]
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        return [f"HTTP status is {exc.code}"]
+    except (URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return [f"HTTP probe failed: {exc}"]
+    if payload != {"service": "dashboard", "status": "ok"}:
+        return [f"unexpected health payload: {payload!r}"]
+    return []
+
+
+def _emit_alert(message: str, logger, dry_run: bool) -> None:
+    logger.error(message)
+    if dry_run:
+        logger.error("[DRY-RUN] would alert: %s", message)
+    else:
+        _send_alert(message, logger)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
@@ -181,14 +239,10 @@ def main() -> int:
 
     logger = _logger(args.log_path)
     try:
-        tasks = _load_tasks(args.config)
+        tasks, dashboard = _load_config(args.config)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         message = f"Scheduled-task healthcheck configuration invalid: {exc}"
-        logger.error(message)
-        if args.dry_run:
-            logger.error("[DRY-RUN] would alert: %s", message)
-        else:
-            _send_alert(message, logger)
+        _emit_alert(message, logger, args.dry_run)
         return 1
 
     for task in tasks:
@@ -203,11 +257,17 @@ def main() -> int:
             f"Target: {task.target_path}\n"
             f"Problems:\n- " + "\n- ".join(problems)
         )
-        logger.error(message)
-        if args.dry_run:
-            logger.error("[DRY-RUN] would alert: %s", message)
-        else:
-            _send_alert(message, logger)
+        _emit_alert(message, logger, args.dry_run)
+
+    if dashboard is not None:
+        problems = _dashboard_problems(dashboard)
+        if problems:
+            message = (
+                "DASHBOARD HEALTHCHECK ALERT\n"
+                f"Target: {dashboard.url}\n"
+                "Problems:\n- " + "\n- ".join(problems)
+            )
+            _emit_alert(message, logger, args.dry_run)
 
     return 0
 

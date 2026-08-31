@@ -1,4 +1,5 @@
-[
+{
+  "tasks": [
   {
     "task_name": "Kiwoom Worker - KR Mock",
     "task_path": "\\",
@@ -39,4 +40,6 @@
     "task_path": "\\",
     "target_path": "C:\\auto\\작업7차\\kiwoom-autotrade\\tools\\backup_project_files.py"
   }
-]
+  ],
+  "dashboard": { "url": "http://127.0.0.1:8765/api/health", "timeout_seconds": 2 }
+}
