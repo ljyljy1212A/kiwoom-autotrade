@@ -44,3 +44,9 @@ wd_test2.py
 
 # Stale pytest tmp_path scratch output (Round 1271)
 pytest_tmp/
+/.pytest_tmp/
+/diagnostics/*.bak_round[0-9]*
+/diagnostics/pause_clear_history/
+/diagnostics/round[0-9]*_snapshot/
+/full_suite*_round[0-9]*.log
+/worker_killswitch_round[0-9]*.log
