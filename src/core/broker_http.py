@@ -29,9 +29,9 @@ from src.core.runtime_paths import DATA_DIR
 _HTTP_OPERATION_CONTEXT: ContextVar[str] = ContextVar("http_operation", default="unknown")
 _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
 # Windows can retain a fixed source-port tuple briefly after a pooled connection
-# retires. Eight seconds covers the observed release tail without turning an
+# retires. Nine seconds covers the observed release tail without turning an
 # unavailable broker into an unbounded wait.
-_FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 8.0
+_FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 9.0
 _FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC = 90.0
 _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
 _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
@@ -200,6 +200,48 @@ class FixedPortCollisionError(OSError):
     def __init__(self, original: OSError):
         super().__init__(*original.args)
         self.original = original
+
+
+class _FixedPortConnectDiagnostics:
+    _COUNTER_NAMES = (
+        "sequences",
+        "first_attempt_successes",
+        "retry_sequences",
+        "recovered_sequences",
+        "exhausted_sequences",
+        "non_collision_failures",
+        "retry_connect_calls",
+    )
+
+    def __init__(self, local_port: int):
+        self.local_port = local_port
+        self._lock = threading.Lock()
+        self._window_start = self._utc_hour_start()
+        self._counts = {name: 0 for name in self._COUNTER_NAMES}
+
+    @staticmethod
+    def _utc_hour_start() -> datetime:
+        now = datetime.now(timezone.utc)
+        return now.replace(minute=0, second=0, microsecond=0)
+
+    def _roll_window(self, logger) -> None:
+        current_start = self._utc_hour_start()
+        if current_start <= self._window_start:
+            return
+        if logger is not None:
+            values = " ".join(f"{name}={self._counts[name]}" for name in self._COUNTER_NAMES)
+            logger.info(
+                "Fixed-port HTTP connect summary: "
+                f"window_start={self._window_start.isoformat()} "
+                f"local_port={self.local_port} {values}"
+            )
+        self._window_start = current_start
+        self._counts = {name: 0 for name in self._COUNTER_NAMES}
+
+    def record(self, counter: str, logger) -> None:
+        with self._lock:
+            self._roll_window(logger)
+            self._counts[counter] += 1
 
 
 @dataclass(frozen=True)
@@ -397,7 +439,11 @@ def _connect_with_reuseaddr(
     timeout: float | None,
     socket_options: list[SOCKET_OPTION],
     logger=None,
+    diagnostics: _FixedPortConnectDiagnostics | None = None,
 ) -> socket.socket:
+    if diagnostics is not None:
+        diagnostics.record("sequences", logger)
+    sequence_had_retry = False
     last_error: OSError | None = None
     for family, socktype, proto, _, remote_address in socket.getaddrinfo(
         host, port, type=socket.SOCK_STREAM
@@ -425,11 +471,16 @@ def _connect_with_reuseaddr(
                         raise
                     if retry_started is None:
                         retry_started = time.monotonic()
+                        sequence_had_retry = True
+                        if diagnostics is not None:
+                            diagnostics.record("retry_sequences", logger)
                     elapsed = time.monotonic() - retry_started
                     remaining = _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC - elapsed
                     if remaining <= 0:
                         raise FixedPortCollisionError(exc) from exc
                     retry_count += 1
+                    if diagnostics is not None:
+                        diagnostics.record("retry_connect_calls", logger)
                     if not quarantine_applied:
                         quarantine_applied = True
                         quarantine_jitter = random.uniform(
@@ -474,6 +525,11 @@ def _connect_with_reuseaddr(
                     f"local={(bind_address, local_port)!r} "
                     f"remote={remote_address!r}"
                 )
+            if diagnostics is not None:
+                diagnostics.record(
+                    "recovered_sequences" if sequence_had_retry else "first_attempt_successes",
+                    logger,
+                )
             sock.setblocking(False)
             return sock
         except OSError as exc:
@@ -488,7 +544,14 @@ def _connect_with_reuseaddr(
             last_error = exc
             sock.close()
     if last_error is not None:
+        if diagnostics is not None:
+            diagnostics.record(
+                "exhausted_sequences" if isinstance(last_error, FixedPortCollisionError) else "non_collision_failures",
+                logger,
+            )
         raise last_error
+    if diagnostics is not None:
+        diagnostics.record("non_collision_failures", logger)
     raise OSError(f"Could not resolve {host}:{port}")
 
 
@@ -498,6 +561,7 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
         self.logger = logger
         self._close_state = _CloseCompletionState()
         self._connect_lock = asyncio.Lock()
+        self._connect_diagnostics = _FixedPortConnectDiagnostics(local_port)
 
     async def connect_tcp(
         self,
@@ -536,6 +600,7 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
                         timeout,
                         socket_options,
                         self.logger,
+                        self._connect_diagnostics,
                     )
                     try:
                         stream = await anyio.abc.SocketStream.from_socket(raw_socket)

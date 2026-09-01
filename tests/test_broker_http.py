@@ -334,7 +334,7 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))],
         ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
             "src.core.broker_http.time.sleep"
-        ), patch("src.core.broker_http.time.monotonic", side_effect=[0.0, 8.0]):
+        ), patch("src.core.broker_http.time.monotonic", side_effect=[0.0, 9.0]):
             with self.assertRaises(FixedPortCollisionError) as raised:
                 _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
 
@@ -387,7 +387,7 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
             any("Fixed-port HTTP connect recovered" in call.args[0] for call in logger.warning.call_args_list)
         )
 
-    def test_retries_continue_within_eight_second_budget(self):
+    def test_retries_continue_within_nine_second_budget(self):
         from unittest.mock import Mock, patch
 
         busy_one = OSError(10048, "address already in use")
@@ -401,7 +401,7 @@ class BrokerHTTPConnectRetryTest(unittest.TestCase):
         ), patch("src.core.broker_http.socket.socket", return_value=fake_socket), patch(
             "src.core.broker_http.time.sleep"
         ), patch("src.core.broker_http.random.uniform", return_value=0.0), patch(
-            "src.core.broker_http.time.monotonic", side_effect=[0.0, 0.0, 0.0, 7.9]
+            "src.core.broker_http.time.monotonic", side_effect=[0.0, 0.0, 0.0, 8.9]
         ):
             result = _connect_with_reuseaddr("127.0.0.1", 443, "0.0.0.0", 443, 1.0, [], None)
 
