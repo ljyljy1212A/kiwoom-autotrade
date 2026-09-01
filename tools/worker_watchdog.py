@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -166,6 +168,89 @@ def check_duplicate_live_process(
         "No process termination or restart was attempted.",
     )
     return True
+
+
+def _query_win32_processes() -> list[SimpleNamespace]:
+    """Return raw Win32_Process records needed by the worker provider."""
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        "Get-CimInstance Win32_Process | "
+        "Select-Object Name,ProcessId,ParentProcessId,CommandLine | "
+        "ConvertTo-Json -Compress"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Win32_Process query failed")
+    if not result.stdout.strip():
+        return []
+    payload = json.loads(result.stdout)
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        raise ValueError("Win32_Process query returned a non-list result")
+    return [SimpleNamespace(**item) for item in payload if isinstance(item, dict)]
+
+
+def enumerate_worker_processes(account: str, market: str) -> list[SimpleNamespace]:
+    """Enumerate matching mock-worker processes for the detector."""
+    expected_market = MONITORED_ACCOUNTS.get(account)
+    if expected_market != market:
+        return []
+    supervisor_signature = f"-m src.worker_supervisor start --account {account} --market {market}"
+    child_signature = f"-m src.main --market {market}"
+    records = _query_win32_processes()
+    worker_names = {"python.exe", "pythonw.exe"}
+    supervisor_pids = set()
+    for record in records:
+        name = getattr(record, "Name", None)
+        command_line = getattr(record, "CommandLine", None)
+        pid = getattr(record, "ProcessId", None)
+        if not isinstance(name, str) or name.lower() not in worker_names:
+            continue
+        if not isinstance(command_line, str) or supervisor_signature not in command_line:
+            continue
+        try:
+            supervisor_pid = int(pid)
+        except (TypeError, ValueError):
+            continue
+        if supervisor_pid > 0:
+            supervisor_pids.add(supervisor_pid)
+
+    result = []
+    for record in records:
+        command_line = getattr(record, "CommandLine", None)
+        name = getattr(record, "Name", None)
+        pid = getattr(record, "ProcessId", None)
+        parent_pid = getattr(record, "ParentProcessId", None)
+        if not isinstance(command_line, str) or not isinstance(name, str):
+            continue
+        if name.lower() not in worker_names or child_signature not in command_line:
+            continue
+        try:
+            normalized_pid = int(pid)
+            normalized_parent_pid = int(parent_pid)
+        except (TypeError, ValueError):
+            continue
+        if normalized_pid <= 0 or normalized_parent_pid not in supervisor_pids:
+            continue
+        result.append(
+            SimpleNamespace(
+                pid=normalized_pid,
+                account=account,
+                market=market,
+                live=True,
+                command_line=command_line,
+            )
+        )
+    return result
 
 
 def _classify(account: str, market: str, current: dict) -> tuple[str, str]:
