@@ -98,6 +98,76 @@ def _status_metadata(account: str) -> tuple[dict | None, str | None]:
     return payload, None
 
 
+def check_duplicate_live_process(
+    account: str,
+    recorded_pid: int,
+    process_query_fn,
+    *,
+    logger=WATCHDOG_LOG,
+    notification_fn=_send_notification,
+) -> bool:
+    """Alert when two complete, matching mock-worker processes are live.
+
+    ``process_query_fn`` is deliberately injected so this detector remains
+    isolated from the operating-system process table. It must return an
+    iterable of objects with ``pid``, ``account``, ``market``, ``live``, and
+    ``command_line`` attributes. An incomplete or inconsistent result is
+    indeterminate and produces no alert.
+    """
+    market = MONITORED_ACCOUNTS.get(account)
+    if market is None:
+        return False
+    try:
+        expected_pid = int(recorded_pid)
+    except (TypeError, ValueError):
+        return False
+    if expected_pid <= 0:
+        return False
+
+    try:
+        processes = process_query_fn(account, market)
+        if not isinstance(processes, (list, tuple)):
+            return False
+        matching = []
+        expected_signature = f"-m src.main --market {market}"
+        for process in processes:
+            pid = getattr(process, "pid", None)
+            process_account = getattr(process, "account", None)
+            process_market = getattr(process, "market", None)
+            live = getattr(process, "live", None)
+            command_line = getattr(process, "command_line", None)
+            if not isinstance(pid, int) or pid <= 0:
+                return False
+            if not isinstance(process_account, str) or not isinstance(process_market, str):
+                return False
+            if not isinstance(live, bool) or not isinstance(command_line, str):
+                return False
+            if (
+                live
+                and process_account == account
+                and process_market.upper() == market
+                and expected_signature in command_line
+            ):
+                matching.append(pid)
+    except Exception:  # noqa: BLE001 - an observation failure is indeterminate
+        return False
+
+    if matching.count(expected_pid) != 1 or len(set(matching)) < 2:
+        return False
+    duplicate_pids = sorted(set(matching))
+    detail = f"matching live PIDs={duplicate_pids}; recorded PID={expected_pid}"
+    logger.warning(f"[{account}] duplicate live worker detected: {detail}")
+    notification_fn(
+        account,
+        market,
+        "duplicate-live-process",
+        f"WORKER DUPLICATE PROCESS DETECTED\n"
+        f"Account: {account}\nMarket: {market}\nDetail: {detail}\n"
+        "No process termination or restart was attempted.",
+    )
+    return True
+
+
 def _classify(account: str, market: str, current: dict) -> tuple[str, str]:
     if not current.get("running"):
         return "dead", "account mutex is not alive"
