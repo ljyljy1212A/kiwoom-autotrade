@@ -376,6 +376,17 @@ def main() -> int:
         code, payload = stop(account)
     else:
         code, payload = kill(account)
+
+    if code in (3, 4):
+        result_logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+        result_payload = json.dumps(payload, ensure_ascii=False)
+        message = f"worker supervisor result: exit_code={code} payload={result_payload}"
+        if payload.get("reason") == "already-running":
+            result_logger.info(message)
+        else:
+            result_logger.warning(message)
+        result_logger.complete()
+
     print(json.dumps(payload, ensure_ascii=False))
     return code
 
