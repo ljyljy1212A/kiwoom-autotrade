@@ -1,3 +1,4 @@
+import os
 import socket
 import time
 import unittest
@@ -16,6 +17,7 @@ def _select_fixed_port():
     raise AssertionError("Could not reserve either fixed test port 443 or 18443")
 
 
+@unittest.skipUnless(os.name == "nt", "Windows-only fixed-port release-lag timing test")
 class FixedPortReleaseLagReproducerTest(unittest.TestCase):
     def test_rebind_after_close_records_release_lag(self):
         fixed_port = _select_fixed_port()
