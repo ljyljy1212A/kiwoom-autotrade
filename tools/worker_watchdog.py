@@ -254,6 +254,8 @@ def enumerate_worker_processes(account: str, market: str) -> list[SimpleNamespac
 
 
 def _classify(account: str, market: str, current: dict) -> tuple[str, str]:
+    if current.get("liveness") == "suspect":
+        return "suspect", f"mutex liveness is indeterminate (winerror={current.get('livenessError')})"
     if not current.get("running"):
         return "dead", "account mutex is not alive"
 

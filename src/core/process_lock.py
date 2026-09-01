@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,9 @@ from src.core.runtime_paths import DATA_DIR
 if os.name != "nt":
     import errno
     import fcntl
+
+
+LOCK_LOG = logging.getLogger(__name__)
 
 
 class ProcessLockError(RuntimeError):
@@ -72,11 +76,19 @@ class ProcessLock:
         self._owner_pid = None
 
     def is_alive(self) -> bool:
+        return bool(self.liveness_result()["running"])
+
+    def liveness_result(self) -> dict:
         if self._acquired and self._owner_pid == os.getpid():
-            return True
+            return {"running": True, "liveness": "confirmed", "livenessError": None}
         if os.name == "nt":
-            return self._is_alive_windows()
-        return self._is_alive_posix()
+            return self._liveness_windows()
+        running = self._is_alive_posix()
+        return {
+            "running": running,
+            "liveness": "confirmed" if running else "dead",
+            "livenessError": None,
+        }
 
     def owned_by_current_process(self) -> bool:
         """Return whether this lock handle is owned by this process."""
@@ -110,7 +122,7 @@ class ProcessLock:
             kernel32.CloseHandle(self._handle)
             self._handle = None
 
-    def _is_alive_windows(self) -> bool:
+    def _liveness_windows(self) -> dict:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.OpenMutexW.argtypes = (ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p)
         kernel32.OpenMutexW.restype = ctypes.c_void_p
@@ -122,18 +134,37 @@ class ProcessLock:
         kernel32.CloseHandle.restype = ctypes.c_bool
         handle = kernel32.OpenMutexW(0x00100000, False, self.mutex_name)
         if not handle:
-            return False
+            error = ctypes.get_last_error()
+            classification = "dead" if error == 2 else "suspect"
+            result = {
+                "running": classification == "suspect",
+                "liveness": classification,
+                "livenessError": error,
+            }
+            LOCK_LOG.warning(
+                "ProcessLock liveness account=%s mutex=%s operation=OpenMutexW "
+                "winerror=%s classification=%s",
+                self.account_id, self.mutex_name, error, classification,
+            )
+            return result
         try:
             state = kernel32.WaitForSingleObject(handle, 0)
             if state == 258:
-                return True
-            # WAIT_ABANDONED (0x80) means the prior owner exited without
-            # releasing the mutex; the current probe now owns that mutex.
+                return {"running": True, "liveness": "confirmed", "livenessError": None}
             if state in (0, 0x80):
                 kernel32.ReleaseMutex(handle)
-            return False
+            error = ctypes.get_last_error()
+            LOCK_LOG.warning(
+                "ProcessLock liveness account=%s mutex=%s operation=WaitForSingleObject "
+                "winerror=%s classification=suspect",
+                self.account_id, self.mutex_name, error,
+            )
+            return {"running": True, "liveness": "suspect", "livenessError": error}
         finally:
             kernel32.CloseHandle(handle)
+
+    def _is_alive_windows(self) -> bool:
+        return bool(self._liveness_windows()["running"])
 
     def _acquire_posix(self) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)

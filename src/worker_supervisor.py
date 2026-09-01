@@ -76,13 +76,56 @@ def _pid_alive(pid: int) -> bool:
         os.kill(pid, 0)
         return True
     except PermissionError:
-        # Different Windows elevation still means the process may own the
-        # account. Fail closed instead of treating it as stale.
         return True
     except OSError:
         return False
 
 
+def _process_creation_time(pid: int):
+    if os.name != "nt" or pid <= 0:
+        return None
+    class FILETIME(ctypes.Structure):
+        _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.GetProcessTimes.argtypes = (
+        ctypes.c_void_p, ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME),
+    )
+    kernel32.GetProcessTimes.restype = ctypes.c_bool
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.restype = ctypes.c_bool
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        created, exited, kernel_time, user_time = (FILETIME(), FILETIME(), FILETIME(), FILETIME())
+        if not kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                        ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            return None
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return datetime.fromtimestamp((ticks - 116444736000000000) / 10_000_000, timezone.utc)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _corroborate_suspect(account: str, metadata: dict) -> dict:
+    pid = int(metadata.get("pid", 0) or 0)
+    pid_alive = _pid_alive(pid)
+    creation_time = _process_creation_time(pid) if pid_alive else None
+    try:
+        started_at = datetime.fromisoformat(str(metadata.get("startedAt", "")).replace("Z", "+00:00"))
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        timestamp_match = creation_time is not None and abs((creation_time - started_at).total_seconds()) <= 5
+    except (TypeError, ValueError):
+        timestamp_match = False
+    return {
+        "suspectPidAlive": pid_alive,
+        "suspectIdentityMatch": metadata.get("account") == account and bool(metadata.get("instanceId")),
+        "suspectCreationTimeMatch": timestamp_match,
+    }
 def status(account: str) -> dict:
     metadata = {}
     try:
@@ -98,9 +141,12 @@ def status(account: str) -> dict:
     if not pid:
         pid = int(metadata.get("pid", 0) or 0)
     lock = _worker_lock(account)
+    liveness = lock.liveness_result()
+    if liveness["liveness"] == "suspect":
+        liveness.update(_corroborate_suspect(account, {**metadata, "pid": pid}))
     return {
         "account": account, "pid": pid,
-        "running": lock.is_alive(),
+        **liveness,
         "instanceId": metadata.get("instanceId"), "startedAt": metadata.get("startedAt"),
         "state": metadata.get("state"), "market": metadata.get("market"),
     }
@@ -164,6 +210,8 @@ def _record_stopped_status(account: str, pid: int) -> None:
 
 def start(account: str, market: str) -> tuple[int, dict]:
     current = status(account)
+    if current.get("liveness") == "suspect":
+        return 8, {**current, "started": False, "reason": "status-indeterminate"}
     if current["running"]:
         return 3, {**current, "started": False, "reason": "already-running"}
 
@@ -207,6 +255,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
     deadline = time.monotonic() + _STARTUP_ACK_TIMEOUT_SEC
     while time.monotonic() < deadline:
         current = status(account)
+        if current.get("liveness") == "suspect":
+            return 8, {**current, "started": False, "reason": "status-indeterminate"}
         if current["running"]:
             if current["pid"] == child.pid:
                 return 0, {**current, "started": True}
@@ -225,6 +275,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
             return 3, current
         time.sleep(0.05)
     final = status(account)
+    if final.get("liveness") == "suspect":
+        return 8, {**final, "started": False, "reason": "status-indeterminate"}
     if final["running"]:
         return 3, {**final, "started": False, "reason": "already-running"}
     return 4, {**final, "started": False, "reason": "startup-timeout"}
@@ -258,6 +310,8 @@ def stop(account, timeout: float | None = None):
     if guard is not None:
         return guard
     curr = status(account)
+    if curr.get("liveness") == "suspect":
+        return 8, {**curr, "mode": "unknown", "reason": "status-indeterminate"}
     if not curr.get("running"):
         return 0, {**curr, "mode": "already_stopped"}
 
@@ -322,6 +376,8 @@ def kill(account: str):
     if guard is not None:
         return guard
     curr = status(account)
+    if curr.get("liveness") == "suspect":
+        return 8, {**curr, "mode": "unknown", "reason": "status-indeterminate"}
     if not curr.get("running"):
         return 0, {**curr, "mode": "already_stopped"}
 

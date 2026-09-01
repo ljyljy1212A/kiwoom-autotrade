@@ -190,12 +190,14 @@ class WorkerWatchdogTests(unittest.TestCase):
              patch.object(watchdog.worker_supervisor, "status", return_value={"pid": 222, "running": True}), \
              patch.object(watchdog, "check_duplicate_live_process", side_effect=RuntimeError("query failed")), \
              patch.object(watchdog, "_classify", return_value=("suspect", "test")) as classify, \
+             patch.object(watchdog, "_send_notification") as notify, \
              patch.object(watchdog, "_save_state"), \
              patch.object(watchdog.WATCHDOG_LOG, "error") as error:
             watchdog.check_and_restart("kr_mock", "KR")
 
         classify.assert_called_once_with("kr_mock", "KR", {"pid": 222, "running": True})
-        error.assert_called_once()
+        notify.assert_called_once()
+        error.assert_called_once_with("[kr_mock] duplicate-process check failed: query failed")
 
 
 if __name__ == "__main__":
