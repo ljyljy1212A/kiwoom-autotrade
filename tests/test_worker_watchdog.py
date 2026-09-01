@@ -139,6 +139,64 @@ class WorkerWatchdogTests(unittest.TestCase):
         status.assert_not_called()
         start.assert_not_called()
 
+    def test_duplicate_process_short_circuits_before_classification(self):
+        account_state = {
+            "consecutive_failures": 0,
+            "alerted": False,
+            "suspect_alerted": False,
+            "last_attempt_at": "",
+            "cooldown_until": "",
+        }
+        with patch.object(watchdog, "_load_state", return_value={}), \
+             patch.object(watchdog, "_account_state", return_value=account_state), \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"pid": 222, "running": True}), \
+             patch.object(watchdog, "check_duplicate_live_process", return_value=True) as duplicate, \
+             patch.object(watchdog, "_classify") as classify, \
+             patch.object(watchdog, "_save_state") as save_state:
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        duplicate.assert_called_once_with("kr_mock", 222, watchdog.enumerate_worker_processes)
+        classify.assert_not_called()
+        save_state.assert_not_called()
+
+    def test_duplicate_process_false_preserves_classification_flow(self):
+        account_state = {
+            "consecutive_failures": 0,
+            "alerted": False,
+            "suspect_alerted": False,
+            "last_attempt_at": "",
+            "cooldown_until": "",
+        }
+        with patch.object(watchdog, "_load_state", return_value={}), \
+             patch.object(watchdog, "_account_state", return_value=account_state), \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"pid": 222, "running": True}), \
+             patch.object(watchdog, "check_duplicate_live_process", return_value=False), \
+             patch.object(watchdog, "_classify", return_value=("suspect", "test")) as classify, \
+             patch.object(watchdog, "_save_state"):
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        classify.assert_called_once_with("kr_mock", "KR", {"pid": 222, "running": True})
+
+    def test_duplicate_process_check_exception_is_logged_and_sweep_continues(self):
+        account_state = {
+            "consecutive_failures": 0,
+            "alerted": False,
+            "suspect_alerted": False,
+            "last_attempt_at": "",
+            "cooldown_until": "",
+        }
+        with patch.object(watchdog, "_load_state", return_value={}), \
+             patch.object(watchdog, "_account_state", return_value=account_state), \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"pid": 222, "running": True}), \
+             patch.object(watchdog, "check_duplicate_live_process", side_effect=RuntimeError("query failed")), \
+             patch.object(watchdog, "_classify", return_value=("suspect", "test")) as classify, \
+             patch.object(watchdog, "_save_state"), \
+             patch.object(watchdog.WATCHDOG_LOG, "error") as error:
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        classify.assert_called_once_with("kr_mock", "KR", {"pid": 222, "running": True})
+        error.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

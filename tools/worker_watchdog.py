@@ -323,6 +323,18 @@ def check_and_restart(account: str, market: str) -> None:
     except Exception as exc:  # noqa: BLE001 - a broken status read should not stop the sweep
         WATCHDOG_LOG.error(f"[{account}] supervisor status check failed: {exc}; treating as suspect")
         current = {"running": True, "pid": 0}
+    else:
+        try:
+            duplicate = check_duplicate_live_process(
+                account,
+                current.get("pid"),
+                enumerate_worker_processes,
+            )
+        except Exception as exc:  # noqa: BLE001 - detector failure must not stop the sweep
+            WATCHDOG_LOG.error(f"[{account}] duplicate-process check failed: {exc}")
+            duplicate = False
+        if duplicate:
+            return
 
     classification, detail = _classify(account, market, current)
     WATCHDOG_LOG.info(f"[{account}] classification={classification}: {detail}")
