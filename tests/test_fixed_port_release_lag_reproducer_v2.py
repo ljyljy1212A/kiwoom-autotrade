@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 import time
@@ -27,6 +28,10 @@ def _shutdown_and_close(sock):
     sock.close()
 
 
+@unittest.skipUnless(
+    os.name == "nt",
+    "Windows-only fixed-port release-lag teardown test",
+)
 class FixedPortReleaseLagReproducerV2Test(unittest.TestCase):
     def test_rebind_after_complete_teardown_records_release_lag(self):
         fixed_port = _select_fixed_port()
