@@ -53,3 +53,5 @@ pytest_tmp/
 /full_suite*_round[0-9]*.log
 /worker_killswitch_round[0-9]*.log
 /pytest_full_run_round[0-9]*.log
+/.pytest_tmp*/
+/.pytest-tmp*/
