@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -25,6 +26,7 @@ class FakeKernel32:
         self.CloseHandle = FakeFunction(lambda *_args: True)
 
 
+@unittest.skipUnless(os.name == "nt", "Windows named mutex liveness semantics are verified on Windows")
 class Round1577Tests(unittest.TestCase):
     def test_1_mutex_absent_error_2_is_dead(self):
         lock = ProcessLock("mock_a")
