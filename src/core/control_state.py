@@ -21,7 +21,7 @@ def control_path(account_id: str, data_dir: Path | None = None) -> Path:
 def read_control_state(account_id: str, data_dir: Path | None = None) -> dict | None:
     path = control_path(account_id, data_dir)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
