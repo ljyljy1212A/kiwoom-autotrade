@@ -34,6 +34,7 @@ src/*.diff
 *.lnk
 pytest_round*.txt
 .pytest-tmp/
+.pytest_cache/
 
 # Recurring untracked diagnostic files (Round 1269)
 tools/*_diag_r*.py
