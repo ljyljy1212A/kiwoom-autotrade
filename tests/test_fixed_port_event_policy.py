@@ -40,7 +40,7 @@ def test_fixed_port_event_writer_persists_each_supported_kind_atomically(tmp_pat
 
 def test_tick_writes_one_entry_event_before_the_ongoing_interval(tmp_path):
     engine = object.__new__(AccountEngine)
-    engine.ctx = SimpleNamespace(account_id="kr_mock", strategy=SimpleNamespace(symbol="005930"), logger=SimpleNamespace())
+    engine.ctx = SimpleNamespace(account_id="kr_mock", strategy=SimpleNamespace(symbol="005930"), logger=SimpleNamespace(warning=lambda *args, **kwargs: None))
     engine.data_dir = tmp_path
     engine._sync_lock = asyncio.Lock()
     engine._refresh_runtime_control = Mock()
@@ -61,7 +61,7 @@ def test_tick_writes_one_entry_event_before_the_ongoing_interval(tmp_path):
 
 def test_tick_writes_ongoing_event_only_after_fifteen_minutes(tmp_path):
     engine = object.__new__(AccountEngine)
-    engine.ctx = SimpleNamespace(account_id="kr_mock", strategy=SimpleNamespace(symbol="005930"), logger=SimpleNamespace())
+    engine.ctx = SimpleNamespace(account_id="kr_mock", strategy=SimpleNamespace(symbol="005930"), logger=SimpleNamespace(warning=lambda *args, **kwargs: None))
     engine.data_dir = tmp_path
     engine._sync_lock = asyncio.Lock()
     engine._refresh_runtime_control = Mock()
