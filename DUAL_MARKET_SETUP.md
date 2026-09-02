@@ -1,11 +1,16 @@
 # Korean + US paper trading
 
-The program can run both paper engines in one process:
+Run each paper worker as its own single-account process. The recommended
+supervisor-based launch is:
 
 ```powershell
-$env:ACCOUNT_FILTER = 'kr_mock,us_mock'
-python -m src.main
+python -m src.worker_supervisor start --account kr_mock --market KR
+python -m src.worker_supervisor start --account us_mock --market US
 ```
+
+Direct `src.main` invocation is an advanced manual path; it bypasses the
+supervisor's status precheck and intentional-stop-marker handling. Use
+`worker_supervisor` as the normal entry point.
 
 Each account remains isolated:
 

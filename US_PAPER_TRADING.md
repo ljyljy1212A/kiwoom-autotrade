@@ -26,8 +26,12 @@ execution-history fields with the mock account, explicitly enable it:
 
 ```powershell
 $env:US_PAPER_ORDER_SUBMISSION_ENABLED = 'true'
-python -m src.main
+python -m src.worker_supervisor start --account us_mock --market US
 ```
+
+Direct `src.main` invocation is an advanced manual path; it bypasses the
+supervisor's status precheck and intentional-stop-marker handling. Use
+`worker_supervisor` as the normal entry point.
 
 Regular US trading is 09:30-16:00 America/New_York.  NYSE holidays and early
 closes are handled by the installed market calendar.  Pre/post-market orders
