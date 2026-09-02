@@ -15,12 +15,15 @@ class LinuxStartupSmokeTests(unittest.TestCase):
         logger.info = MagicMock()
         logger.warning = MagicMock()
         client = SimpleNamespace(market="US", close=AsyncMock(return_value=None), token_mgr=None,
-                                  bind_order_authority=MagicMock())
+                                  bind_order_authority=MagicMock(),
+                                  set_exchange_alert_callback=MagicMock())
         ctx = SimpleNamespace(account_id="us_mock", client=client, logger=logger,
                               risk_manager=SimpleNamespace(logger=None))
         telegram = SimpleNamespace(
             start_polling=AsyncMock(return_value=None),
             stop=AsyncMock(return_value=None),
+            notify_error=AsyncMock(return_value=None),
+            notify_worker_started=AsyncMock(return_value=None),
         )
         worker_lock = MagicMock()
         worker_lock.acquire = MagicMock()
