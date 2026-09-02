@@ -10,6 +10,7 @@ from pathlib import Path
 from src.core.process_lock import ProcessLock
 
 
+@unittest.skipUnless(os.name == "nt", "Windows-only worker supervisor kill/stop semantics")
 class SupervisorKillTests(unittest.TestCase):
     def _assert_worker_command_stops_mock_lock_holder_and_releases_lock(self, action: str):
         with tempfile.TemporaryDirectory() as tmp:
