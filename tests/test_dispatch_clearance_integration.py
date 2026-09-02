@@ -16,7 +16,7 @@ from tests.support.telegram_double import make_telegram_double
 
 def _snapshot(*, clear):
     return ReconciliationClearanceSnapshot(
-        account_id="us_mock", symbol="SOXL", balance_api_id="ust21070",
+        account_id="us_mock", symbol="SOXL", market="US", balance_api_id="ust21070",
         balance_fetched_fresh=clear, balance_from_shared_cache=False,
         balance_recognized=True, holding=NormalizedBalanceHolding("SOXL", 0, 0),
         balance_received_at=time.monotonic(), max_balance_age_sec=1.0,
@@ -83,7 +83,7 @@ def test_a_prefixed_symbol_completes_active_clearance_cycle(tmp_path):
         service.observe_active_profile(("AAPL",), 0)
         engine = SimpleNamespace(_build_reconciliation_clearance_snapshot=AsyncMock(
             return_value=ReconciliationClearanceSnapshot(
-                account_id="us_mock", symbol="AAPL", balance_api_id="ust21070",
+                account_id="us_mock", symbol="AAPL", market="US", balance_api_id="ust21070",
                 balance_fetched_fresh=True, balance_from_shared_cache=False,
                 balance_recognized=True, holding=NormalizedBalanceHolding("AAPL", 0, 0),
                 balance_received_at=time.monotonic(), max_balance_age_sec=1.0,
@@ -96,6 +96,38 @@ def test_a_prefixed_symbol_completes_active_clearance_cycle(tmp_path):
             clear_fixed_port_degraded_state("us_mock")
 
     asyncio.run(check())
+
+
+def test_kr_recovery_probe_clears_when_due_and_fully_reconciled(tmp_path):
+    async def probe():
+        clear_fixed_port_degraded_state("kr_mock")
+        enter_fixed_port_degraded_state("kr_mock", "rest", now=_FixedDateTime.current)
+        service = DispatchClearanceService("kr_mock")
+        service.observe_active_profile(("005930",), 0)
+        engine = SimpleNamespace(
+            _build_reconciliation_clearance_snapshot=AsyncMock(
+                return_value=ReconciliationClearanceSnapshot(
+                    account_id="kr_mock",
+                    symbol="005930",
+                    market="KR",
+                    balance_api_id="kt00018",
+                    balance_fetched_fresh=True,
+                    balance_from_shared_cache=False,
+                    balance_recognized=True,
+                    holding=NormalizedBalanceHolding("005930", 0, 0),
+                    balance_received_at=time.monotonic(),
+                    max_balance_age_sec=1.0,
+                ),
+            ),
+            data_dir=tmp_path,
+        )
+        try:
+            await service.check(engine, "005930")
+            assert get_fixed_port_degraded_state("kr_mock") is None
+        finally:
+            clear_fixed_port_degraded_state("kr_mock")
+
+    asyncio.run(probe())
 
 
 class _FixedDateTime(datetime):

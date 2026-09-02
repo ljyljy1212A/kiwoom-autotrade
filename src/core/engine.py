@@ -143,6 +143,7 @@ def _manual_tranche_allocation(
 class ReconciliationClearanceSnapshot:
     account_id: str
     symbol: str
+    market: str
     balance_api_id: str
     balance_fetched_fresh: bool
     balance_from_shared_cache: bool
@@ -331,12 +332,14 @@ def _clearance_holding_failure(snapshot: ReconciliationClearanceSnapshot) -> str
 
 
 def _clearance_freshness_failure(snapshot: ReconciliationClearanceSnapshot) -> str | None:
+    expected_api_id = {"US": "ust21070", "KR": "kt00018"}.get(snapshot.market)
     if (
-        snapshot.balance_api_id != "ust21070"
+        expected_api_id is None
+        or snapshot.balance_api_id != expected_api_id
         or not snapshot.balance_fetched_fresh
         or snapshot.balance_from_shared_cache
     ):
-        return "condition 1: requires a fresh, non-cached ust21070 balance response"
+        return f"condition 1: requires a fresh, non-cached {expected_api_id or snapshot.market} balance response"
     if snapshot.balance_received_at is None or snapshot.max_balance_age_sec is None:
         return "condition 1: balance receive time and maximum age are required"
     try:
@@ -480,11 +483,24 @@ class AccountEngine:
         if dispatch_clearance_service is not None:
             self._balance_gate.dispatch_clearance_service = dispatch_clearance_service
         self._dispatch_clearance_enabled = (
-            ctx.client.market == "US" and ctx.client.mode == "mock" and ctx.account_id == "us_mock"
-            and os.environ.get("US_MOCK_RECONCILIATION_CLEARANCE_ENABLED", "false").lower() == "true"
+            ctx.client.mode == "mock"
+            and (
+                (
+                    ctx.client.market == "US"
+                    and ctx.account_id == "us_mock"
+                    and os.environ.get("US_MOCK_RECONCILIATION_CLEARANCE_ENABLED", "false").lower() == "true"
+                )
+                or (
+                    ctx.client.market == "KR"
+                    and ctx.account_id == "kr_mock"
+                    and os.environ.get("KR_MOCK_RECONCILIATION_CLEARANCE_ENABLED", "false").lower() == "true"
+                )
+            )
         )
         if self._dispatch_clearance_enabled:
-            self.ctx.logger.warning("US mock reconciliation dispatch clearance is enabled")
+            self.ctx.logger.warning(
+                f"{ctx.client.market} mock reconciliation dispatch clearance is enabled ({ctx.account_id})"
+            )
         self._balance_gate.configure_reconciliation(getattr(ctx, "reconciliation_fail_closed", None))
         initial_state = read_control_state(ctx.account_id, self.data_dir) or {}
         initial_event = initial_state.get("pause_clear_event")
@@ -744,6 +760,7 @@ class AccountEngine:
         )
         snapshot = ReconciliationClearanceSnapshot(
             account_id=self.ctx.account_id, symbol=symbol,
+            market=self.ctx.client.market,
             balance_api_id="ust21070" if self.ctx.client.market == "US" else "kt00018",
             balance_fetched_fresh=True, balance_from_shared_cache=False,
             balance_recognized=recognized, holding=holding,

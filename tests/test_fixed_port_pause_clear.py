@@ -19,6 +19,7 @@ def _snapshot(account_id, symbol, *, incomplete=False):
     return ReconciliationClearanceSnapshot(
         account_id=account_id,
         symbol=symbol,
+        market="US",
         balance_api_id="ust21070",
         balance_fetched_fresh=True,
         balance_from_shared_cache=False,

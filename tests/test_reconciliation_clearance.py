@@ -17,10 +17,16 @@ from src.data.order_attempts import OrderAttestationOutcome, OrderAttemptStore
 
 
 def _clear_snapshot(**changes):
+    market = changes.pop("market", "US")
+    balance_api_id = changes.pop(
+        "balance_api_id",
+        "ust21070" if market == "US" else "kt00018",
+    )
     snapshot = ReconciliationClearanceSnapshot(
         account_id="us_mock",
         symbol="SOXL",
-        balance_api_id="ust21070",
+        market=market,
+        balance_api_id=balance_api_id,
         balance_fetched_fresh=True,
         balance_from_shared_cache=False,
         balance_recognized=True,
@@ -36,6 +42,23 @@ def test_clearance_passes_for_fresh_recognized_authoritative_zero_holding():
 
     assert result.cleared is True
     assert result.failures == ()
+
+
+def test_clearance_passes_for_fresh_recognized_authoritative_zero_holding_kr():
+    result = evaluate_reconciliation_clearance(_clear_snapshot(market="KR"))
+
+    assert result.cleared is True
+    assert result.failures == ()
+
+
+def test_clearance_rejects_kr_snapshot_with_us_balance_api():
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(market="KR", balance_api_id="ust21070")
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [1]
+    assert result.failures[0].detail == "condition 1: requires a fresh, non-cached kt00018 balance response"
 
 
 def test_snapshot_wiring_has_no_unattributed_orders_when_store_is_empty(tmp_path):
@@ -192,6 +215,15 @@ def test_clearance_rejects_unresolved_pending_or_recovery_order():
     assert result.failures[0].detail == "condition 4: 2 pending/recovery order(s) unresolved: ORD-1, ORD-2"
 
 
+def test_kr_clearance_rejects_unresolved_pending_or_recovery_order():
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(market="KR", unresolved_order_ids=("KR-ORD-1",))
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [4]
+
+
 def test_clearance_rejects_unattributed_collision_order_marker():
     result = evaluate_reconciliation_clearance(
         _clear_snapshot(unattributed_collision_order_ids=("ATTEMPT-1",))
@@ -199,6 +231,15 @@ def test_clearance_rejects_unattributed_collision_order_marker():
 
     assert [failure.condition for failure in result.failures] == [5]
     assert result.failures[0].detail == "condition 5: unattributed collision-period order(s) unresolved: ATTEMPT-1"
+
+
+def test_kr_clearance_rejects_unattributed_collision_order_marker():
+    result = evaluate_reconciliation_clearance(
+        _clear_snapshot(market="KR", unattributed_collision_order_ids=("KR-ATTEMPT-1",))
+    )
+
+    assert result.cleared is False
+    assert [failure.condition for failure in result.failures] == [5]
 
 
 def test_clearance_names_all_simultaneous_failures():

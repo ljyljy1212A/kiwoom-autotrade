@@ -225,8 +225,15 @@ class KiwoomClient:
                     resp = await client.post(url, json=body, headers=headers, timeout=15)
             except httpx.RequestError as e:
                 if (
-                    getattr(self, "market", None) == "US"
-                    and getattr(self, "mode", None) == "mock"
+                    getattr(self, "mode", None) == "mock"
+                    and (
+                        getattr(self, "market", None) == "US"
+                        or (
+                            getattr(self, "market", None) == "KR"
+                            and self.account_no == "kr_mock"
+                            and os.environ.get("KR_MOCK_RECONCILIATION_CLEARANCE_ENABLED", "false").lower() == "true"
+                        )
+                    )
                     and is_fixed_port_collision_error(e)
                 ):
                     enter_fixed_port_degraded_state(self.account_no, "rest")
