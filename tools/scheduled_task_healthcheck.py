@@ -42,6 +42,14 @@ EXPECTED_TASK_NAMES = Counter(
     }
 )
 
+MOCK_ONLY_TASK_NAMES = frozenset(
+    {
+        "Kiwoom Worker Watchdog",
+        "Kiwoom Worker KR Mock",
+        "Kiwoom Worker US Mock",
+    }
+)
+
 
 @dataclass(frozen=True)
 class TaskSpec:
@@ -84,7 +92,7 @@ def _run_powershell(command: str) -> tuple[str | None, str | None]:
     return result.stdout.strip(), None
 
 
-def _load_config(config_path: Path) -> tuple[list[TaskSpec], DashboardSpec | None]:
+def _load_config(config_path: Path, mode: str | None = None) -> tuple[list[TaskSpec], DashboardSpec | None]:
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     if isinstance(payload, list):
         raw_tasks, raw_dashboard = payload, None
@@ -121,7 +129,22 @@ def _load_config(config_path: Path) -> tuple[list[TaskSpec], DashboardSpec | Non
         )
 
     actual_names = Counter(task.task_name for task in tasks)
-    if actual_names != EXPECTED_TASK_NAMES:
+    if mode == "mock-only":
+        rejected = sorted(set(actual_names) - MOCK_ONLY_TASK_NAMES)
+        if rejected:
+            raise ValueError(
+                f"mock-only config contains unsupported task name: {rejected[0]!r}"
+            )
+        if any(count != 1 for count in actual_names.values()):
+            raise ValueError("mock-only config cannot contain duplicate task names")
+        if actual_names.get("Kiwoom Worker Watchdog", 0) != 1:
+            raise ValueError(
+                "mock-only config must contain exactly one "
+                "Kiwoom Worker Watchdog task"
+            )
+    elif mode is not None:
+        raise ValueError(f"unsupported healthcheck mode: {mode!r}")
+    elif actual_names != EXPECTED_TASK_NAMES:
         raise ValueError(
             "healthcheck config must contain exactly the inventoried eight "
             f"tasks; expected={dict(EXPECTED_TASK_NAMES)!r} "
@@ -230,6 +253,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
+    parser.add_argument("--mode", choices=("mock-only",), default=None)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -239,7 +263,7 @@ def main() -> int:
 
     logger = _logger(args.log_path)
     try:
-        tasks, dashboard = _load_config(args.config)
+        tasks, dashboard = _load_config(args.config, mode=args.mode)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         message = f"Scheduled-task healthcheck configuration invalid: {exc}"
         _emit_alert(message, logger, args.dry_run)
