@@ -29,6 +29,7 @@ class LinuxStartupSmokeTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "TELEGRAM_BOT_TOKEN": "linux-smoke-test-token",
             "TELEGRAM_CHAT_ID": "linux-smoke-test-chat",
+            "ACCOUNT_FILTER": "us_mock",
         }), \
              patch.object(app_main.argparse.ArgumentParser, "parse_args",
                           return_value=SimpleNamespace(market="US")), \
