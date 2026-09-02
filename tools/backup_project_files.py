@@ -20,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.core.runtime_paths import backup_dir
 
 
-EXCLUDED_DIRS = {".git", "secrets", "data", "logs", "__pycache__", ".venv", ".pytest_cache", ".pytest-tmp", "pytest_tmp"}
+EXCLUDED_DIRS = {".git", "secrets", "data", "logs", "__pycache__", ".venv", ".pytest_cache", ".pytest-tmp", "pytest_tmp", ".pytest_tmp"}
 
 
 def _matches(path: str, pattern: str) -> bool:
@@ -38,6 +38,7 @@ def _excluded(relative: str) -> bool:
         "diagnostics/backup_*", "diagnostics/fixed_port_release_measurement_*.jsonl",
         "diagnostics/main_py_HEAD_reference*.txt", "ops/emergency_stop.ps1", "src/*.diff",
         "*.lnk", "pytest_round*.txt", "*_PRE_FIX_BACKUP_*.xml", "wd_test2.py",
+        ".pytest_tmp*", ".pytest-tmp*", "ops/scratch", "ops/scratch/*",
         ".DS_Store", "Thumbs.db", "tools/*_diag_r*.py", "tools/*_PYTHON*.txt",
         "tools/_r*_committed_blob.py",
     )
