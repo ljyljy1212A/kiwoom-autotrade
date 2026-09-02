@@ -39,6 +39,105 @@ class WorkerWatchdogTests(unittest.TestCase):
     def _patch_paths(self):
         return self._patch_state_path(), patch.object(watchdog, "STATUS_DIR", self.status_dir)
 
+    def _marker_path(self, account="kr_mock"):
+        marker_dir = Path(self.tmp.name) / "markers"
+        marker_dir.mkdir(exist_ok=True)
+        return marker_dir / f"intentional_stop_{account}.json", marker_dir
+
+    def _write_marker(self, account="kr_mock", expires_at=None, **fields):
+        path, marker_dir = self._marker_path(account)
+        payload = {"account": account, "instanceId": "instance"}
+        payload.update(fields)
+        if expires_at is not None:
+            payload["expiresAt"] = expires_at.isoformat()
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path, marker_dir
+
+    def test_intentional_stop_marker_absent_is_inactive(self):
+        marker_dir = Path(self.tmp.name) / "markers"
+        with patch.object(watchdog, "DATA_DIR", marker_dir):
+            active, detail = watchdog._intentional_stop_active("kr_mock")
+
+        self.assertFalse(active)
+        self.assertIn("absent", detail)
+
+    def test_intentional_stop_marker_future_expiry_is_active(self):
+        _, marker_dir = self._write_marker(
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5)
+        )
+        with patch.object(watchdog, "DATA_DIR", marker_dir):
+            active, detail = watchdog._intentional_stop_active("kr_mock")
+
+        self.assertTrue(active)
+        self.assertIn("expiresAt=", detail)
+
+    def test_intentional_stop_marker_past_expiry_is_inactive(self):
+        _, marker_dir = self._write_marker(
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=5)
+        )
+        with patch.object(watchdog, "DATA_DIR", marker_dir):
+            active, detail = watchdog._intentional_stop_active("kr_mock")
+
+        self.assertFalse(active)
+        self.assertEqual(detail, "marker expired")
+
+    def test_intentional_stop_marker_malformed_or_missing_expiry_is_inactive(self):
+        path, marker_dir = self._marker_path()
+        with patch.object(watchdog, "DATA_DIR", marker_dir):
+            path.write_text("{not-json", encoding="utf-8")
+            self.assertFalse(watchdog._intentional_stop_active("kr_mock")[0])
+            path.write_text(json.dumps({"account": "kr_mock"}), encoding="utf-8")
+            self.assertFalse(watchdog._intentional_stop_active("kr_mock")[0])
+
+    def test_intentional_stop_marker_mismatched_account_is_inactive(self):
+        path, marker_dir = self._marker_path("kr_mock")
+        path.write_text(
+            json.dumps({
+                "account": "us_mock",
+                "instanceId": "instance",
+                "expiresAt": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            }),
+            encoding="utf-8",
+        )
+        with patch.object(watchdog, "DATA_DIR", marker_dir):
+            active, detail = watchdog._intentional_stop_active("kr_mock")
+
+        self.assertFalse(active)
+        self.assertEqual(detail, "marker account mismatch")
+
+    def test_dead_worker_with_active_marker_skips_relaunch_without_counting_failure(self):
+        state = {"kr_mock": {"consecutive_failures": 2, "alerted": False}}
+        _, marker_dir = self._write_marker(
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5)
+        )
+        with patch.object(watchdog, "DATA_DIR", marker_dir), \
+             patch.object(watchdog, "_load_state", return_value=state), \
+             patch.object(watchdog, "_account_state", return_value=state["kr_mock"]), \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 333}), \
+             patch.object(watchdog, "check_duplicate_live_process", return_value=False), \
+             patch.object(watchdog, "_classify", return_value=("dead", "account mutex is not alive")), \
+             patch.object(watchdog.worker_supervisor, "start") as start, \
+             patch.object(watchdog, "_send_notification"):
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        start.assert_not_called()
+        self.assertEqual(state["kr_mock"]["consecutive_failures"], 2)
+        self.assertNotIn("cooldown_until", state["kr_mock"])
+
+    def test_dead_worker_without_marker_preserves_relaunch_behavior(self):
+        marker_dir = Path(self.tmp.name) / "markers"
+        state = {}
+        with patch.object(watchdog, "DATA_DIR", marker_dir), \
+             patch.object(watchdog, "_load_state", return_value=state), \
+             patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 333}), \
+             patch.object(watchdog, "check_duplicate_live_process", return_value=False), \
+             patch.object(watchdog, "_classify", return_value=("dead", "account mutex is not alive")), \
+             patch.object(watchdog.worker_supervisor, "start", return_value=(0, {"started": True})) as start, \
+             patch.object(watchdog, "_send_notification"):
+            watchdog.check_and_restart("kr_mock", "KR")
+
+        start.assert_called_once_with("kr_mock", "KR")
+
     def test_healthy_matching_fresh_heartbeat_resets_prior_failure_state(self):
         self._write_status()
         self.state_path.write_text(json.dumps({"kr_mock": {"consecutive_failures": 2, "alerted": True}}), encoding="utf-8")

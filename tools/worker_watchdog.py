@@ -44,6 +44,7 @@ WATCHDOG_LOG = get_logger("watchdog", str(LOG_DIR / "watchdog.log"))
 WATCHDOG_STATE = DATA_DIR / "watchdog_state.json"
 STATUS_DIR = DATA_DIR
 MAX_CONSECUTIVE_FAILURES = 3
+SUPPRESS_RELAUNCH_SECONDS = 15 * 60
 STALE_AFTER_SECONDS = 120
 COOLDOWN_SECONDS = 15 * 60
 
@@ -61,6 +62,27 @@ def _load_state() -> dict[str, dict]:
         return payload if isinstance(payload, dict) else {}
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return {}
+
+
+def _intentional_stop_active(account: str) -> tuple[bool, str]:
+    path = DATA_DIR / f"intentional_stop_{account}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False, "marker absent or invalid"
+    if not isinstance(payload, dict) or payload.get("account") != account:
+        return False, "marker account mismatch"
+    try:
+        expires_at = datetime.fromisoformat(
+            str(payload["expiresAt"]).replace("Z", "+00:00")
+        )
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return False, "marker expiry invalid"
+    if datetime.now(timezone.utc) >= expires_at.astimezone(timezone.utc):
+        return False, "marker expired"
+    return True, f"expiresAt={expires_at.isoformat()}"
 
 
 def _save_state(state: dict[str, dict]) -> None:
@@ -340,6 +362,16 @@ def check_and_restart(account: str, market: str) -> None:
 
     classification, detail = _classify(account, market, current)
     WATCHDOG_LOG.info(f"[{account}] classification={classification}: {detail}")
+
+    if classification == "dead":
+        marker_active, marker_detail = _intentional_stop_active(account)
+        if marker_active:
+            WATCHDOG_LOG.info(
+                f"[{account}] intentional stop marker present; skipping relaunch "
+                f"({marker_detail})"
+            )
+            # Do not increment crash-relaunch failure/cooldown counters.
+            return
 
     if classification == "healthy":
         if account_state["consecutive_failures"] or account_state["alerted"] or account_state["suspect_alerted"]:

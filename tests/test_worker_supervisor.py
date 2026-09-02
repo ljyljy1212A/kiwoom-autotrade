@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -5,6 +6,7 @@ import tempfile
 import textwrap
 import unittest
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +15,93 @@ from src.core import account_catalog
 
 
 class WorkerSupervisorStopTests(unittest.TestCase):
+    def _write_intentional_stop_marker(self, base_dir, account="kr_mock"):
+        path = base_dir / f"intentional_stop_{account}.json"
+        path.write_text(
+            '{"account":"%s","instanceId":"instance","requestedAt":"2026-01-01T00:00:00+00:00","expiresAt":"2026-01-01T00:15:00+00:00"}' % account,
+            encoding="utf-8",
+        )
+        return path
+
+    def test_stop_writes_well_formed_intentional_stop_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            running = {"account": "kr_mock", "pid": 123, "running": True,
+                       "instanceId": "instance", "state": "RUNNING", "market": "KR"}
+            stopped = {**running, "running": False, "state": "STOPPED"}
+            with patch.object(supervisor, "DATA_DIR", base_dir), \
+                 patch.object(supervisor, "status", side_effect=[running, stopped]), \
+                 patch.object(supervisor, "_owned_identity", return_value=(123, "instance")), \
+                 patch.object(supervisor, "_wait_for_stopped", return_value=True), \
+                 patch.object(supervisor, "_remove_pid_after_confirmed_exit"), \
+                 patch.object(supervisor, "_record_stopped_status"):
+                code, payload = supervisor.stop("kr_mock")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["mode"], "graceful")
+            marker = json.loads(
+                (base_dir / "intentional_stop_kr_mock.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(marker["account"], "kr_mock")
+            self.assertEqual(marker["instanceId"], "instance")
+            requested_at = datetime.fromisoformat(marker["requestedAt"])
+            expires_at = datetime.fromisoformat(marker["expiresAt"])
+            self.assertEqual(
+                expires_at - requested_at,
+                timedelta(seconds=supervisor.SUPPRESS_RELAUNCH_SECONDS),
+            )
+
+    def test_start_already_running_early_clears_intentional_stop_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            marker = self._write_intentional_stop_marker(base_dir)
+            running = {"account": "kr_mock", "pid": 123, "running": True}
+            with patch.object(supervisor, "DATA_DIR", base_dir), \
+                 patch.object(supervisor, "status", return_value=running):
+                code, payload = supervisor.start("kr_mock", "KR")
+
+            self.assertEqual(code, 3)
+            self.assertEqual(payload["reason"], "already-running")
+            self.assertFalse(marker.exists())
+
+    def test_start_new_child_confirmation_clears_intentional_stop_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            marker = self._write_intentional_stop_marker(base_dir)
+            child = MagicMock(pid=999, returncode=0)
+            child.poll.return_value = None
+            running = {"account": "kr_mock", "pid": 999, "running": True}
+            with patch.object(supervisor, "DATA_DIR", base_dir), \
+                 patch.object(supervisor, "status", side_effect=[{"running": False}, running]), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor.subprocess, "Popen", return_value=child), \
+                 patch.object(supervisor.time, "sleep"), \
+                 patch.object(supervisor.time, "monotonic", side_effect=[0, 0.1]):
+                code, payload = supervisor.start("kr_mock", "KR")
+
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["started"])
+            self.assertFalse(marker.exists())
+
+    def test_start_final_running_confirmation_clears_intentional_stop_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            marker = self._write_intentional_stop_marker(base_dir)
+            child = MagicMock(pid=999, returncode=0)
+            child.poll.return_value = None
+            running = {"account": "kr_mock", "pid": 888, "running": True}
+            with patch.object(supervisor, "DATA_DIR", base_dir), \
+                 patch.object(supervisor, "status", side_effect=[{"running": False}, running]), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor.subprocess, "Popen", return_value=child), \
+                 patch.object(supervisor.time, "sleep"), \
+                 patch.object(supervisor.time, "monotonic", side_effect=[0, 31]):
+                code, payload = supervisor.start("kr_mock", "KR")
+
+            self.assertEqual(code, 3)
+            self.assertEqual(payload["reason"], "already-running")
+            self.assertFalse(marker.exists())
+
     @unittest.skipUnless(os.name == "nt", "Windows abandoned-mutex semantics are verified on Windows")
     def test_wait_for_stopped_accepts_abandoned_mutex_after_worker_crash(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,7 +14,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.core.process_lock import ProcessLock
@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _GRACEFUL_STOP_TIMEOUT_SEC = 10.0
 _FORCE_STOP_TIMEOUT_SEC = 5.0
 _STARTUP_ACK_TIMEOUT_SEC = 30.0
+SUPPRESS_RELAUNCH_SECONDS = 15 * 60
 
 
 def _worker_lock(account: str) -> ProcessLock:
@@ -46,11 +47,22 @@ def _stop_request_path(account: str) -> Path:
     return DATA_DIR / f"worker_{account}.stop.request.json"
 
 
+def _intentional_stop_path(account: str) -> Path:
+    return DATA_DIR / f"intentional_stop_{account}.json"
+
+
 def _write_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{time.time_ns()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     temporary.replace(path)
+
+
+def _clear_intentional_stop(account: str) -> None:
+    try:
+        _intentional_stop_path(account).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _pid_alive(pid: int) -> bool:
@@ -213,6 +225,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
     if current.get("liveness") == "suspect":
         return 8, {**current, "started": False, "reason": "status-indeterminate"}
     if current["running"]:
+        # Any confirmed running path consumes the intentional-stop marker.
+        _clear_intentional_stop(account)
         return 3, {**current, "started": False, "reason": "already-running"}
 
     env = os.environ.copy()
@@ -259,6 +273,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
             return 8, {**current, "started": False, "reason": "status-indeterminate"}
         if current["running"]:
             if current["pid"] == child.pid:
+                # Any confirmed running path consumes the intentional-stop marker.
+                _clear_intentional_stop(account)
                 return 0, {**current, "started": True}
             # The child claims the mutex before it can atomically publish its
             # new PID/status files.  Do not mistake that short metadata window
@@ -278,6 +294,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
     if final.get("liveness") == "suspect":
         return 8, {**final, "started": False, "reason": "status-indeterminate"}
     if final["running"]:
+        # Any confirmed running path consumes the intentional-stop marker.
+        _clear_intentional_stop(account)
         return 3, {**final, "started": False, "reason": "already-running"}
     return 4, {**final, "started": False, "reason": "startup-timeout"}
 
@@ -326,12 +344,24 @@ def stop(account, timeout: float | None = None):
     graceful_timeout = timeout if timeout is not None else _GRACEFUL_STOP_TIMEOUT_SEC
     force_timeout = _FORCE_STOP_TIMEOUT_SEC
 
+    requested_at = datetime.now(timezone.utc)
+    # If stopping fails and the worker remains running, deliberately retain
+    # this marker for its full expiry window because no meaningful stop occurred.
+    _write_atomic(_intentional_stop_path(account), {
+        "account": account,
+        "instanceId": instance_id,
+        "requestedAt": requested_at.isoformat(),
+        "expiresAt": (
+            requested_at + timedelta(seconds=SUPPRESS_RELAUNCH_SECONDS)
+        ).isoformat(),
+    })
+
     # 1. Ask the worker to stop cooperatively, then wait.
     _write_atomic(_stop_request_path(account), {
         "account": account,
         "pid": pid,
         "instanceId": instance_id,
-        "requestedAt": datetime.now(timezone.utc).isoformat(),
+        "requestedAt": requested_at.isoformat(),
     })
 
     if _wait_for_stopped(account, pid, graceful_timeout):
