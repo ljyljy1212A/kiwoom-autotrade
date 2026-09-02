@@ -85,3 +85,11 @@ def test_mock_only_mode_rejects_duplicate_task_names(tmp_path):
             _write_config(tmp_path, ["Kiwoom Worker Watchdog", "Kiwoom Worker Watchdog"]),
             mode="mock-only",
         )
+
+
+def test_mock_only_mode_rejects_missing_watchdog(tmp_path):
+    with pytest.raises(ValueError, match="must contain exactly one Kiwoom Worker Watchdog task"):
+        healthcheck._load_config(
+            _write_config(tmp_path, ["Kiwoom Worker KR Mock", "Kiwoom Worker US Mock"]),
+            mode="mock-only",
+        )
