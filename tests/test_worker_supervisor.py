@@ -185,6 +185,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                                          stderr=supervisor.subprocess.DEVNULL)
         remove.assert_called_once_with("kr_mock", 123)
 
+    @unittest.skipUnless(os.name == "nt", "Unmanaged worker scan requires Windows")
     def test_scan_unmanaged_workers_filters_market_name_and_pid(self):
         records = [
             self._process("python.exe", 101, "python.exe -m src.main --market KR"),
@@ -227,6 +228,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         os_kill.assert_not_called()
         subprocess_run.assert_not_called()
 
+    @unittest.skipUnless(os.name == "nt", "Unmanaged worker scan requires Windows")
     def test_stop_reports_single_unmanaged_match_without_termination(self):
         process = self._process("python.exe", 101, "python.exe -m src.main --market KR")
         with patch.object(supervisor, "status", return_value=self._stopped_status()), \
@@ -241,6 +243,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         os_kill.assert_not_called()
         subprocess_run.assert_not_called()
 
+    @unittest.skipUnless(os.name == "nt", "Unmanaged worker scan requires Windows")
     def test_kill_reports_multiple_unmanaged_matches_without_termination(self):
         processes = [
             self._process("python.exe", 101, "python.exe -m src.main --market KR"),
