@@ -30,7 +30,6 @@ diagnostics/backup_*/
 diagnostics/fixed_port_release_measurement_*.jsonl
 diagnostics/main_py_HEAD_reference*.txt
 ops/scratch/
-ops/emergency_stop.ps1
 src/*.diff
 *.lnk
 pytest_round*.txt

@@ -20,6 +20,7 @@ accounts:
 
   # 예시 2) 해외주식(US) 모의투자 — 실전 투입 전 최소 2주 검증 권장
   - id: us_mock
+    emergency_stop_eligible: true
     display_name: "해외주식 모의투자 (SOXL 무한매수)"
     env_prefix: ACCOUNT_B          # 모의투자 전용 앱키 사용
     market: US
@@ -40,6 +41,7 @@ accounts:
 
   # 예시 4) 국내주식(KRX) 모의투자 — 실전 투입 전 최소 2주 검증 권장
   - id: kr_mock
+    emergency_stop_eligible: true
     display_name: "국내주식 모의투자 (삼성전자 무한매수)"
     env_prefix: ACCOUNT_D          # 모의투자 전용 앱키 사용
     market: KR
