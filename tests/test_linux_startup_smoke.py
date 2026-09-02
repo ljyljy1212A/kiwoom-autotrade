@@ -14,7 +14,8 @@ class LinuxStartupSmokeTests(unittest.TestCase):
         logger.bind.return_value = logger
         logger.info = MagicMock()
         logger.warning = MagicMock()
-        client = SimpleNamespace(market="US", close=AsyncMock(return_value=None), token_mgr=None)
+        client = SimpleNamespace(market="US", close=AsyncMock(return_value=None), token_mgr=None,
+                                  bind_order_authority=MagicMock())
         ctx = SimpleNamespace(account_id="us_mock", client=client, logger=logger,
                               risk_manager=SimpleNamespace(logger=None))
         telegram = SimpleNamespace(
