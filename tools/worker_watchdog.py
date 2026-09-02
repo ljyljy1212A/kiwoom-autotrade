@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,6 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 from src import worker_supervisor
+from src.core.process_inventory import query_win32_processes
 from src.core.runtime_paths import DATA_DIR, LOG_DIR
 from src.utils.logger import get_logger
 
@@ -192,35 +192,6 @@ def check_duplicate_live_process(
     return True
 
 
-def _query_win32_processes() -> list[SimpleNamespace]:
-    """Return raw Win32_Process records needed by the worker provider."""
-    command = (
-        "$ErrorActionPreference = 'Stop'; "
-        "Get-CimInstance Win32_Process | "
-        "Select-Object Name,ProcessId,ParentProcessId,CommandLine | "
-        "ConvertTo-Json -Compress"
-    )
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Win32_Process query failed")
-    if not result.stdout.strip():
-        return []
-    payload = json.loads(result.stdout)
-    if isinstance(payload, dict):
-        payload = [payload]
-    if not isinstance(payload, list):
-        raise ValueError("Win32_Process query returned a non-list result")
-    return [SimpleNamespace(**item) for item in payload if isinstance(item, dict)]
-
-
 def enumerate_worker_processes(account: str, market: str) -> list[SimpleNamespace]:
     """Enumerate matching mock-worker processes for the detector."""
     expected_market = MONITORED_ACCOUNTS.get(account)
@@ -228,7 +199,7 @@ def enumerate_worker_processes(account: str, market: str) -> list[SimpleNamespac
         return []
     supervisor_signature = f"-m src.worker_supervisor start --account {account} --market {market}"
     child_signature = f"-m src.main --market {market}"
-    records = _query_win32_processes()
+    records = query_win32_processes()
     worker_names = {"python.exe", "pythonw.exe"}
     supervisor_pids = set()
     for record in records:

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.core.process_lock import ProcessLock
+from src.core.process_inventory import query_win32_processes
 from src.core.control_state import read_auto_trading_enabled
 from src.core.runtime_paths import DATA_DIR
 from src.core.account_catalog import is_real_account
@@ -91,6 +92,79 @@ def _pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _scan_unmanaged_worker_processes(account: str, market: str) -> list[dict]:
+    """Read-only scan for externally launched workers matching a market.
+
+    ACCOUNT_FILTER is inherited environment state and is not exposed by
+    Win32_Process. Therefore candidates are reported with an unverifiable
+    account match; no candidate is selected or acted upon.
+    """
+    if os.name != "nt":
+        raise RuntimeError("unmanaged worker scan requires Windows")
+    if not isinstance(market, str) or not market:
+        raise ValueError("worker market is unavailable for unmanaged scan")
+
+    signature = f"-m src.main --market {market}"
+    worker_names = {"python.exe", "pythonw.exe"}
+    matches = []
+    for record in query_win32_processes():
+        name = getattr(record, "Name", None)
+        command_line = getattr(record, "CommandLine", None)
+        try:
+            pid = int(getattr(record, "ProcessId", 0))
+        except (TypeError, ValueError):
+            continue
+        if (
+            not isinstance(name, str)
+            or name.lower() not in worker_names
+            or not isinstance(command_line, str)
+            or signature not in command_line
+            or pid <= 0
+        ):
+            continue
+        matches.append(
+            {
+                "pid": pid,
+                "account": account,
+                "market": market,
+                "accountMatch": "unverifiable",
+                "commandLine": command_line,
+                "startTime": getattr(record, "CreationDate", None),
+            }
+        )
+    return matches
+
+
+def _unmanaged_process_result(account: str, current: dict):
+    """Return a detection-only result, or None when no candidate is found."""
+    market = current.get("market")
+    logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+    try:
+        matches = _scan_unmanaged_worker_processes(account, market)
+    except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning(
+            f"Unable to scan for unmanaged worker processes: "
+            f"account={account} market={market!r} error={exc}"
+        )
+        return 0, {
+            **current,
+            "mode": "already_stopped",
+            "unmanagedScanStatus": "failed",
+        }
+    if not matches:
+        return None
+    logger.warning(
+        f"Unmanaged worker process candidate(s) detected: "
+        f"account={account} market={market} processes={matches}"
+    )
+    return 9, {
+        **current,
+        "mode": "unmanaged_process_detected",
+        "reason": "market-matching-process-account-unverifiable",
+        "processes": matches,
+    }
 
 
 def _process_creation_time(pid: int):
@@ -331,6 +405,9 @@ def stop(account, timeout: float | None = None):
     if curr.get("liveness") == "suspect":
         return 8, {**curr, "mode": "unknown", "reason": "status-indeterminate"}
     if not curr.get("running"):
+        unmanaged = _unmanaged_process_result(account, curr)
+        if unmanaged is not None:
+            return unmanaged
         return 0, {**curr, "mode": "already_stopped"}
 
     identity = _owned_identity(account)
@@ -409,6 +486,9 @@ def kill(account: str):
     if curr.get("liveness") == "suspect":
         return 8, {**curr, "mode": "unknown", "reason": "status-indeterminate"}
     if not curr.get("running"):
+        unmanaged = _unmanaged_process_result(account, curr)
+        if unmanaged is not None:
+            return unmanaged
         return 0, {**curr, "mode": "already_stopped"}
 
     identity = _owned_identity(account)

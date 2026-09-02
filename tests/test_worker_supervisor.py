@@ -8,6 +8,7 @@ import unittest
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src import worker_supervisor as supervisor
@@ -15,6 +16,23 @@ from src.core import account_catalog
 
 
 class WorkerSupervisorStopTests(unittest.TestCase):
+    def _process(self, name, pid, command_line, start_time="2026-09-02T00:00:00Z"):
+        return SimpleNamespace(
+            Name=name,
+            ProcessId=pid,
+            CommandLine=command_line,
+            CreationDate=start_time,
+        )
+
+    def _stopped_status(self):
+        return {
+            "account": "kr_mock",
+            "pid": 123,
+            "running": False,
+            "state": "STOPPED",
+            "market": "KR",
+        }
+
     def _write_intentional_stop_marker(self, base_dir, account="kr_mock"):
         path = base_dir / f"intentional_stop_{account}.json"
         path.write_text(
@@ -166,6 +184,105 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                                          stdout=supervisor.subprocess.DEVNULL,
                                          stderr=supervisor.subprocess.DEVNULL)
         remove.assert_called_once_with("kr_mock", 123)
+
+    def test_scan_unmanaged_workers_filters_market_name_and_pid(self):
+        records = [
+            self._process("python.exe", 101, "python.exe -m src.main --market KR"),
+            self._process("python.exe", 102, "python.exe -m src.main --market US"),
+            self._process("cmd.exe", 103, "cmd.exe -m src.main --market KR"),
+            self._process("python.exe", 0, "python.exe -m src.main --market KR"),
+            self._process("python.exe", -1, "python.exe -m src.main --market KR"),
+            self._process("python.exe", None, "python.exe -m src.main --market KR"),
+        ]
+        with patch.object(supervisor, "query_win32_processes", return_value=records):
+            matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["pid"], 101)
+        self.assertEqual(matches[0]["accountMatch"], "unverifiable")
+        self.assertEqual(matches[0]["commandLine"], records[0].CommandLine)
+        self.assertEqual(matches[0]["startTime"], records[0].CreationDate)
+
+    def test_stop_without_unmanaged_match_remains_already_stopped(self):
+        with patch.object(supervisor, "status", return_value=self._stopped_status()), \
+             patch.object(supervisor, "query_win32_processes", return_value=[]), \
+             patch.object(supervisor.os, "kill") as os_kill, \
+             patch.object(supervisor.subprocess, "run") as subprocess_run:
+            code, payload = supervisor.stop("kr_mock")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["mode"], "already_stopped")
+        os_kill.assert_not_called()
+        subprocess_run.assert_not_called()
+
+    def test_kill_without_unmanaged_match_remains_already_stopped(self):
+        with patch.object(supervisor, "status", return_value=self._stopped_status()), \
+             patch.object(supervisor, "query_win32_processes", return_value=[]), \
+             patch.object(supervisor.os, "kill") as os_kill, \
+             patch.object(supervisor.subprocess, "run") as subprocess_run:
+            code, payload = supervisor.kill("kr_mock")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["mode"], "already_stopped")
+        os_kill.assert_not_called()
+        subprocess_run.assert_not_called()
+
+    def test_stop_reports_single_unmanaged_match_without_termination(self):
+        process = self._process("python.exe", 101, "python.exe -m src.main --market KR")
+        with patch.object(supervisor, "status", return_value=self._stopped_status()), \
+             patch.object(supervisor, "query_win32_processes", return_value=[process]), \
+             patch.object(supervisor.os, "kill") as os_kill, \
+             patch.object(supervisor.subprocess, "run") as subprocess_run:
+            code, payload = supervisor.stop("kr_mock")
+
+        self.assertEqual(code, 9)
+        self.assertEqual(payload["mode"], "unmanaged_process_detected")
+        self.assertEqual(payload["processes"][0]["pid"], 101)
+        os_kill.assert_not_called()
+        subprocess_run.assert_not_called()
+
+    def test_kill_reports_multiple_unmanaged_matches_without_termination(self):
+        processes = [
+            self._process("python.exe", 101, "python.exe -m src.main --market KR"),
+            self._process("pythonw.exe", 102, "pythonw.exe -m src.main --market KR"),
+        ]
+        with patch.object(supervisor, "status", return_value=self._stopped_status()), \
+             patch.object(supervisor, "query_win32_processes", return_value=processes), \
+             patch.object(supervisor.os, "kill") as os_kill, \
+             patch.object(supervisor.subprocess, "run") as subprocess_run:
+            code, payload = supervisor.kill("kr_mock")
+
+        self.assertEqual(code, 9)
+        self.assertEqual(payload["mode"], "unmanaged_process_detected")
+        self.assertEqual([item["pid"] for item in payload["processes"]], [101, 102])
+        os_kill.assert_not_called()
+        subprocess_run.assert_not_called()
+
+    def test_stop_scan_failure_remains_already_stopped(self):
+        with patch.object(supervisor, "status", return_value=self._stopped_status()), \
+             patch.object(supervisor, "query_win32_processes", side_effect=RuntimeError("PowerShell failed")), \
+             patch.object(supervisor.os, "kill") as os_kill, \
+             patch.object(supervisor.subprocess, "run") as subprocess_run:
+            code, payload = supervisor.stop("kr_mock")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["mode"], "already_stopped")
+        self.assertEqual(payload["unmanagedScanStatus"], "failed")
+        os_kill.assert_not_called()
+        subprocess_run.assert_not_called()
+
+    def test_kill_scan_failure_remains_already_stopped(self):
+        with patch.object(supervisor, "status", return_value=self._stopped_status()), \
+             patch.object(supervisor, "query_win32_processes", side_effect=RuntimeError("PowerShell failed")), \
+             patch.object(supervisor.os, "kill") as os_kill, \
+             patch.object(supervisor.subprocess, "run") as subprocess_run:
+            code, payload = supervisor.kill("kr_mock")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["mode"], "already_stopped")
+        self.assertEqual(payload["unmanagedScanStatus"], "failed")
+        os_kill.assert_not_called()
+        subprocess_run.assert_not_called()
 
     @unittest.skipUnless(os.name != "nt", "POSIX-only signal test")
     def test_stop_escalates_to_sigkill_on_posix(self):
