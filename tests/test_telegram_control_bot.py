@@ -360,6 +360,19 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("not available through Telegram control" in text for text, _ in query.message.edits))
             self.assertTrue(any("account=kr_real" in text and f"callback={callback_kind}" in text for text in logger.warning_messages))
 
+    async def test_replayed_confirm_callback_for_real_account_is_rejected(self):
+        """Without nonce state, a replay follows the same fail-closed gate twice."""
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_real", "KR Real", "KR")], logger)
+
+        for _ in range(2):
+            query, update = self._callback_update("confirm|kr_real|start|yes")
+            with patch.object(bot_module, "write_control_state") as control_write:
+                await bot._handle_callback(update, SimpleNamespace())
+            control_write.assert_not_called()
+            self.assertTrue(any("not available through Telegram control" in text for text, _ in query.message.edits))
+            self.assertTrue(any("account=kr_real" in text and "callback=confirm" in text for text in logger.warning_messages))
+
     async def test_real_account_selection_is_rejected_to_root_menu(self):
         logger = _Logger()
         bot = _bot({"111"}, [AccountInfo("kr_real", "KR Real", "KR")], logger)
