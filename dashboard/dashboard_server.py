@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from src.core.runtime_paths import DATA_DIR
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -580,6 +582,22 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-if __name__ == "__main__":
+def _write_startup_status() -> None:
+    status_path = DATA_DIR / "dashboard_server.status.json"
+    payload = {
+        "pid": os.getpid(),
+        "role": "dashboard_server",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    _write_startup_status()
     print(f"Dashboard: http://127.0.0.1:{PORT}")
     ReusableThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,11 +1,27 @@
+import json
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from dashboard import dashboard_server
 
 
 class DashboardSupervisorTests(unittest.TestCase):
+    def test_write_startup_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with patch.object(dashboard_server, "DATA_DIR", data_dir):
+                dashboard_server._write_startup_status()
+
+            payload = json.loads((data_dir / "dashboard_server.status.json").read_text(encoding="utf-8"))
+
+        self.assertGreater(payload["pid"], 0)
+        self.assertEqual(payload["role"], "dashboard_server")
+        self.assertTrue(payload["started_at"].endswith("+00:00"))
+        self.assertNotIn("account_scope", payload)
+
     def test_status_endpoint_preserves_degraded_state_and_liveness(self):
         handler = object.__new__(dashboard_server.Handler)
         handler._path_and_query = lambda: ("/api/status", {})
