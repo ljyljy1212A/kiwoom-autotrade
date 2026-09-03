@@ -1,8 +1,10 @@
 """Standalone Telegram control bot for account-wide auto-trading switches."""
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -514,6 +516,18 @@ def _allowed_chat_ids_from_env() -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+def _write_startup_status(accounts: list[AccountInfo]) -> None:
+    status_path = DATA_DIR / "telegram_control_bot.status.json"
+    payload = {
+        "pid": os.getpid(),
+        "role": "telegram_control_bot",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "account_scope": [account.account_id for account in accounts],
+    }
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     load_dotenv(override=True)
     logger = get_logger("telegram-control", str(DATA_DIR / "telegram_control.log"))
@@ -523,6 +537,7 @@ def main() -> int:
     if not allowed_chat_ids:
         raise RuntimeError("TELEGRAM_CHAT_ID must be configured with at least one whitelisted chat id")
     bot = TelegramControlBot(bot_token, allowed_chat_ids, logger, accounts)
+    _write_startup_status(accounts)
     bot.run()
     return 0
 

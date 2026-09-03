@@ -10,7 +10,13 @@ from unittest.mock import Mock, patch
 
 from src.core.control_state import write_control_state
 from src.notify import telegram_control_bot as bot_module
-from src.notify.telegram_control_bot import AccountInfo, TelegramControlBot, _is_mock_account, load_operator_labels
+from src.notify.telegram_control_bot import (
+    AccountInfo,
+    TelegramControlBot,
+    _is_mock_account,
+    _write_startup_status,
+    load_operator_labels,
+)
 
 
 class _Logger:
@@ -58,6 +64,47 @@ def _bot(chat_ids: set[str], accounts: list[AccountInfo], logger: _Logger) -> Te
 
 
 class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
+    def test_write_startup_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            accounts = [
+                AccountInfo("kr_mock", "KR Mock", "KR"),
+                AccountInfo("us_mock", "US Mock", "US"),
+            ]
+            with patch.object(bot_module, "DATA_DIR", data_dir), patch.object(bot_module.os, "getpid", return_value=4321):
+                _write_startup_status(accounts)
+
+            payload = json.loads((data_dir / "telegram_control_bot.status.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["pid"], 4321)
+            self.assertEqual(payload["role"], "telegram_control_bot")
+            self.assertEqual(payload["account_scope"], ["kr_mock", "us_mock"])
+            self.assertTrue(payload["started_at"].endswith("+00:00"))
+
+    def test_main_writes_startup_status_before_polling(self):
+        accounts = [
+            AccountInfo("kr_mock", "KR Mock", "KR"),
+            AccountInfo("us_mock", "US Mock", "US"),
+        ]
+        fake_bot = Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            with patch.object(bot_module, "DATA_DIR", data_dir), \
+                 patch.object(bot_module, "load_dotenv"), \
+                 patch.object(bot_module, "get_logger", return_value=Mock()), \
+                 patch.object(bot_module, "load_account_info", return_value=accounts), \
+                 patch.object(bot_module, "_allowed_chat_ids_from_env", return_value={"111"}), \
+                 patch.object(bot_module, "TelegramControlBot", return_value=fake_bot), \
+                 patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "test-token"}, clear=False):
+                self.assertEqual(bot_module.main(), 0)
+
+            payload = json.loads((data_dir / "telegram_control_bot.status.json").read_text(encoding="utf-8"))
+
+        self.assertGreater(payload["pid"], 0)
+        self.assertEqual(payload["role"], "telegram_control_bot")
+        self.assertEqual(payload["account_scope"], ["kr_mock", "us_mock"])
+        self.assertTrue(payload["started_at"].endswith("+00:00"))
+        fake_bot.run.assert_called_once_with()
+
     def _callback_update(self, data):
         query = _CallbackQuery(data)
         update = SimpleNamespace(
