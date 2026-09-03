@@ -16,6 +16,7 @@ from typing import Any, Literal
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from src.core import account_catalog
 from src.core.broker_http import (
     BrokerHTTPGate,
     enter_fixed_port_degraded_state,
@@ -226,13 +227,10 @@ class KiwoomClient:
             except httpx.RequestError as e:
                 if (
                     getattr(self, "mode", None) == "mock"
-                    and (
-                        getattr(self, "market", None) == "US"
-                        or (
-                            getattr(self, "market", None) == "KR"
-                            and self.account_no == "kr_mock"
-                            and os.environ.get("KR_MOCK_RECONCILIATION_CLEARANCE_ENABLED", "false").lower() == "true"
-                        )
+                    and account_catalog.reconciliation_clearance_eligible(
+                        self.account_no,
+                        getattr(self, "market", None),
+                        self.mode,
                     )
                     and is_fixed_port_collision_error(e)
                 ):

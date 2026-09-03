@@ -17,6 +17,7 @@ accounts:
     mode: real                     # real | mock  (계좌별 override, 미지정 시 KIWOOM_ENV 사용)
     strategy_config: config/strategy_config.example.json
     log_file: logs/us_real.log
+    emergency_stop_eligible: false
 
   # 예시 2) 해외주식(US) 모의투자 — 실전 투입 전 최소 2주 검증 권장
   - id: us_mock
@@ -38,6 +39,7 @@ accounts:
     mode: real
     strategy_config: config/strategy_config_kr.example.json
     log_file: logs/kr_real.log
+    emergency_stop_eligible: false
 
   # 예시 4) 국내주식(KRX) 모의투자 — 실전 투입 전 최소 2주 검증 권장
   - id: kr_mock

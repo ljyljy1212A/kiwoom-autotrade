@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
+from src.core import account_catalog
 from src.core import kiwoom_client as client_module
 from src.core.broker_http import (
     FixedPortCollisionError,
@@ -133,10 +134,21 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
         http_client.post.side_effect = fail_with_collision
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                with patch("src.core.broker_http.DATA_DIR", Path(temp_dir)):
-                    with patch.object(client_module.httpx, "AsyncClient", return_value=http_client):
-                        with self.assertRaises(RetryableError):
-                            await client._post_once("/api/dostk/quote", "ka10001", {})
+                config_dir = Path(temp_dir) / "config"
+                config_dir.mkdir()
+                (config_dir / "accounts.yaml").write_text(
+                    "accounts:\n"
+                    "  - id: kr_mock\n"
+                    "    market: KR\n"
+                    "    mode: mock\n"
+                    "    emergency_stop_eligible: false\n",
+                    encoding="utf-8",
+                )
+                with patch.object(account_catalog, "PROJECT_ROOT", Path(temp_dir)):
+                    with patch("src.core.broker_http.DATA_DIR", Path(temp_dir)):
+                        with patch.object(client_module.httpx, "AsyncClient", return_value=http_client):
+                            with self.assertRaises(RetryableError):
+                                await client._post_once("/api/dostk/quote", "ka10001", {})
                     self.assertIsNone(get_fixed_port_degraded_state(account_id))
                     self.assertFalse((Path(temp_dir) / f"fixed_port_degraded_{account_id}.json").exists())
             finally:
