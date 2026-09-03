@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -80,12 +81,25 @@ def _send_alert(message: str, logger: logging.Logger) -> None:
         logger.error("ntfy alert failed for %r: %s", message, exc)
 
 
+def _write_startup_status(status_dir: Path) -> None:
+    status_path = status_dir / "heartbeat_alert_watchdog.status.json"
+    payload = {
+        "pid": os.getpid(),
+        "role": "heartbeat_alert_watchdog",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "account_scope": list(ACCOUNTS),
+    }
+    status_dir.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--status-dir", type=Path, default=DEFAULT_STATUS_DIR)
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
     args = parser.parse_args()
 
+    _write_startup_status(args.status_dir)
     logger = _logger(args.log_path)
     now = datetime.now(timezone.utc)
     for account in ACCOUNTS:
