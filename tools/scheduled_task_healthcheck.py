@@ -213,7 +213,7 @@ def _problems(task: TaskSpec) -> list[str]:
     result, result_error = _last_task_result(task)
     if result_error is not None:
         problems.append(f"LastTaskResult query failed: {result_error}")
-    elif result != 0:
+    elif result not in {0, 0x41301}:
         problems.append(f"LastTaskResult is non-zero: {result}")
 
     target_exists, target_error = _target_exists(task)
