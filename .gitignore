@@ -18,6 +18,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 /CURRENT_STATE.md
+/ARCHIVE.md
 # Round-artifact scratch/debris (category 1 - untracked working artifacts)
 /round*.py
 /round*.txt
