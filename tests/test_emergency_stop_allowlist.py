@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,6 +14,18 @@ SOURCE_SCRIPT = PROJECT_ROOT / "ops" / "emergency_stop.ps1"
 POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 
 pytestmark = pytest.mark.skipif(POWERSHELL is None, reason="PowerShell is required")
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _normalize_stderr(text: str) -> str:
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    lines = (
+        re.sub(r"^\s*(?:Line\s*\||\d+\s*\||\|)\s*", "", line)
+        for line in text.splitlines()
+    )
+    return re.sub(r"\s+", " ", " ".join(lines)).strip()
 
 
 def _config(entries: list[str]) -> str:
@@ -91,7 +104,7 @@ def test_ineligible_mock_account_is_rejected_before_writes(tmp_path: Path):
     result = _run(script, account)
 
     assert result.returncode != 0
-    assert "not explicitly eligible" in result.stderr
+    assert "not explicitly eligible" in _normalize_stderr(result.stderr)
     assert control_path.read_text() == before_control
     assert settings_path.read_text() == before_settings
 
@@ -133,7 +146,7 @@ def test_unknown_account_is_rejected_before_writes(tmp_path: Path):
     result = _run(script, "unknown_mock")
 
     assert result.returncode != 0
-    assert "not explicitly eligible" in result.stderr
+    assert "not explicitly eligible" in _normalize_stderr(result.stderr)
     assert control_path.read_text() == before_control
     assert settings_path.read_text() == before_settings
 
