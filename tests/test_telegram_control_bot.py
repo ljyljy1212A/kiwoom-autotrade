@@ -58,6 +58,15 @@ def _bot(chat_ids: set[str], accounts: list[AccountInfo], logger: _Logger) -> Te
 
 
 class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
+    def _callback_update(self, data):
+        query = _CallbackQuery(data)
+        update = SimpleNamespace(
+            effective_chat=SimpleNamespace(id=111),
+            effective_message=query.message,
+            callback_query=query,
+        )
+        return query, update
+
     def test_mock_account_gate(self):
         self.assertTrue(_is_mock_account("kr_mock"))
         self.assertTrue(_is_mock_account("us_mock"))
@@ -262,6 +271,60 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["auto_trading_enabled"])
         self.assertTrue(query.answered)
         self.assertTrue(any("auto_trading set to ON" in text for text, _ in query.message.edits))
+
+    async def test_mock_account_selection_and_action_preview_are_allowed(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+
+        query, update = self._callback_update("acct|kr_mock")
+        await bot._handle_callback(update, SimpleNamespace())
+        self.assertTrue(any("KR Mock" in text for text, _ in query.message.edits))
+
+        query, update = self._callback_update("action|kr_mock|start")
+        await bot._handle_callback(update, SimpleNamespace())
+        self.assertTrue(any("Confirm enable auto-trading" in text for text, _ in query.message.edits))
+
+    async def test_mock_reconciliation_clear_is_allowed(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        with patch.object(bot_module, "write_reconciliation_clear_event") as clear_event:
+            query, update = self._callback_update("clear_reconciliation_pause|kr_mock")
+            await bot._handle_callback(update, SimpleNamespace())
+        clear_event.assert_called_once_with("kr_mock", updated_by="telegram", data_dir=bot_module.DATA_DIR)
+        self.assertTrue(any("Requested reconciliation-pause clear" in text for text, _ in query.message.edits))
+
+    async def test_real_account_mutations_are_rejected_and_logged(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_real", "KR Real", "KR")], logger)
+        for data, callback_kind in (
+            ("action|kr_real|start", "action"),
+            ("clear_reconciliation_pause|kr_real", "clear_reconciliation_pause"),
+            ("clear_pause|kr_real|tranche_rebuild_ambiguous", "clear_pause"),
+            ("confirm|kr_real|start|yes", "confirm"),
+        ):
+            query, update = self._callback_update(data)
+            with patch.object(bot_module, "write_control_state") as control_write, \
+                 patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+                 patch.object(bot_module, "write_pause_clear_event") as pause_write:
+                await bot._handle_callback(update, SimpleNamespace())
+            control_write.assert_not_called()
+            reconciliation_write.assert_not_called()
+            pause_write.assert_not_called()
+            self.assertTrue(any("not available through Telegram control" in text for text, _ in query.message.edits))
+            self.assertTrue(any("account=kr_real" in text and f"callback={callback_kind}" in text for text in logger.warning_messages))
+
+    async def test_real_account_selection_is_rejected_to_root_menu(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_real", "KR Real", "KR")], logger)
+        query, update = self._callback_update("acct|kr_real")
+
+        await bot._handle_callback(update, SimpleNamespace())
+
+        self.assertTrue(any("not available through Telegram control" in text for text, _ in query.message.edits))
+        markup = query.message.edits[-1][1]
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        self.assertIn("acct|kr_real", callbacks)
+        self.assertNotIn("action|kr_real|start", callbacks)
 
     async def test_unauthorized_reconciliation_clear_callback_is_ignored(self):
         logger = _Logger()

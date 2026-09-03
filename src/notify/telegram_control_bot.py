@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
+from src.core import account_catalog
 from src.core.control_state import (
     PAUSE_CLEAR_REASONS,
     read_auto_trading_enabled,
@@ -170,6 +171,32 @@ class TelegramControlBot:
         ]
         return InlineKeyboardMarkup(rows)
 
+    def _validate_mutating_account(self, account_id: str, callback_kind: str) -> AccountInfo | None:
+        info = self.accounts.get(account_id)
+        if info is None or not _is_mock_account(account_id):
+            self.logger.warning(
+                f"Telegram control rejected account={account_id} "
+                f"callback={callback_kind}: account validation failed"
+            )
+            return None
+        try:
+            eligible = account_catalog.reconciliation_clearance_eligible(
+                account_id, info.market, "mock"
+            )
+        except ValueError:
+            self.logger.warning(
+                f"Telegram control rejected account={account_id} "
+                f"callback={callback_kind}: account validation failed"
+            )
+            return None
+        if not eligible:
+            self.logger.warning(
+                f"Telegram control rejected account={account_id} "
+                f"callback={callback_kind}: account validation failed"
+            )
+            return None
+        return info
+
     async def _validate_attestation_account(self, query, account_id: str) -> bool:
         if account_id not in self.accounts:
             await self._safe_edit_text(query, "Unknown account.", reply_markup=self._root_markup())
@@ -232,9 +259,23 @@ class TelegramControlBot:
                 await self._safe_edit_text(query, self._root_text(), reply_markup=self._root_markup())
             elif kind == "acct" and len(parts) >= 2:
                 account_id = parts[1]
+                if self._validate_mutating_account(account_id, kind) is None:
+                    await self._safe_edit_text(
+                        query,
+                        "This account is not available through Telegram control.",
+                        reply_markup=self._root_markup(),
+                    )
+                    return
                 await self._safe_edit_text(query, self._account_text(account_id), reply_markup=self._account_markup(account_id))
             elif kind == "action" and len(parts) >= 3:
                 account_id, action = parts[1], parts[2]
+                if self._validate_mutating_account(account_id, kind) is None:
+                    await self._safe_edit_text(
+                        query,
+                        "This account is not available through Telegram control.",
+                        reply_markup=self._root_markup(),
+                    )
+                    return
                 await self._safe_edit_text(
                     query,
                     self._confirm_text(account_id, action),
@@ -242,6 +283,13 @@ class TelegramControlBot:
                 )
             elif kind == "clear_reconciliation_pause" and len(parts) >= 2:
                 account_id = parts[1]
+                if self._validate_mutating_account(account_id, kind) is None:
+                    await self._safe_edit_text(
+                        query,
+                        "This account is not available through Telegram control.",
+                        reply_markup=self._root_markup(),
+                    )
+                    return
                 try:
                     write_reconciliation_clear_event(account_id, updated_by="telegram", data_dir=DATA_DIR)
                 except Exception as exc:  # noqa: BLE001
@@ -259,6 +307,13 @@ class TelegramControlBot:
                 )
             elif kind == "clear_pause" and len(parts) >= 3:
                 account_id, reason = parts[1], parts[2]
+                if self._validate_mutating_account(account_id, kind) is None:
+                    await self._safe_edit_text(
+                        query,
+                        "This account is not available through Telegram control.",
+                        reply_markup=self._root_markup(),
+                    )
+                    return
                 if reason not in PAUSE_CLEAR_REASONS:
                     await self._safe_edit_text(
                         query,
@@ -415,6 +470,13 @@ class TelegramControlBot:
                 )
             elif kind == "confirm" and len(parts) >= 4:
                 account_id, action, decision = parts[1], parts[2], parts[3]
+                if self._validate_mutating_account(account_id, kind) is None:
+                    await self._safe_edit_text(
+                        query,
+                        "This account is not available through Telegram control.",
+                        reply_markup=self._root_markup(),
+                    )
+                    return
                 if decision != "yes":
                     await self._safe_edit_text(query, self._account_text(account_id), reply_markup=self._account_markup(account_id))
                     return
