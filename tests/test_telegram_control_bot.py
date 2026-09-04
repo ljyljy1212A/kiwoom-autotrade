@@ -4,6 +4,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -14,6 +15,7 @@ from src.notify.telegram_control_bot import (
     AccountInfo,
     TelegramControlBot,
     _is_mock_account,
+    _resolve_active_symbol,
     _write_startup_status,
     load_operator_labels,
 )
@@ -64,6 +66,32 @@ def _bot(chat_ids: set[str], accounts: list[AccountInfo], logger: _Logger) -> Te
 
 
 class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
+    def test_resolve_active_symbol_uses_fresh_valid_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            status = data_dir / "worker_kr_mock.status.json"
+            base = {"account": "kr_mock", "state": "RUNNING", "updatedAt": datetime.now(timezone.utc).isoformat()}
+            with patch.object(bot_module, "DATA_DIR", data_dir):
+                for symbols, expected in [(["005930"], "005930"), ([], None), (["005930", "000660"], None)]:
+                    status.write_text(json.dumps({**base, "active_symbols": symbols}), encoding="utf-8")
+                    self.assertEqual(_resolve_active_symbol("kr_mock"), expected)
+
+    def test_resolve_active_symbol_fails_closed_for_invalid_status(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            status = data_dir / "worker_kr_mock.status.json"
+            with patch.object(bot_module, "DATA_DIR", data_dir):
+                self.assertIsNone(_resolve_active_symbol("kr_mock"))
+                status.write_text("not-json", encoding="utf-8")
+                self.assertIsNone(_resolve_active_symbol("kr_mock"))
+                for payload in (
+                    {"account": "kr_mock", "state": "STOPPED", "updatedAt": datetime.now(timezone.utc).isoformat(), "active_symbols": ["005930"]},
+                    {"account": "wrong", "state": "RUNNING", "updatedAt": datetime.now(timezone.utc).isoformat(), "active_symbols": ["005930"]},
+                    {"account": "kr_mock", "state": "RUNNING", "updatedAt": (datetime.now(timezone.utc) - timedelta(seconds=16)).isoformat(), "active_symbols": ["005930"]},
+                ):
+                    status.write_text(json.dumps(payload), encoding="utf-8")
+                    self.assertIsNone(_resolve_active_symbol("kr_mock"))
+
     def test_write_startup_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
@@ -337,8 +365,28 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "write_reconciliation_clear_event") as clear_event:
             query, update = self._callback_update("clear_reconciliation_pause|kr_mock")
             await bot._handle_callback(update, SimpleNamespace())
-        clear_event.assert_called_once_with("kr_mock", updated_by="telegram", data_dir=bot_module.DATA_DIR)
+        clear_event.assert_called_once_with("kr_mock", updated_by="telegram", data_dir=bot_module.DATA_DIR, symbol=None)
         self.assertTrue(any("Requested reconciliation-pause clear" in text for text, _ in query.message.edits))
+
+    async def test_kr_mock_pause_clear_passes_single_active_symbol(self):
+        logger = _Logger()
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            (data_dir / "worker_kr_mock.status.json").write_text(json.dumps({
+                "account": "kr_mock",
+                "state": "RUNNING",
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+                "active_symbols": ["005930"],
+            }), encoding="utf-8")
+            with patch.object(bot_module, "DATA_DIR", data_dir), \
+                 patch.object(bot_module, "write_pause_clear_event") as pause_write:
+                query, update = self._callback_update("clear_pause|kr_mock|fixed_port_degraded")
+                await bot._handle_callback(update, SimpleNamespace())
+
+        pause_write.assert_called_once_with(
+            "kr_mock", "fixed_port_degraded", updated_by="telegram", data_dir=data_dir, symbol="005930"
+        )
 
     async def test_real_account_mutations_are_rejected_and_logged(self):
         logger = _Logger()
@@ -506,7 +554,7 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "write_pause_clear_event") as pause_write:
             await bot._handle_callback(update, SimpleNamespace())
 
-        pause_write.assert_called_once_with("kr_mock", "fixed_port_degraded", updated_by="telegram", data_dir=bot_module.DATA_DIR)
+        pause_write.assert_called_once_with("kr_mock", "fixed_port_degraded", updated_by="telegram", data_dir=bot_module.DATA_DIR, symbol=None)
 
     async def test_validate_gate_mock_invalid_pause_clear_does_not_write(self):
         bot = _bot({"111"}, [AccountInfo("us_mock", "US Mock", "US")], _Logger())

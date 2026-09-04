@@ -176,12 +176,13 @@ def _worker_stop_request_path(account_id: str) -> Path:
     return DATA_DIR / f"worker_{account_id}.stop.request.json"
 
 
-def _write_worker_status(identity: WorkerIdentity, state: str) -> None:
+def _write_worker_status(identity: WorkerIdentity, state: str, active_symbols: list[str]) -> None:
     """Atomically publish ownership metadata for dashboard/supervisor reads."""
     status_path = _worker_status_path(identity.account_id)
     payload = {
         "account": identity.account_id, "market": identity.market, "pid": identity.pid,
         "instanceId": identity.instance_id, "startedAt": identity.started_at, "state": state,
+        "active_symbols": active_symbols,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
     quote_path = DATA_DIR / f"worker_{identity.account_id}.quotes.json"
@@ -200,12 +201,14 @@ def _write_worker_status(identity: WorkerIdentity, state: str) -> None:
         SYS_LOG.warning(f"Worker status publication deferred for {identity.account_id}: {exc}")
 
 
-async def _publish_worker_heartbeat(identity: WorkerIdentity, interval_sec: float = 5.0) -> None:
+async def _publish_worker_heartbeat(
+    identity: WorkerIdentity, registry: SymbolEngineRegistry, interval_sec: float = 5.0
+) -> None:
     """Refresh worker liveness metadata while the account mutex is owned."""
     while True:
         await asyncio.sleep(interval_sec)
         state = EngineState.DEGRADED_FIXED_PORT.value if get_fixed_port_degraded_state(identity.account_id) is not None else EngineState.RUNNING.value
-        _write_worker_status(identity, state)
+        _write_worker_status(identity, state, list(registry.running_symbols(identity.account_id)))
 
 
 def _startup_worker_status_state(account_id: str) -> str:
@@ -430,7 +433,7 @@ def _dashboard_settings_payload(account_id: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-async def run_symbol_engines(ctx, telegram: TelegramController) -> None:
+async def run_symbol_engines(ctx, telegram: TelegramController, registry: SymbolEngineRegistry) -> None:
     """Keep one isolated engine/task per enabled symbol on an account."""
     price_feed = await make_price_feed(ctx)
     quote_health_monitor = asyncio.create_task(
@@ -438,7 +441,6 @@ async def run_symbol_engines(ctx, telegram: TelegramController) -> None:
         name=f"{ctx.account_id}-quote-health-monitor",
     )
     workers: dict[str, asyncio.Task] = {}
-    registry = SymbolEngineRegistry()
     profile_version_provider = DispatchProfileVersion()
     dispatch_clearance_service = DispatchClearanceService(ctx.account_id)
     balance_monitor: asyncio.Task | None = None
@@ -572,6 +574,7 @@ async def main():
     worker_heartbeat: asyncio.Task | None = None
     stop_watcher: asyncio.Task | None = None
     engines_task: asyncio.Task | None = None
+    registry = SymbolEngineRegistry()
     telegram: TelegramController | None = None
     worker_identity: WorkerIdentity | None = None
     lock_acquired = False
@@ -600,9 +603,9 @@ async def main():
             pass
         except OSError as exc:
             raise RuntimeError(f"Worker launch refused: cannot clear stale stop request: {exc}") from exc
-        _write_worker_status(worker_identity, _startup_worker_status_state(worker_identity.account_id))
+        _write_worker_status(worker_identity, _startup_worker_status_state(worker_identity.account_id), [])
         worker_heartbeat = asyncio.create_task(
-            _publish_worker_heartbeat(worker_identity), name=f"{worker_identity.account_id}-worker-heartbeat"
+            _publish_worker_heartbeat(worker_identity, registry), name=f"{worker_identity.account_id}-worker-heartbeat"
         )
         telegram = TelegramController(
             bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
@@ -620,12 +623,12 @@ async def main():
         asyncio.create_task(telegram.notify_worker_started(worker_identity.account_id, worker_identity.market))
 
         async def _run_engines():
-            await asyncio.gather(*(run_symbol_engines(ctx, telegram) for ctx in contexts))
+            await asyncio.gather(*(run_symbol_engines(ctx, telegram, registry) for ctx in contexts))
 
         engines_task = asyncio.create_task(_run_engines(), name=f"{worker_identity.account_id}-engines")
         done, _ = await asyncio.wait((engines_task, stop_watcher), return_when=asyncio.FIRST_COMPLETED)
         if stop_watcher in done:
-            _write_worker_status(worker_identity, "STOPPING")
+            _write_worker_status(worker_identity, "STOPPING", [])
             engines_task.cancel()
             await asyncio.gather(engines_task, return_exceptions=True)
         else:
@@ -642,7 +645,7 @@ async def main():
             worker_heartbeat.cancel()
             await asyncio.gather(worker_heartbeat, return_exceptions=True)
         if worker_identity is not None:
-            _write_worker_status(worker_identity, "STOPPING")
+            _write_worker_status(worker_identity, "STOPPING", [])
         if telegram is not None:
             try:
                 await telegram.stop()
@@ -664,7 +667,7 @@ async def main():
             # process dead *and* the account lock released.  Keeping it here
             # makes a clean STOPPED status distinguishable from a crash and avoids
             # any window where a live process loses its ownership metadata.
-            _write_worker_status(worker_identity, "STOPPED")
+            _write_worker_status(worker_identity, "STOPPED", [])
         if lock_acquired:
             lock = _WORKER_LOCKS.pop(worker_account_id, None)
             if lock is None:

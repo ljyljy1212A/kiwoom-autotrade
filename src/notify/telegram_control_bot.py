@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -72,6 +72,27 @@ def load_operator_labels(config_path: Path = ACCOUNTS_PATH) -> dict[str, str]:
 
 def _is_mock_account(account_id: str) -> bool:
     return account_id.endswith("_mock")
+
+
+def _resolve_active_symbol(account_id: str) -> str | None:
+    if account_id != "kr_mock":
+        return None
+    try:
+        path = DATA_DIR / f"worker_{account_id}.status.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("account") != account_id:
+            return None
+        if payload.get("state") not in {"RUNNING", "DEGRADED_FIXED_PORT"}:
+            return None
+        updated_at = datetime.fromisoformat(str(payload["updatedAt"])).astimezone(timezone.utc)
+        if datetime.now(timezone.utc) - updated_at > timedelta(seconds=15):
+            return None
+        active_symbols = payload["active_symbols"]
+        if not isinstance(active_symbols, list) or not all(isinstance(symbol, str) for symbol in active_symbols):
+            return None
+        return active_symbols[0] if len(active_symbols) == 1 else None
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
 
 
 class TelegramControlBot:
@@ -293,7 +314,10 @@ class TelegramControlBot:
                     )
                     return
                 try:
-                    write_reconciliation_clear_event(account_id, updated_by="telegram", data_dir=DATA_DIR)
+                    clear_kwargs = {"updated_by": "telegram", "data_dir": DATA_DIR}
+                    if account_id == "kr_mock":
+                        clear_kwargs["symbol"] = _resolve_active_symbol(account_id)
+                    write_reconciliation_clear_event(account_id, **clear_kwargs)
                 except Exception as exc:  # noqa: BLE001
                     self.logger.warning(f"Telegram reconciliation clear write failed for {account_id}; continuing: {exc}")
                     await self._safe_edit_text(
@@ -324,7 +348,10 @@ class TelegramControlBot:
                     )
                     return
                 try:
-                    write_pause_clear_event(account_id, reason, updated_by="telegram", data_dir=DATA_DIR)
+                    clear_kwargs = {"updated_by": "telegram", "data_dir": DATA_DIR}
+                    if account_id == "kr_mock":
+                        clear_kwargs["symbol"] = _resolve_active_symbol(account_id)
+                    write_pause_clear_event(account_id, reason, **clear_kwargs)
                 except Exception as exc:  # noqa: BLE001
                     self.logger.warning(f"Telegram pause clear write failed for {account_id}; continuing: {exc}")
                     await self._safe_edit_text(

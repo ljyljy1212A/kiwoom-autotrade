@@ -42,7 +42,7 @@ class LinuxStartupSmokeTests(unittest.TestCase):
              patch.object(app_main, "run_symbol_engines", new=AsyncMock(return_value=None)), \
              patch.object(app_main, "ProcessLock", return_value=worker_lock), \
              patch.object(app_main, "_acquire_worker_pid"), \
-             patch.object(app_main, "_write_worker_status"):
+             patch.object(app_main, "_write_worker_status") as write_status:
             asyncio.run(app_main.main())
 
         worker_lock.acquire.assert_called_once()
@@ -50,6 +50,8 @@ class LinuxStartupSmokeTests(unittest.TestCase):
         telegram.start_polling.assert_awaited_once()
         telegram.stop.assert_awaited_once()
         client.close.assert_awaited_once()
+        self.assertEqual(write_status.call_args_list[0].args[2], [])
+        self.assertEqual(write_status.call_args_list[-1].args[2], [])
 
 
 if __name__ == "__main__":
