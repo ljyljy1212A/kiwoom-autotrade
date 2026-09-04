@@ -466,6 +466,148 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((data_dir / "control" / "kr_mock.control.json").exists())
         self.assertTrue(query.answered)
 
+    async def test_validate_gate_mock_start_action_returns_confirmation(self):
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], _Logger())
+        query, update = self._callback_update("action|kr_mock|start")
+
+        await bot._handle_callback(update, SimpleNamespace())
+
+        self.assertTrue(any("Confirm enable auto-trading" in text for text, _ in query.message.edits))
+
+    async def test_validate_gate_mock_stop_action_returns_confirmation(self):
+        bot = _bot({"111"}, [AccountInfo("us_mock", "US Mock", "US")], _Logger())
+        query, update = self._callback_update("action|us_mock|stop")
+
+        await bot._handle_callback(update, SimpleNamespace())
+
+        self.assertTrue(any("Confirm disable auto-trading" in text for text, _ in query.message.edits))
+
+    async def test_validate_gate_mock_confirm_yes_writes_control_state(self):
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], _Logger())
+        query, update = self._callback_update("confirm|kr_mock|start|yes")
+        with patch.object(bot_module, "write_control_state", return_value={"auto_trading_enabled": True}) as control_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_called_once_with(
+            "kr_mock", auto_trading_enabled=True, updated_by="telegram", data_dir=bot_module.DATA_DIR
+        )
+
+    async def test_validate_gate_mock_reconciliation_clear_writes_event(self):
+        bot = _bot({"111"}, [AccountInfo("us_mock", "US Mock", "US")], _Logger())
+        query, update = self._callback_update("clear_reconciliation_pause|us_mock")
+        with patch.object(bot_module, "write_reconciliation_clear_event") as clear_event:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        clear_event.assert_called_once_with("us_mock", updated_by="telegram", data_dir=bot_module.DATA_DIR)
+
+    async def test_validate_gate_mock_valid_pause_clear_writes_event(self):
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], _Logger())
+        query, update = self._callback_update("clear_pause|kr_mock|fixed_port_degraded")
+        with patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        pause_write.assert_called_once_with("kr_mock", "fixed_port_degraded", updated_by="telegram", data_dir=bot_module.DATA_DIR)
+
+    async def test_validate_gate_mock_invalid_pause_clear_does_not_write(self):
+        bot = _bot({"111"}, [AccountInfo("us_mock", "US Mock", "US")], _Logger())
+        query, update = self._callback_update("clear_pause|us_mock|not_allowed")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
+    def _protected_bot(self):
+        return _bot({"111"}, [AccountInfo("protected_account", "Protected", "KR")], _Logger())
+
+    async def test_validate_gate_protected_start_is_rejected(self):
+        bot = self._protected_bot()
+        query, update = self._callback_update("action|protected_account|start")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
+    async def test_validate_gate_protected_stop_is_rejected(self):
+        bot = self._protected_bot()
+        query, update = self._callback_update("action|protected_account|stop")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
+    async def test_validate_gate_protected_reconciliation_clear_is_rejected(self):
+        bot = self._protected_bot()
+        query, update = self._callback_update("clear_reconciliation_pause|protected_account")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
+    async def test_validate_gate_protected_pause_clear_is_rejected(self):
+        bot = self._protected_bot()
+        query, update = self._callback_update("clear_pause|protected_account|fixed_port_degraded")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
+    async def test_validate_gate_protected_forged_confirm_is_rejected(self):
+        bot = self._protected_bot()
+        query, update = self._callback_update("confirm|protected_account|start|yes")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
+    async def test_validate_gate_protected_replayed_confirm_is_rejected(self):
+        bot = self._protected_bot()
+        for _ in range(2):
+            query, update = self._callback_update("confirm|protected_account|stop|yes")
+            with patch.object(bot_module, "write_control_state") as control_write, \
+                 patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+                 patch.object(bot_module, "write_pause_clear_event") as pause_write:
+                await bot._handle_callback(update, SimpleNamespace())
+
+            control_write.assert_not_called()
+            reconciliation_write.assert_not_called()
+            pause_write.assert_not_called()
+
+    async def test_validate_gate_unknown_account_is_rejected(self):
+        bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], _Logger())
+        query, update = self._callback_update("confirm|unknown_account|start|yes")
+        with patch.object(bot_module, "write_control_state") as control_write, \
+             patch.object(bot_module, "write_reconciliation_clear_event") as reconciliation_write, \
+             patch.object(bot_module, "write_pause_clear_event") as pause_write:
+            await bot._handle_callback(update, SimpleNamespace())
+
+        control_write.assert_not_called()
+        reconciliation_write.assert_not_called()
+        pause_write.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
