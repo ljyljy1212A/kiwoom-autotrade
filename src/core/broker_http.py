@@ -32,6 +32,7 @@ _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
 # retires. Nine seconds covers the observed release tail without turning an
 # unavailable broker into an unbounded wait.
 _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 9.0
+_FIXED_PORT_HOLDOFF_SEC = 160.0
 _FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC = 90.0
 _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
 _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
@@ -197,9 +198,10 @@ def _is_address_in_use(exc: OSError) -> bool:
 class FixedPortCollisionError(OSError):
     """An exhausted fixed-port address-in-use collision."""
 
-    def __init__(self, original: OSError):
+    def __init__(self, original: OSError, *, holdoff_active: bool = False):
         super().__init__(*original.args)
         self.original = original
+        self.holdoff_active = holdoff_active
 
 
 class _FixedPortConnectDiagnostics:
@@ -253,6 +255,8 @@ class FixedPortDegradedState:
     next_recovery_probe_at: datetime
     entry_alert_fired: bool = False
     last_ongoing_status_at: datetime | None = None
+    local_port: int | None = None
+    holdoff_until: datetime | None = None
 
 
 _FIXED_PORT_DEGRADED_STATES: dict[str, FixedPortDegradedState] = {}
@@ -277,10 +281,12 @@ def _fixed_port_degraded_state_path(account_id: str) -> Path:
 def _fixed_port_degraded_payload(state: FixedPortDegradedState) -> dict:
     return {
         "account": state.account_id,
+        "local_port": state.local_port,
         "entered_at": state.entered_at.isoformat(),
         "last_collision_at": state.last_collision_at.isoformat(),
         "operation": state.operation,
         "next_recovery_probe_at": state.next_recovery_probe_at.isoformat(),
+        "holdoff_until": state.holdoff_until.isoformat() if state.holdoff_until else None,
         "entry_alert_fired": state.entry_alert_fired,
         "last_ongoing_status_at": (
             state.last_ongoing_status_at.isoformat() if state.last_ongoing_status_at else None
@@ -337,6 +343,11 @@ def restore_fixed_port_degraded_state(
             last_ongoing_status_at=(
                 _parse_fixed_port_degraded_timestamp(ongoing_raw) if ongoing_raw is not None else None
             ),
+            local_port=payload.get("local_port"),
+            holdoff_until=(
+                _parse_fixed_port_degraded_timestamp(payload["holdoff_until"])
+                if payload.get("holdoff_until") is not None else None
+            ),
         )
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         state = FixedPortDegradedState(
@@ -355,9 +366,12 @@ def enter_fixed_port_degraded_state(
     account_id: str,
     operation: str,
     *,
+    local_port: int | None = None,
+    market: str | None = None,
     now: datetime | None = None,
 ) -> FixedPortDegradedState:
     timestamp = now or datetime.now(timezone.utc)
+    holdoff_until = timestamp + timedelta(seconds=_FIXED_PORT_HOLDOFF_SEC)
     with _FIXED_PORT_DEGRADED_STATES_LOCK:
         existing = _FIXED_PORT_DEGRADED_STATES.get(account_id)
         if existing is None:
@@ -367,12 +381,48 @@ def enter_fixed_port_degraded_state(
                 last_collision_at=timestamp,
                 operation=operation,
                 next_recovery_probe_at=timestamp,
+                local_port=local_port,
+                holdoff_until=holdoff_until,
             )
         else:
-            state = replace(existing, last_collision_at=max(existing.last_collision_at, timestamp))
+            state = replace(
+                existing,
+                last_collision_at=max(existing.last_collision_at, timestamp),
+                local_port=local_port if local_port is not None else existing.local_port,
+                holdoff_until=holdoff_until,
+            )
         _FIXED_PORT_DEGRADED_STATES[account_id] = state
         _persist_fixed_port_degraded_state(state)
         return state
+
+
+def is_fixed_port_holdoff_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, FixedPortCollisionError):
+            return bool(getattr(current, "holdoff_active", False))
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def fixed_port_holdoff_active(
+    account_id: str,
+    local_port: int,
+    *,
+    now: datetime | None = None,
+) -> FixedPortDegradedState | None:
+    timestamp = now or datetime.now(timezone.utc)
+    state = get_fixed_port_degraded_state(account_id)
+    if (
+        state is None
+        or state.local_port != local_port
+        or state.holdoff_until is None
+        or state.holdoff_until <= timestamp
+    ):
+        return None
+    return state
 
 
 def get_fixed_port_degraded_state(account_id: str) -> FixedPortDegradedState | None:
@@ -556,9 +606,11 @@ def _connect_with_reuseaddr(
 
 
 class _FixedPortAnyIOBackend(AnyIOBackend):
-    def __init__(self, local_port: int, logger=None):
+    def __init__(self, local_port: int, logger=None, account_id: str | None = None, market: str | None = None):
         self.local_port = local_port
         self.logger = logger
+        self.account_id = account_id
+        self.market = market
         self._close_state = _CloseCompletionState()
         self._connect_lock = asyncio.Lock()
         self._connect_diagnostics = _FixedPortConnectDiagnostics(local_port)
@@ -580,6 +632,23 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
         }
         with map_exceptions(exc_map):
             async with self._connect_lock:
+                holdoff = (
+                    fixed_port_holdoff_active(self.account_id, self.local_port)
+                    if self.account_id is not None else None
+                )
+                if holdoff is not None:
+                    operation = _HTTP_OPERATION_CONTEXT.get()
+                    if self.logger is not None:
+                        self.logger.warning(
+                            "Fixed-port HTTP holdoff skip: "
+                            f"account={self.account_id} market={self.market} "
+                            f"local_port={self.local_port} operation={operation} "
+                            f"holdoff_until={holdoff.holdoff_until.isoformat()} skipped=true"
+                        )
+                    raise FixedPortCollisionError(
+                        OSError(10048, "fixed-port HTTP holdoff active"),
+                        holdoff_active=True,
+                    )
                 try:
                     await asyncio.wait_for(
                         self._close_state.event.wait(),
@@ -616,7 +685,7 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
 class FixedPortAsyncHTTPTransport(httpx.AsyncHTTPTransport):
     """Direct HTTP transport that binds every TCP connection to one port."""
 
-    def __init__(self, local_port: int, logger=None):
+    def __init__(self, local_port: int, logger=None, account_id: str | None = None, market: str | None = None):
         ssl_context = httpx.create_ssl_context(verify=True, cert=None, trust_env=True)
         self._pool = httpcore.AsyncConnectionPool(
             ssl_context=ssl_context,
@@ -626,16 +695,24 @@ class FixedPortAsyncHTTPTransport(httpx.AsyncHTTPTransport):
             http1=True,
             http2=False,
             retries=0,
-            network_backend=_FixedPortAnyIOBackend(local_port, logger),
+            network_backend=_FixedPortAnyIOBackend(local_port, logger, account_id, market),
         )
 
 
 class BrokerHTTPGate:
     """Serialize one worker's broker HTTP lifecycle and bind its source port."""
 
-    def __init__(self, local_port: int | None, logger=None):
+    def __init__(
+        self,
+        local_port: int | None,
+        logger=None,
+        account_id: str | None = None,
+        market: str | None = None,
+    ):
         self.local_port = local_port
         self.logger = logger
+        self.account_id = account_id
+        self.market = market
         self.lock = asyncio.Lock() if local_port is not None else None
         self._client: httpx.AsyncClient | None = None
 
@@ -649,7 +726,7 @@ class BrokerHTTPGate:
         assert self.lock is not None
         async with _diagnostic_lock(self.lock, "http_gate.lock", self.logger):
             if self._client is None:
-                transport = FixedPortAsyncHTTPTransport(self.local_port, self.logger)
+                transport = FixedPortAsyncHTTPTransport(self.local_port, self.logger, self.account_id, self.market)
                 self._client = httpx.AsyncClient(timeout=timeout, transport=transport)
             yield self._client
 

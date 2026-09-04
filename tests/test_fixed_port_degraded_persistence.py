@@ -30,10 +30,12 @@ def test_degraded_state_transitions_persist_all_required_fields(tmp_path):
 
     assert payload == {
         "account": "us_mock",
+        "local_port": None,
         "entered_at": entered_at.isoformat(),
         "last_collision_at": entered_at.isoformat(),
         "operation": "rest",
         "next_recovery_probe_at": (ongoing_at + timedelta(seconds=90)).isoformat(),
+        "holdoff_until": (entered_at + timedelta(seconds=160)).isoformat(),
         "entry_alert_fired": True,
         "last_ongoing_status_at": ongoing_at.isoformat(),
     }

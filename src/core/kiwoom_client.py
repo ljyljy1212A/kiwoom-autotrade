@@ -22,6 +22,7 @@ from src.core.broker_http import (
     enter_fixed_port_degraded_state,
     http_operation,
     is_fixed_port_collision_error,
+    is_fixed_port_holdoff_error,
 )
 from src.data.order_attempts import OrderAttemptStore, order_attempt_store
 from src.core.token_manager import TokenManager
@@ -118,7 +119,12 @@ class KiwoomClient:
         self._order_authority = order_authority
         self._order_attempt_store: OrderAttemptStore | None = None
         http_port = 10000 if mode == "mock" and market == "KR" else 443 if mode == "mock" and market == "US" else None
-        self._http_gate = BrokerHTTPGate(http_port, logger)
+        self._http_gate = BrokerHTTPGate(
+            http_port,
+            logger,
+            account_id=account_no,
+            market=market,
+        )
         self.token_mgr = TokenManager(
             self.domain,
             appkey,
@@ -233,8 +239,14 @@ class KiwoomClient:
                         self.mode,
                     )
                     and is_fixed_port_collision_error(e)
+                    and not is_fixed_port_holdoff_error(e)
                 ):
-                    enter_fixed_port_degraded_state(self.account_no, "rest")
+                    enter_fixed_port_degraded_state(
+                        self.account_no,
+                        "rest",
+                        local_port=self._http_gate.local_port,
+                        market=self.market,
+                    )
                 raise RetryableError(f"{api_id} 네트워크 오류: {e}") from e
 
         if resp.status_code >= 500:
