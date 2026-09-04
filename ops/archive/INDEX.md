@@ -45,6 +45,7 @@
 - `PROPOSAL_v148_ADDENDUM_v150_diff_draft.md` — v148/v150 — Text-only exact-diff draft for the US WebSocket local-port proposal.
 - `PROPOSAL_v148_us_mock_port_separation.md` — v148 — Unapplied proposal to separate US mock HTTP and WebSocket source ports.
 - `PROPOSAL_v217_us_mock_10048_residual_mitigation.md` — Round 217 — Proposal for residual US mock `WinError 10048` mitigation after prior fixes.
+- `PROPOSAL_v2018_fixed_port_holdoff_design.md` — Round 2120 — Fixed-port-conflict holdoff/retry design proposal (Option B); Status: Confirmed fully implemented in `src/core/broker_http.py` as of Round 2118 (160s holdoff, ~9s retry budget, exponential backoff with jitter, skip-while-degraded) — archived, no gap remaining. Date archived: 2026-09-04 (Round 2120).
 
 ## Rate limits, monitoring, and supervisory controls
 
