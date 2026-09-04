@@ -55,3 +55,15 @@ pytest_tmp/
 /pytest_full_run_round[0-9]*.log
 /.pytest_tmp*/
 /.pytest-tmp*/
+
+# Routine operational files intentionally retained outside normal source tracking
+/.env.example
+/dashboard/control.html
+/dashboard/index.html
+/dashboard/start_us_mock_worker.sh
+/diagnostics/port10000_capture_20260819_131453.log
+/diagnostics/port10000_capture_20260819_141602.log
+/diagnostics/port10000_capture_20260819_141714.log
+/diagnostics/round274_alert_test.log
+/diagnostics/round274_scratch_status_20260822/worker_kr_mock.status.json
+/ops/archive/OPERATOR_RECORD_wrapup_through_reconciliation_r2.md
