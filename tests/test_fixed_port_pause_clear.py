@@ -101,7 +101,7 @@ def test_pre_guard_runs_while_degraded_and_event_is_not_double_processed(tmp_pat
         write_pause_clear_event("us_mock", FIXED_PORT_DEGRADED_PAUSE_REASON, data_dir=tmp_path)
 
         await engine._tick()
-        engine._apply_reconciliation_clear_event()
+        await engine._apply_reconciliation_clear_event()
 
         assert broker_http.get_fixed_port_degraded_state("us_mock") is not None
         engine.telegram.safe_send.assert_awaited_once()
@@ -127,7 +127,7 @@ def test_preexisting_event_is_not_replayed_and_non_fixed_handler_is_unchanged(tm
         engine._pause_reason = "broker_quantity_unattributed"
         engine._trading_paused = True
         write_pause_clear_event("us_mock", "broker_quantity_unattributed", data_dir=tmp_path)
-        engine._apply_reconciliation_clear_event()
+        await engine._apply_reconciliation_clear_event()
         assert engine._pause_reason == ""
         assert engine._trading_paused is False
     asyncio.run(check())

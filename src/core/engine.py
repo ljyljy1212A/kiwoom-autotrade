@@ -1350,8 +1350,8 @@ class AccountEngine:
 
     async def sync_broker_state(self, force_balance: bool = False) -> bool:
         """Apply cumulative REST fills as idempotent deltas, then reconcile balance."""
+        await self._apply_reconciliation_clear_event()
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
-            self._apply_reconciliation_clear_event()
             # A broker-confirmed fill changes the durable tranche ledger.  The
             # broker balance snapshot and its dashboard event must follow that
             # transition in this same synchronization pass; otherwise the UI
@@ -1590,18 +1590,39 @@ class AccountEngine:
         self.ctx.logger.error(message)
         await self.telegram.safe_send(message, event=f"fixed-port-clear-refused account={self.ctx.account_id}")
 
-    def _apply_reconciliation_clear_event(self) -> None:
+    async def _apply_reconciliation_clear_event(self) -> None:
         event_id, reason = self._pause_clear_event()
         if not event_id or not reason or event_id == self._balance_gate.pause_clear_event_id:
             return
-        self._balance_gate.pause_clear_event_id = event_id
         if reason == FIXED_PORT_DEGRADED_PAUSE_REASON:
             return
-        matched = False
-        for engine in list(self._balance_gate.engines):
-            if engine._pause_reason != reason:
-                continue
-            matched = True
+        matching_engines = [
+            engine for engine in list(self._balance_gate.engines)
+            if engine._pause_reason == reason
+        ]
+        if not matching_engines:
+            self.ctx.logger.warning(f"Operator clear for {reason} matched no engines")
+            return
+        for engine in matching_engines:
+            symbol = engine.ctx.strategy.symbol
+            try:
+                snapshot = await engine._build_reconciliation_clearance_snapshot(
+                    symbol, max_balance_age_sec=1.0,
+                )
+                result = evaluate_reconciliation_clearance(snapshot)
+            except Exception as exc:
+                self.ctx.logger.warning(
+                    f"Operator clear for {reason} deferred for {symbol}: clearance check failed: {exc}"
+                )
+                return
+            if not result.cleared:
+                details = "; ".join(failure.detail for failure in result.failures)
+                self.ctx.logger.warning(
+                    f"Operator clear for {reason} deferred for {symbol}: {details}"
+                )
+                return
+        self._balance_gate.pause_clear_event_id = event_id
+        for engine in matching_engines:
             engine._trading_paused = False
             if reason in {"broker_quantity_unattributed", "tranche_rebuild_ambiguous"}:
                 engine._tranche_sell_paused = False
@@ -1609,8 +1630,6 @@ class AccountEngine:
             engine.ctx.logger.info(
                 f"Applied operator clear for {reason} on {engine.ctx.strategy.symbol}"
             )
-        if not matched:
-            self.ctx.logger.warning(f"Operator clear for {reason} matched no engines")
 
     def _record_balance_rate_limit(self) -> None:
         """Apply one shared exponential cooldown to all tasks on this account."""

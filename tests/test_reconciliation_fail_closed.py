@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +17,12 @@ from src.core.control_state import (
     write_pause_clear_event,
     write_reconciliation_clear_event,
 )
-from src.core.engine import AccountEngine, _AccountBalanceGate
+from src.core.engine import (
+    AccountEngine,
+    NormalizedBalanceHolding,
+    ReconciliationIncompleteReason,
+    _AccountBalanceGate,
+)
 from src.utils.exceptions import RetryableError
 
 
@@ -54,6 +60,27 @@ def _sync_engine(account, data_dir, *, balance_only, reason=""):
         token_mgr=SimpleNamespace(appkey="test-key"),
     )
     return engine
+
+
+def _clearance_snapshot(account, symbol, *, incomplete=False):
+    return SimpleNamespace(
+        account_id=account,
+        symbol=symbol,
+        market="KR",
+        balance_api_id="kt00018",
+        balance_fetched_fresh=True,
+        balance_from_shared_cache=False,
+        balance_recognized=True,
+        balance_received_at=time.monotonic(),
+        max_balance_age_sec=1.0,
+        holding=NormalizedBalanceHolding(symbol, 0.0, 0.0),
+        incomplete_reasons=(
+            frozenset({ReconciliationIncompleteReason.BROKER_FILL_CATCHUP})
+            if incomplete else frozenset()
+        ),
+        unresolved_order_ids=(),
+        unattributed_collision_order_ids=(),
+    )
 
 
 def test_below_threshold_does_not_pause():
@@ -98,7 +125,10 @@ def test_persisted_clear_clears_only_reconciliation_pause(tmp_path):
     first._balance_gate.engines.update({first, second})
     first._record_reconciliation_failure(RuntimeError("x"))
     write_reconciliation_clear_event("kr_mock", data_dir=tmp_path)
-    first._apply_reconciliation_clear_event()
+    first._build_reconciliation_clearance_snapshot = AsyncMock(
+        return_value=_clearance_snapshot("kr_mock", "033320")
+    )
+    asyncio.run(first._apply_reconciliation_clear_event())
     assert first._pause_reason == ""
     assert second._pause_reason == "broker_quantity_unattributed"
 
@@ -114,7 +144,10 @@ def test_reason_scoped_clear_clears_matching_engines_only(tmp_path):
     gate.engines.update({first, second, third})
 
     write_pause_clear_event("kr_mock", "tranche_rebuild_ambiguous", data_dir=tmp_path)
-    first._apply_reconciliation_clear_event()
+    second._build_reconciliation_clearance_snapshot = AsyncMock(
+        return_value=_clearance_snapshot("kr_mock", "003480")
+    )
+    asyncio.run(first._apply_reconciliation_clear_event())
 
     assert first._pause_reason == "broker_quantity_unattributed"
     assert first._trading_paused is True
@@ -134,7 +167,10 @@ def test_legacy_reconciliation_event_is_inferred(tmp_path):
         encoding="utf-8",
     )
 
-    engine._apply_reconciliation_clear_event()
+    engine._build_reconciliation_clearance_snapshot = AsyncMock(
+        return_value=_clearance_snapshot("kr_mock", "033320")
+    )
+    asyncio.run(engine._apply_reconciliation_clear_event())
 
     assert engine._pause_reason == ""
     assert engine._trading_paused is False
@@ -161,15 +197,129 @@ def test_normal_fixed_port_clear_event_does_not_bypass_clearance(tmp_path):
     try:
         write_pause_clear_event("kr_mock", FIXED_PORT_DEGRADED_PAUSE_REASON, data_dir=tmp_path)
 
-        matching_engine._apply_reconciliation_clear_event()
+        asyncio.run(matching_engine._apply_reconciliation_clear_event())
 
         assert get_fixed_port_degraded_state("kr_mock") is not None
         assert get_fixed_port_degraded_state("us_mock") is not None
-        matching_engine._apply_reconciliation_clear_event()
+        asyncio.run(matching_engine._apply_reconciliation_clear_event())
         assert other_engine.ctx.account_id == "us_mock"
     finally:
         clear_fixed_port_degraded_state("kr_mock")
         clear_fixed_port_degraded_state("us_mock")
+
+
+def test_clear_event_fresh_check_clears_all_matching_engines(tmp_path):
+    async def check():
+        first = _engine("kr_mock", "033320", tmp_path, reason="broker_quantity_unattributed")
+        second = _engine("kr_mock", "003480", tmp_path, reason="broker_quantity_unattributed")
+        first._trading_paused = second._trading_paused = True
+        first._tranche_sell_paused = second._tranche_sell_paused = True
+        gate = _AccountBalanceGate()
+        first._balance_gate = second._balance_gate = gate
+        gate.engines.update({first, second})
+        first._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "033320")
+        )
+        second._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "003480")
+        )
+        event = write_pause_clear_event(
+            "kr_mock", "broker_quantity_unattributed", data_dir=tmp_path,
+        )
+
+        await first._apply_reconciliation_clear_event()
+
+        assert gate.pause_clear_event_id == event["event_id"]
+        assert first._pause_reason == second._pause_reason == ""
+        assert first._trading_paused is False
+        assert second._trading_paused is False
+        assert first._tranche_sell_paused is False
+        assert second._tranche_sell_paused is False
+    asyncio.run(check())
+
+
+def test_clear_event_fresh_check_failure_is_all_or_nothing(tmp_path):
+    async def check():
+        first = _engine("kr_mock", "033320", tmp_path, reason="broker_quantity_unattributed")
+        second = _engine("kr_mock", "003480", tmp_path, reason="broker_quantity_unattributed")
+        gate = _AccountBalanceGate()
+        first._balance_gate = second._balance_gate = gate
+        gate.engines.update({first, second})
+        first._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "033320")
+        )
+        second._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "003480", incomplete=True)
+        )
+        write_pause_clear_event("kr_mock", "broker_quantity_unattributed", data_dir=tmp_path)
+
+        await first._apply_reconciliation_clear_event()
+
+        assert gate.pause_clear_event_id == ""
+        assert first._trading_paused is True
+        assert second._trading_paused is True
+        assert first._pause_reason == second._pause_reason == "broker_quantity_unattributed"
+        assert any("003480" in call.args[0] for call in first.ctx.logger.warning.call_args_list)
+    asyncio.run(check())
+
+
+def test_clear_event_fresh_check_exception_is_logged_and_retried(tmp_path):
+    async def check():
+        engine = _engine("kr_mock", "033320", tmp_path, reason="broker_quantity_unattributed")
+        engine._build_reconciliation_clearance_snapshot = AsyncMock(
+            side_effect=RuntimeError("fresh balance unavailable")
+        )
+        write_pause_clear_event("kr_mock", "broker_quantity_unattributed", data_dir=tmp_path)
+
+        await engine._apply_reconciliation_clear_event()
+
+        assert engine._balance_gate.pause_clear_event_id == ""
+        assert engine._trading_paused is True
+        assert engine._pause_reason == "broker_quantity_unattributed"
+        assert any("033320" in call.args[0] for call in engine.ctx.logger.warning.call_args_list)
+        assert any("fresh balance unavailable" in call.args[0] for call in engine.ctx.logger.warning.call_args_list)
+    asyncio.run(check())
+
+
+def test_clear_event_with_no_matching_engines_remains_unconsumed(tmp_path):
+    async def check():
+        engine = _engine("kr_mock", "033320", tmp_path)
+        write_pause_clear_event("kr_mock", "broker_quantity_unattributed", data_dir=tmp_path)
+
+        await engine._apply_reconciliation_clear_event()
+
+        assert engine._balance_gate.pause_clear_event_id == ""
+        assert any("matched no engines" in call.args[0] for call in engine.ctx.logger.warning.call_args_list)
+    asyncio.run(check())
+
+
+def test_fixed_port_clear_event_still_short_circuits_fresh_check(tmp_path):
+    async def check():
+        engine = _engine("kr_mock", "033320", tmp_path)
+        engine._build_reconciliation_clearance_snapshot = AsyncMock()
+        write_pause_clear_event("kr_mock", FIXED_PORT_DEGRADED_PAUSE_REASON, data_dir=tmp_path)
+
+        await engine._apply_reconciliation_clear_event()
+
+        assert engine._balance_gate.pause_clear_event_id == ""
+        engine._build_reconciliation_clearance_snapshot.assert_not_awaited()
+    asyncio.run(check())
+
+
+def test_sync_broker_state_runs_clearance_before_sync_lock(tmp_path):
+    async def check():
+        engine = _sync_engine("kr_mock", tmp_path, balance_only=True)
+        observed_lock_states = []
+
+        async def apply_clear_event():
+            observed_lock_states.append(engine._sync_lock.locked())
+
+        engine._apply_reconciliation_clear_event = apply_clear_event
+        engine._reconcile_balance = AsyncMock()
+
+        assert await engine.sync_broker_state() is True
+        assert observed_lock_states == [False]
+    asyncio.run(check())
 
 
 class SyncBrokerStateIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -214,6 +364,9 @@ class SyncBrokerStateIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 reason="broker_reconciliation_unavailable",
             )
             write_reconciliation_clear_event("kr_mock", data_dir=data_dir)
+            engine._build_reconciliation_clearance_snapshot = AsyncMock(
+                return_value=_clearance_snapshot("kr_mock", "005930")
+            )
             engine._reconcile_balance = AsyncMock(side_effect=RetryableError("still unavailable"))
 
             self.assertFalse(await engine.sync_broker_state())
