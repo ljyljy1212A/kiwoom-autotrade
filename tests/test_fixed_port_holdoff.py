@@ -38,6 +38,123 @@ class FixedPortHoldoffTest(unittest.IsolatedAsyncioTestCase):
         for account in ("holdoff-account", "caller-account", "shared-account"):
             clear_fixed_port_degraded_state(account)
 
+    def _make_fake_gate(self, logger=None):
+        clients = []
+
+        def make_client(*args, **kwargs):
+            client = Mock()
+            client.aclose = AsyncMock()
+            clients.append(client)
+            return client
+
+        gate = BrokerHTTPGate(
+            443,
+            logger=logger or Mock(),
+            account_id="holdoff-account",
+            market="US",
+        )
+        return gate, clients, make_client
+
+    async def _raise_gate_failure(self, gate):
+        with self.assertRaises(RuntimeError):
+            async with gate.client(timeout=1):
+                raise RuntimeError("request failed")
+
+    async def test_client_recycle_below_threshold_preserves_client_identity(self):
+        gate, clients, make_client = self._make_fake_gate()
+        with patch.object(broker_http, "FixedPortAsyncHTTPTransport", return_value=Mock()), patch.object(
+            broker_http, "httpx"
+        ) as httpx_module, patch.object(broker_http, "fixed_port_holdoff_active", return_value=None):
+            httpx_module.AsyncClient.side_effect = make_client
+            await self._raise_gate_failure(gate)
+            await self._raise_gate_failure(gate)
+            self.assertEqual(len(clients), 1)
+            self.assertEqual(clients[0].aclose.await_count, 0)
+            async with gate.client(timeout=1) as client:
+                self.assertIs(client, clients[0])
+
+    async def test_client_recycle_at_threshold_without_holdoff_replaces_client(self):
+        gate, clients, make_client = self._make_fake_gate()
+        with patch.object(broker_http, "FixedPortAsyncHTTPTransport", return_value=Mock()), patch.object(
+            broker_http, "httpx"
+        ) as httpx_module, patch.object(broker_http, "fixed_port_holdoff_active", return_value=None):
+            httpx_module.AsyncClient.side_effect = make_client
+            for _ in range(3):
+                await self._raise_gate_failure(gate)
+            self.assertEqual(clients[0].aclose.await_count, 1)
+            self.assertEqual(gate._consecutive_failures, 0)
+            async with gate.client(timeout=1) as client:
+                self.assertIsNot(client, clients[0])
+                self.assertIs(client, clients[1])
+
+    async def test_client_recycle_at_threshold_with_holdoff_preserves_client(self):
+        gate, clients, make_client = self._make_fake_gate()
+        now = datetime.now(timezone.utc)
+        holdoff = FixedPortDegradedState(
+            account_id="holdoff-account",
+            entered_at=now,
+            last_collision_at=now,
+            operation="rest",
+            next_recovery_probe_at=now,
+            local_port=443,
+            holdoff_until=now + timedelta(seconds=160),
+        )
+        with patch.object(broker_http, "FixedPortAsyncHTTPTransport", return_value=Mock()), patch.object(
+            broker_http, "httpx"
+        ) as httpx_module, patch.object(
+            broker_http, "fixed_port_holdoff_active", return_value=holdoff
+        ):
+            httpx_module.AsyncClient.side_effect = make_client
+            for _ in range(3):
+                await self._raise_gate_failure(gate)
+            self.assertEqual(clients[0].aclose.await_count, 0)
+            self.assertEqual(gate._consecutive_failures, 3)
+            async with gate.client(timeout=1) as client:
+                self.assertIs(client, clients[0])
+
+    async def test_client_recycle_failure_counter_resets_after_success(self):
+        gate, clients, make_client = self._make_fake_gate()
+        with patch.object(broker_http, "FixedPortAsyncHTTPTransport", return_value=Mock()), patch.object(
+            broker_http, "httpx"
+        ) as httpx_module, patch.object(broker_http, "fixed_port_holdoff_active", return_value=None):
+            httpx_module.AsyncClient.side_effect = make_client
+            await self._raise_gate_failure(gate)
+            await self._raise_gate_failure(gate)
+            async with gate.client(timeout=1):
+                pass
+            self.assertEqual(gate._consecutive_failures, 0)
+            await self._raise_gate_failure(gate)
+            self.assertEqual(gate._consecutive_failures, 1)
+            self.assertEqual(clients[0].aclose.await_count, 0)
+
+    async def test_close_still_closes_and_nulls_client_with_failure_counter(self):
+        gate, clients, make_client = self._make_fake_gate()
+        with patch.object(broker_http, "FixedPortAsyncHTTPTransport", return_value=Mock()), patch.object(
+            broker_http, "httpx"
+        ) as httpx_module:
+            httpx_module.AsyncClient.side_effect = make_client
+            async with gate.client(timeout=1):
+                pass
+            gate._consecutive_failures = 2
+            await gate.close()
+            self.assertEqual(clients[0].aclose.await_count, 1)
+            self.assertIsNone(gate._client)
+
+    async def test_client_recycle_warning_is_rate_limited(self):
+        logger = Mock()
+        gate, clients, make_client = self._make_fake_gate(logger=logger)
+        with patch.object(broker_http, "FixedPortAsyncHTTPTransport", return_value=Mock()), patch.object(
+            broker_http, "httpx"
+        ) as httpx_module, patch.object(broker_http, "fixed_port_holdoff_active", return_value=None):
+            httpx_module.AsyncClient.side_effect = make_client
+            for _ in range(3):
+                await self._raise_gate_failure(gate)
+            for _ in range(3):
+                await self._raise_gate_failure(gate)
+            self.assertEqual(clients[0].aclose.await_count, 1)
+            self.assertEqual(clients[1].aclose.await_count, 1)
+            self.assertEqual(logger.warning.call_count, 1)
+
     def test_fixed_port_collision_enters_160_second_account_port_holdoff(self):
         entered = datetime(2026, 9, 4, 0, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as temp_dir:

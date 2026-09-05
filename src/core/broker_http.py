@@ -34,6 +34,7 @@ _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
 _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 9.0
 _FIXED_PORT_HOLDOFF_SEC = 160.0
 _FIXED_PORT_ONGOING_EVENT_INTERVAL_SEC = 15 * 60
+_FIXED_PORT_CLIENT_RECYCLE_THRESHOLD = 3
 _FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC = 90.0
 _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
 _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
@@ -745,6 +746,8 @@ class BrokerHTTPGate:
         self.market = market
         self.lock = asyncio.Lock() if local_port is not None else None
         self._client: httpx.AsyncClient | None = None
+        self._consecutive_failures = 0
+        self._last_client_recycle_log_at: datetime | None = None
 
     @asynccontextmanager
     async def client(self, timeout: float) -> AsyncIterator[httpx.AsyncClient]:
@@ -758,7 +761,45 @@ class BrokerHTTPGate:
             if self._client is None:
                 transport = FixedPortAsyncHTTPTransport(self.local_port, self.logger, self.account_id, self.market)
                 self._client = httpx.AsyncClient(timeout=timeout, transport=transport)
-            yield self._client
+            try:
+                yield self._client
+            except Exception:
+                self._consecutive_failures += 1
+                holdoff = (
+                    fixed_port_holdoff_active(self.account_id, self.local_port)
+                    if self.account_id is not None else None
+                )
+                if (
+                    self._consecutive_failures >= _FIXED_PORT_CLIENT_RECYCLE_THRESHOLD
+                    and holdoff is None
+                    and self._client is not None
+                ):
+                    client = self._client
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        if self.logger is not None:
+                            self.logger.exception("Fixed-port HTTP client recycle close failed")
+                    finally:
+                        self._client = None
+                    self._consecutive_failures = 0
+                    now = datetime.now(timezone.utc)
+                    log_recycle = (
+                        self._last_client_recycle_log_at is None
+                        or now - self._last_client_recycle_log_at
+                        >= timedelta(seconds=_FIXED_PORT_ONGOING_EVENT_INTERVAL_SEC)
+                    )
+                    if self.logger is not None and log_recycle:
+                        self.logger.warning(
+                            "Fixed-port HTTP client recycled after consecutive failures: "
+                            f"account={self.account_id} market={self.market} "
+                            f"local_port={self.local_port} failures={_FIXED_PORT_CLIENT_RECYCLE_THRESHOLD}"
+                        )
+                    if log_recycle:
+                        self._last_client_recycle_log_at = now
+                raise
+            else:
+                self._consecutive_failures = 0
 
     async def close(self) -> None:
         if self.local_port is None:
