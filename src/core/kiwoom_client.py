@@ -241,6 +241,10 @@ class KiwoomClient:
                     and is_fixed_port_collision_error(e)
                     and not is_fixed_port_holdoff_error(e)
                 ):
+                    # The transport registers the holdoff at the shared
+                    # fixed-port boundary; retain this causal gate for
+                    # collision errors that arrive from another transport
+                    # path, while never re-entering an active holdoff.
                     enter_fixed_port_degraded_state(
                         self.account_no,
                         "rest",

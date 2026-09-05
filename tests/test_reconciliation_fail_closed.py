@@ -173,6 +173,20 @@ def test_normal_fixed_port_clear_event_does_not_bypass_clearance(tmp_path):
 
 
 class SyncBrokerStateIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_passive_holdoff_failure_returns_false_and_preserves_prior_state(self):
+        engine = _sync_engine("kr_mock", ".", balance_only=True)
+        engine._last_balance_reconciliation = 123.0
+        enter_fixed_port_degraded_state("kr_mock", "rest", local_port=10000)
+        try:
+            engine._reconcile_balance = AsyncMock(
+                side_effect=RetryableError("fixed-port holdoff active")
+            )
+            self.assertFalse(await engine.sync_broker_state())
+            self.assertEqual(engine._last_balance_reconciliation, 123.0)
+            self.assertEqual(engine._balance_gate.reconciliation_failure_count, 1)
+        finally:
+            clear_fixed_port_degraded_state("kr_mock")
+
     async def test_balance_only_retryable_error_wiring_reaches_pause_threshold(self):
         engine = _sync_engine("kr_mock", ".", balance_only=True)
         engine._reconcile_balance = AsyncMock(side_effect=RetryableError("balance unavailable"))

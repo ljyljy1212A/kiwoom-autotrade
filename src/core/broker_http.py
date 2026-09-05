@@ -33,6 +33,7 @@ _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC = 1.0
 # unavailable broker into an unbounded wait.
 _FIXED_PORT_CONNECT_RETRY_BUDGET_SEC = 9.0
 _FIXED_PORT_HOLDOFF_SEC = 160.0
+_FIXED_PORT_ONGOING_EVENT_INTERVAL_SEC = 15 * 60
 _FIXED_PORT_RECOVERY_PROBE_INTERVAL_SEC = 90.0
 _FIXED_PORT_CONNECT_RETRY_INITIAL_DELAY_SEC = 0.05
 _FIXED_PORT_CONNECT_RETRY_MAX_DELAY_SEC = 0.4
@@ -638,13 +639,22 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
                 )
                 if holdoff is not None:
                     operation = _HTTP_OPERATION_CONTEXT.get()
-                    if self.logger is not None:
+                    now = datetime.now(timezone.utc)
+                    log_skip = (
+                        holdoff.last_ongoing_status_at is None
+                        or now - holdoff.last_ongoing_status_at
+                        >= timedelta(seconds=_FIXED_PORT_ONGOING_EVENT_INTERVAL_SEC)
+                    )
+                    if self.logger is not None and log_skip:
                         self.logger.warning(
                             "Fixed-port HTTP holdoff skip: "
                             f"account={self.account_id} market={self.market} "
                             f"local_port={self.local_port} operation={operation} "
-                            f"holdoff_until={holdoff.holdoff_until.isoformat()} skipped=true"
+                            f"holdoff_until={holdoff.holdoff_until.isoformat()} skipped=true "
+                            "no broker request was sent"
                         )
+                    if log_skip and self.account_id is not None:
+                        record_fixed_port_ongoing_status(self.account_id, now=now)
                     raise FixedPortCollisionError(
                         OSError(10048, "fixed-port HTTP holdoff active"),
                         holdoff_active=True,
@@ -660,17 +670,37 @@ class _FixedPortAnyIOBackend(AnyIOBackend):
                         f"after {_FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC:.1f}s"
                     ) from exc
                 with anyio.fail_after(timeout):
-                    raw_socket = await asyncio.to_thread(
-                        _connect_with_reuseaddr,
-                        host,
-                        port,
-                        local_address,
-                        self.local_port,
-                        timeout,
-                        socket_options,
-                        self.logger,
-                        self._connect_diagnostics,
-                    )
+                    try:
+                        raw_socket = await asyncio.to_thread(
+                            _connect_with_reuseaddr,
+                            host,
+                            port,
+                            local_address,
+                            self.local_port,
+                            timeout,
+                            socket_options,
+                            self.logger,
+                            self._connect_diagnostics,
+                        )
+                    except FixedPortCollisionError as exc:
+                        operation = _HTTP_OPERATION_CONTEXT.get()
+                        holdoff = None
+                        if self.account_id is not None:
+                            holdoff = enter_fixed_port_degraded_state(
+                                self.account_id,
+                                operation,
+                                local_port=self.local_port,
+                                market=self.market,
+                            )
+                        exc.holdoff_active = True
+                        if self.logger is not None and holdoff is not None:
+                            self.logger.warning(
+                                "Fixed-port HTTP collision holdoff entered: "
+                                f"account={self.account_id} market={self.market} "
+                                f"local_port={self.local_port} operation={operation} "
+                                f"holdoff_until={holdoff.holdoff_until.isoformat()} collision=true"
+                            )
+                        raise
                     try:
                         stream = await anyio.abc.SocketStream.from_socket(raw_socket)
                         close_state = _CloseCompletionState()

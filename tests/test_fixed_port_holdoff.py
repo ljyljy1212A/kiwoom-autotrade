@@ -26,6 +26,8 @@ from src.core.broker_http import (
     fixed_port_holdoff_active,
     get_fixed_port_degraded_state,
     is_fixed_port_collision_error,
+    record_fixed_port_ongoing_status,
+    restore_fixed_port_degraded_state,
 )
 from src.core.kiwoom_client import KiwoomClient
 from src.utils.exceptions import RetryableError
@@ -130,6 +132,100 @@ class FixedPortHoldoffTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("operation=unknown", warning)
         self.assertIn(f"holdoff_until={state.holdoff_until.isoformat()}", warning)
         self.assertIn("skipped=true", warning)
+        self.assertIn("no broker request was sent", warning)
+
+    async def test_exhausted_collision_enters_holdoff_but_other_connect_error_does_not(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
+                collision = FixedPortCollisionError(OSError(10048, "address already in use"))
+                backend = _FixedPortAnyIOBackend(443, Mock(), "holdoff-account", "US")
+                with patch.object(broker_http, "map_exceptions", return_value=nullcontext()), patch.object(
+                    broker_http, "_connect_with_reuseaddr", side_effect=collision
+                ) as connect:
+                    with self.assertRaises(FixedPortCollisionError):
+                        await backend.connect_tcp("127.0.0.1", 443, timeout=1.0)
+                connect.assert_called_once()
+                state = get_fixed_port_degraded_state("holdoff-account")
+                self.assertIsNotNone(state)
+                self.assertEqual(state.local_port, 443)
+
+                clear_fixed_port_degraded_state("holdoff-account")
+                backend = _FixedPortAnyIOBackend(443, Mock(), "holdoff-account", "US")
+                ordinary = OSError(10061, "connection refused")
+                with patch.object(broker_http, "map_exceptions", return_value=nullcontext()), patch.object(
+                    broker_http, "_connect_with_reuseaddr", side_effect=ordinary
+                ):
+                    with self.assertRaises(OSError) as raised:
+                        await backend.connect_tcp("127.0.0.1", 443, timeout=1.0)
+                self.assertIs(raised.exception, ordinary)
+                self.assertIsNone(get_fixed_port_degraded_state("holdoff-account"))
+
+    async def test_expired_holdoff_allows_one_probe_and_restarts_interval_on_collision(self):
+        entered = datetime.now(timezone.utc) - timedelta(seconds=161)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
+                old_state = enter_fixed_port_degraded_state(
+                    "holdoff-account", "rest", local_port=443, market="US", now=entered
+                )
+                collision = FixedPortCollisionError(OSError(10048, "address already in use"))
+                backend = _FixedPortAnyIOBackend(443, Mock(), "holdoff-account", "US")
+                with patch.object(broker_http, "fixed_port_holdoff_active", return_value=None), patch.object(
+                    broker_http, "map_exceptions", return_value=nullcontext()
+                ), patch.object(broker_http, "_connect_with_reuseaddr", side_effect=collision) as connect:
+                    with self.assertRaises(FixedPortCollisionError):
+                        await backend.connect_tcp("127.0.0.1", 443, timeout=1.0)
+                connect.assert_called_once()
+                new_state = get_fixed_port_degraded_state("holdoff-account")
+                self.assertGreater(new_state.holdoff_until, old_state.holdoff_until)
+
+    def test_holdoff_account_and_port_isolation(self):
+        now = datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
+                enter_fixed_port_degraded_state("holdoff-account", "rest", local_port=443, now=now)
+                enter_fixed_port_degraded_state("caller-account", "rest", local_port=10000, now=now)
+                self.assertIsNotNone(fixed_port_holdoff_active("holdoff-account", 443, now=now))
+                self.assertIsNone(fixed_port_holdoff_active("holdoff-account", 10000, now=now))
+                self.assertIsNotNone(fixed_port_holdoff_active("caller-account", 10000, now=now))
+                self.assertIsNone(fixed_port_holdoff_active("caller-account", 443, now=now))
+
+    def test_holdoff_persistence_restores_account_scoped_expiry(self):
+        entered = datetime(2026, 9, 4, 3, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
+                expected = enter_fixed_port_degraded_state(
+                    "holdoff-account", "rest", local_port=443, market="US", now=entered
+                )
+                clear_fixed_port_degraded_state("holdoff-account")
+                restored = restore_fixed_port_degraded_state("holdoff-account", now=entered)
+        self.assertEqual(restored, expected)
+
+    async def test_repeated_active_skips_are_rate_limited_to_ongoing_interval(self):
+        logger = Mock()
+        entered = datetime.now(timezone.utc) - timedelta(seconds=5)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
+                enter_fixed_port_degraded_state(
+                    "holdoff-account", "quotes", local_port=443, market="US", now=entered
+                )
+                backend = _FixedPortAnyIOBackend(443, logger, "holdoff-account", "US")
+                with patch.object(broker_http, "map_exceptions", return_value=nullcontext()), patch.object(
+                    broker_http.socket, "socket", side_effect=AssertionError("socket must not be created")
+                ):
+                    for _ in range(2):
+                        with self.assertRaises(FixedPortCollisionError):
+                            await backend.connect_tcp("127.0.0.1", 443, timeout=1.0)
+                self.assertEqual(logger.warning.call_count, 1)
+
+                record_fixed_port_ongoing_status(
+                    "holdoff-account", now=datetime.now(timezone.utc) - timedelta(minutes=16)
+                )
+                with patch.object(broker_http, "map_exceptions", return_value=nullcontext()), patch.object(
+                    broker_http.socket, "socket", side_effect=AssertionError("socket must not be created")
+                ):
+                    with self.assertRaises(FixedPortCollisionError):
+                        await backend.connect_tcp("127.0.0.1", 443, timeout=1.0)
+                self.assertEqual(logger.warning.call_count, 2)
 
     async def test_skipped_balance_cycle_returns_retryable_failure_and_preserves_state(self):
         account = "caller-account"
@@ -145,7 +241,13 @@ class FixedPortHoldoffTest(unittest.IsolatedAsyncioTestCase):
                 ):
                     with self.assertRaises(RetryableError):
                         await client._post_once("/api/us/acnt", "ust21070", {})
-                self.assertEqual(get_fixed_port_degraded_state(account), state)
+                updated = get_fixed_port_degraded_state(account)
+                self.assertEqual(updated.account_id, state.account_id)
+                self.assertEqual(updated.entered_at, state.entered_at)
+                self.assertEqual(updated.operation, state.operation)
+                self.assertEqual(updated.local_port, state.local_port)
+                self.assertEqual(updated.holdoff_until, state.holdoff_until)
+                self.assertIsNotNone(updated.last_ongoing_status_at)
                 await client._http_gate.close()
 
     async def test_skipped_order_remains_fail_closed_and_creates_no_pending_order(self):
@@ -195,6 +297,8 @@ class FixedPortHoldoffTest(unittest.IsolatedAsyncioTestCase):
                         await client.token_mgr._issue()
                     with self.assertRaises(RetryableError):
                         await client.get_quote("NVDA")
+                    with self.assertRaises(RetryableError):
+                        await client.get_balance()
                     with self.assertRaises(RetryableError):
                         await client.place_order("BUY", "NVDA", 1, 10.5)
                     with self.assertRaises(RetryableError):
