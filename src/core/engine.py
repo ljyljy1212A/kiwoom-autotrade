@@ -229,6 +229,65 @@ class DispatchClearanceService:
             return
         self._cleared_symbols = self._cleared_symbols - {normalized}
 
+    async def clear_empty_profile_if_safe(
+        self,
+        engine: "AccountEngine",
+        symbol: str,
+        *,
+        mode: str,
+        profile_enabled: bool,
+        now: datetime | None = None,
+    ) -> AccountClearanceResult:
+        """Clear a mock degraded marker only after fresh empty-profile clearance."""
+        if mode != "mock":
+            raise ValueError("empty-profile fixed-port recovery requires mock mode")
+        if profile_enabled:
+            return AccountClearanceResult(
+                False,
+                (AccountClearanceFailure(symbol, "profile is enabled"),),
+            )
+
+        state = get_fixed_port_degraded_state(self.account_id)
+        timestamp = now or datetime.now(timezone.utc)
+        if state is None:
+            return AccountClearanceResult(True)
+        if state.holdoff_until is None or state.holdoff_until > timestamp:
+            return AccountClearanceResult(
+                False,
+                (AccountClearanceFailure(symbol, "fixed-port holdoff is active"),),
+            )
+
+        async with self._lock:
+            state = get_fixed_port_degraded_state(self.account_id)
+            if state is None:
+                return AccountClearanceResult(True)
+            snapshot = await engine._build_reconciliation_clearance_snapshot(
+                symbol,
+                max_balance_age_sec=1.0,
+            )
+            result = evaluate_reconciliation_clearance(snapshot)
+            if not result.cleared:
+                return AccountClearanceResult(
+                    False,
+                    tuple(
+                        AccountClearanceFailure(symbol, failure.detail)
+                        for failure in result.failures
+                    ),
+                )
+
+            write_fixed_port_degraded_event(
+                self.account_id,
+                "recovered",
+                state.operation,
+                state.entered_at,
+                updated_by="empty-profile-monitor",
+                data_dir=engine.data_dir,
+                symbol=symbol,
+            )
+            delete_persisted_fixed_port_degraded_state(self.account_id)
+            clear_fixed_port_degraded_state(self.account_id)
+            return AccountClearanceResult(True)
+
     async def clear_current_active_profile(self, engines) -> AccountClearanceResult:
         """Freshly clear every current active symbol before recovering this account."""
         async with self._lock:

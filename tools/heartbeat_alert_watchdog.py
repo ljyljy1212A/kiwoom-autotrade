@@ -18,8 +18,10 @@ from urllib.request import Request, urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATUS_DIR = PROJECT_ROOT / "data"
 DEFAULT_LOG_PATH = PROJECT_ROOT / "diagnostics" / "heartbeat_alert_watchdog.log"
+ALERT_STATE_PATH = PROJECT_ROOT / "data" / "heartbeat_alert_watchdog.alert_state.json"
 NTFY_URL = "https://ntfy.sh/kiwoom-alert-9885xloihafe"
 STALE_AFTER_SECONDS = 120
+REMINDER_AFTER_SECONDS = 6 * 60 * 60
 ACCOUNTS = ("kr_mock", "us_mock")
 REQUIRED_FIELDS = ("account", "market", "pid", "state", "updatedAt")
 
@@ -66,6 +68,54 @@ def _problem(account: str, status_dir: Path, now: datetime) -> str | None:
     return None
 
 
+def _read_alert_state(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_alert_state(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _degraded_identity(payload: dict) -> tuple[object, ...]:
+    return (
+        payload.get("state"),
+        payload.get("entered_at"),
+        payload.get("last_collision_at"),
+        payload.get("pid"),
+    )
+
+
+def _should_alert_degraded(
+    account: str,
+    payload: dict,
+    alert_state: dict,
+    now: datetime,
+) -> bool:
+    identity = _degraded_identity(payload)
+    previous = alert_state.get(account)
+    if previous is None:
+        return True
+    if tuple(previous.get("identity", ())) != identity:
+        return True
+    last_alerted = previous.get("last_alerted_at")
+    if not isinstance(last_alerted, str):
+        return True
+    try:
+        elapsed = (
+            now - datetime.fromisoformat(last_alerted).astimezone(timezone.utc)
+        ).total_seconds()
+    except (TypeError, ValueError):
+        return True
+    return elapsed >= REMINDER_AFTER_SECONDS
+
+
 def _send_alert(message: str, logger: logging.Logger) -> None:
     request = Request(
         NTFY_URL,
@@ -102,10 +152,32 @@ def main() -> int:
     _write_startup_status(args.status_dir)
     logger = _logger(args.log_path)
     now = datetime.now(timezone.utc)
+    alert_state = _read_alert_state(ALERT_STATE_PATH)
     for account in ACCOUNTS:
         message = _problem(account, args.status_dir, now)
         if message is not None:
+            status_path = args.status_dir / f"worker_{account}.status.json"
+            try:
+                status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                status_payload = {}
+
+            # Only unchanged DEGRADED_FIXED_PORT is suppressible.
+            # Missing, malformed, stale-heartbeat, and other invalid-status
+            # conditions remain unsuppressed.
+            if (
+                status_payload.get("state") == "DEGRADED_FIXED_PORT"
+                and not _should_alert_degraded(account, status_payload, alert_state, now)
+            ):
+                continue
+
             _send_alert(message, logger)
+            if status_payload.get("state") == "DEGRADED_FIXED_PORT":
+                alert_state[account] = {
+                    "identity": list(_degraded_identity(status_payload)),
+                    "last_alerted_at": now.isoformat(),
+                }
+    _write_alert_state(ALERT_STATE_PATH, alert_state)
     return 0
 
 

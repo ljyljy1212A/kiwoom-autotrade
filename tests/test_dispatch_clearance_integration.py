@@ -239,3 +239,114 @@ def test_recovery_probe_logs_snapshot_failures_without_propagating(tmp_path):
             clear_fixed_port_degraded_state("us_mock")
 
     asyncio.run(probe())
+
+
+def test_empty_profile_expired_holdoff_clean_reconciliation_clears(tmp_path):
+    async def clear():
+        clear_fixed_port_degraded_state("us_mock")
+        enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
+        service = DispatchClearanceService("us_mock")
+        engine = _engine(service, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+        try:
+            result = await service.clear_empty_profile_if_safe(
+                engine,
+                "SOXL",
+                mode="mock",
+                profile_enabled=False,
+                now=_FixedDateTime.current + timedelta(seconds=161),
+            )
+            assert result.cleared is True
+            assert get_fixed_port_degraded_state("us_mock") is None
+        finally:
+            clear_fixed_port_degraded_state("us_mock")
+
+    asyncio.run(clear())
+
+
+def test_empty_profile_active_holdoff_does_not_clear(tmp_path):
+    async def clear():
+        clear_fixed_port_degraded_state("us_mock")
+        enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
+        service = DispatchClearanceService("us_mock")
+        engine = _engine(service, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+        try:
+            result = await service.clear_empty_profile_if_safe(
+                engine,
+                "SOXL",
+                mode="mock",
+                profile_enabled=False,
+                now=_FixedDateTime.current,
+            )
+            assert result.cleared is False
+            assert get_fixed_port_degraded_state("us_mock") is not None
+        finally:
+            clear_fixed_port_degraded_state("us_mock")
+
+    asyncio.run(clear())
+
+
+def test_empty_profile_unresolved_reconciliation_does_not_clear(tmp_path):
+    async def clear():
+        clear_fixed_port_degraded_state("us_mock")
+        enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
+        service = DispatchClearanceService("us_mock")
+        engine = _engine(service, _snapshot(clear=False), enabled=False, data_dir=tmp_path)
+        try:
+            result = await service.clear_empty_profile_if_safe(
+                engine,
+                "SOXL",
+                mode="mock",
+                profile_enabled=False,
+                now=_FixedDateTime.current + timedelta(seconds=161),
+            )
+            assert result.cleared is False
+            assert get_fixed_port_degraded_state("us_mock") is not None
+        finally:
+            clear_fixed_port_degraded_state("us_mock")
+
+    asyncio.run(clear())
+
+
+def test_out_of_scope_mode_is_rejected(tmp_path):
+    async def clear():
+        service = DispatchClearanceService("us_mock")
+        engine = _engine(service, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+        try:
+            try:
+                await service.clear_empty_profile_if_safe(
+                    engine,
+                    "SOXL",
+                    mode="live",
+                    profile_enabled=False,
+                    now=_FixedDateTime.current + timedelta(seconds=161),
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("non-mock mode was not rejected")
+        finally:
+            clear_fixed_port_degraded_state("us_mock")
+
+    asyncio.run(clear())
+
+
+def test_enabled_profile_is_rejected(tmp_path):
+    async def clear():
+        clear_fixed_port_degraded_state("us_mock")
+        enter_fixed_port_degraded_state("us_mock", "rest", now=_FixedDateTime.current)
+        service = DispatchClearanceService("us_mock")
+        engine = _engine(service, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+        try:
+            result = await service.clear_empty_profile_if_safe(
+                engine,
+                "SOXL",
+                mode="mock",
+                profile_enabled=True,
+                now=_FixedDateTime.current + timedelta(seconds=161),
+            )
+            assert result.cleared is False
+            assert get_fixed_port_degraded_state("us_mock") is not None
+        finally:
+            clear_fixed_port_degraded_state("us_mock")
+
+    asyncio.run(clear())

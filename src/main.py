@@ -297,7 +297,12 @@ async def build_engine(ctx, telegram: TelegramController) -> AccountEngine:
     return engine
 
 
-async def run_account_balance_monitor(ctx, telegram: TelegramController) -> None:
+async def run_account_balance_monitor(
+    ctx,
+    telegram: TelegramController,
+    dispatch_clearance_service: DispatchClearanceService,
+    registry: SymbolEngineRegistry,
+) -> None:
     """Keep the account-wide holdings snapshot fresh without active strategies.
 
     Trade Settings controls automation, not whether manually placed or mock
@@ -313,6 +318,21 @@ async def run_account_balance_monitor(ctx, telegram: TelegramController) -> None
         try:
             monitor._refresh_runtime_control()
             await monitor.sync_broker_state(force_balance=True)
+            profile = _current_profile_for_monitor(
+                ctx.account_id,
+                ctx.client.market,
+            )
+            if (
+                profile is not None
+                and not registry.running_symbols(ctx.account_id)
+            ):
+                symbol, profile_enabled = profile
+                await dispatch_clearance_service.clear_empty_profile_if_safe(
+                    monitor,
+                    symbol,
+                    mode=ctx.client.mode,
+                    profile_enabled=profile_enabled,
+                )
         except Exception as exc:
             ctx.logger.warning(f"Account balance monitor deferred: {exc}")
         await asyncio.sleep(_balance_monitor_sleep_seconds(monitor))
@@ -433,6 +453,23 @@ def _dashboard_settings_payload(account_id: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _current_profile_for_monitor(account_id: str, market: str) -> tuple[str, bool] | None:
+    payload = _dashboard_settings_payload(account_id)
+    for profile in payload.get("profiles", []) if isinstance(payload, dict) else []:
+        if not isinstance(profile, dict):
+            continue
+        config = profile.get("config")
+        if not isinstance(config, dict):
+            continue
+        if str(config.get("market", "")).upper() != market:
+            continue
+        symbol = config.get("symbol")
+        if not symbol:
+            continue
+        return _strip_kr_symbol_prefix(market, symbol), profile.get("enabled", True)
+    return None
+
+
 async def run_symbol_engines(ctx, telegram: TelegramController, registry: SymbolEngineRegistry) -> None:
     """Keep one isolated engine/task per enabled symbol on an account."""
     price_feed = await make_price_feed(ctx)
@@ -480,7 +517,12 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
             # fresh account snapshot through the shared balance gate.
             if not wanted and balance_monitor is None:
                 balance_monitor = asyncio.create_task(
-                    run_account_balance_monitor(ctx, telegram),
+                    run_account_balance_monitor(
+                        ctx,
+                        telegram,
+                        dispatch_clearance_service,
+                        registry,
+                    ),
                     name=f"{ctx.account_id}-balance-monitor",
                 )
 
