@@ -679,8 +679,7 @@ class AccountEngine:
         # Dashboard controls are an explicit execution authority, independent
         # of the worker-wide environment switch. Read them before reporting
         # startup mode so the log cannot falsely claim submissions are off.
-        async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
-            self._refresh_dashboard_controls()
+        await self._refresh_dashboard_controls()
         if self._auto_trading_enabled:
             mode = "worker-wide Auto Trading enabled"
         elif self._dashboard_auto_buy or self._dashboard_auto_sell:
@@ -949,8 +948,7 @@ class AccountEngine:
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
         # never a source of silently stale financial state.
         self._refresh_runtime_control()
-        async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
-            self._refresh_dashboard_controls()
+        await self._refresh_dashboard_controls()
         await self._apply_fixed_port_pause_clear_event()
         state = get_fixed_port_degraded_state(self.ctx.account_id)
         if state is not None:
@@ -1038,7 +1036,7 @@ class AccountEngine:
             return
         await self._handle_intent(intent, price)
 
-    def _refresh_dashboard_controls(self) -> None:
+    async def _refresh_dashboard_controls(self) -> None:
         """Read the local dashboard's explicit per-side execution switches."""
         path = self._dashboard_control_path()
         if not path.exists():
@@ -1134,11 +1132,6 @@ class AccountEngine:
                 return
             self.ctx.strategy = strategy
             self.ctx.position = PositionState(symbol=strategy.symbol)
-            # Dashboard profile activation is an explicit operator action.
-            # Clear a stale account-level pause left by an earlier broker
-            # mismatch; current balance and tranche safety gates still apply.
-            self._trading_paused = False
-            self.ctx.logger.info(f"Cleared stale trading pause after dashboard profile activation for {strategy.symbol}")
             # A profile re-enabled after a full close is a fresh manual-first
             # lifecycle. Only an already-open lifecycle may restore fills;
             # otherwise the imminent broker snapshot adopts tranche 1 and old
@@ -1146,6 +1139,36 @@ class AccountEngine:
             self._prepare_lifecycle_scope(strategy.symbol)
             if self._lifecycle_pending_adoption:
                 self._begin_manual_lifecycle_activation(strategy.symbol)
+            # Dashboard profile activation is an explicit operator action.
+            # Clear a stale account-level pause left by an earlier broker
+            # mismatch; current balance and tranche safety gates still apply.
+            matching_engines = [
+                engine for engine in list(self._balance_gate.engines)
+                if engine._trading_paused
+                and engine._pause_reason == "broker_reconciliation_unavailable"
+            ]
+            if matching_engines:
+                for engine in matching_engines:
+                    symbol = strategy.symbol if engine is self else engine.ctx.strategy.symbol
+                    try:
+                        snapshot = await engine._build_reconciliation_clearance_snapshot(
+                            symbol, max_balance_age_sec=1.0,
+                        )
+                        result = evaluate_reconciliation_clearance(snapshot)
+                    except Exception as exc:
+                        self.ctx.logger.warning(
+                            f"Dashboard profile activation pause clear deferred for {symbol}: clearance check failed: {exc}"
+                        )
+                        return
+                    if not result.cleared:
+                        details = "; ".join(failure.detail for failure in result.failures)
+                        self.ctx.logger.warning(
+                            f"Dashboard profile activation pause clear deferred for {symbol}: {details}"
+                        )
+                        return
+                for engine in matching_engines:
+                    engine._trading_paused = False
+                self.ctx.logger.info(f"Cleared stale trading pause after dashboard profile activation for {strategy.symbol}")
             self._restore_from_ledger()
             self._dashboard_symbol = symbol
             self._dashboard_config_fingerprint = fingerprint

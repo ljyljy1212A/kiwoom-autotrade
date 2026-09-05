@@ -96,7 +96,7 @@ def test_pre_guard_runs_while_degraded_and_event_is_not_double_processed(tmp_pat
         engine = _engine("us_mock", "AAPL", tmp_path, _snapshot("us_mock", "AAPL", incomplete=True), gate)
         engine._sync_lock = asyncio.Lock()
         engine._refresh_runtime_control = Mock()
-        engine._refresh_dashboard_controls = Mock()
+        engine._refresh_dashboard_controls = AsyncMock()
         broker_http.enter_fixed_port_degraded_state("us_mock", "rest")
         write_pause_clear_event("us_mock", FIXED_PORT_DEGRADED_PAUSE_REASON, data_dir=tmp_path)
 

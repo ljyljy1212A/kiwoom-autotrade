@@ -132,9 +132,9 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 first = engine._symbol_lifecycles["000490"]["started_at"]
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 self.assertEqual(engine._symbol_lifecycles["000490"]["started_at"], first)
                 await engine.sync_broker_state(force_balance=True)
                 self.assertFalse(engine._trading_paused)
@@ -184,7 +184,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 await engine.sync_broker_state(force_balance=True)
                 intent = OrderIntent(Action.BUY, "000490", 2, 9_900, meta={"step": 2})
                 await engine._handle_intent(intent, 9_900)
@@ -224,7 +224,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
             try:
                 settings.write_text(json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8")
                 control.write_text(json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}), encoding="utf-8")
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 await engine.sync_broker_state(force_balance=True)
                 old_id = engine._symbol_lifecycles["000490"]["activation_id"]
 
@@ -242,7 +242,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 client.qty, client.avg = 2, 20_000
                 settings.write_text(json.dumps({"profiles": [{"enabled": True, "config": cfg}]}), encoding="utf-8")
                 control.write_text(json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}), encoding="utf-8")
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 new_id = engine._symbol_lifecycles["000490"]["activation_id"]
                 await engine.sync_broker_state(force_balance=True)
                 self.assertNotEqual(new_id, old_id)
@@ -290,7 +290,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "001210", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 await engine.sync_broker_state(force_balance=True)  # adopts manual T1
                 self.assertEqual({step: qty for step, qty in ctx.strategy.step_qty.items() if qty > 0}, {1: 1})
 
@@ -351,7 +351,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                engine._refresh_dashboard_controls()  # immediate enable after HTS buy
+                await engine._refresh_dashboard_controls()  # immediate enable after HTS buy
                 await engine.sync_broker_state(force_balance=True)
 
                 self.assertEqual(ctx.position.qty, 1)
@@ -429,7 +429,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                first._refresh_dashboard_controls()
+                await first._refresh_dashboard_controls()
                 await first.sync_broker_state(force_balance=True)  # adopt manual 1 @ 10,000
 
                 for ord_no, step, price in (("NEW-T2", 2, 9_900), ("NEW-T3", 3, 9_800)):
@@ -516,7 +516,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                first._refresh_dashboard_controls()
+                await first._refresh_dashboard_controls()
                 await first.sync_broker_state(force_balance=True)  # manual T1: 1 @ 10,000
                 for ord_no, step, price in (("T2", 2, 9_900), ("T3", 3, 9_800)):
                     order = PendingOrder(ord_no, "000490", "BUY", 10, price, "BUY", step, {})
@@ -533,7 +533,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
             ctx, restarted = make_engine()
             try:
-                restarted._refresh_dashboard_controls()
+                await restarted._refresh_dashboard_controls()
                 restarted._restore_from_ledger()
                 await restarted.sync_broker_state(force_balance=True)
                 self.assertTrue(restarted._trading_paused)
@@ -581,7 +581,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                first._refresh_dashboard_controls()
+                await first._refresh_dashboard_controls()
                 await first.sync_broker_state(force_balance=True)  # manual T1: 1 @ 10,000
                 buy = PendingOrder("T2", "000490", "BUY", 10, 9_900, "BUY", 2, {})
                 first.ledger.add_pending(buy)
@@ -597,7 +597,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
 
             ctx, restarted = make_engine()
             try:
-                restarted._refresh_dashboard_controls()
+                await restarted._refresh_dashboard_controls()
                 restarted._restore_from_ledger()
                 await restarted.sync_broker_state(force_balance=True)
                 self.assertEqual(
@@ -642,7 +642,7 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     json.dumps({"symbol": "000490", "config": cfg, "auto_buy": True, "auto_sell": True}),
                     encoding="utf-8",
                 )
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
                 await engine.sync_broker_state(force_balance=True)
                 order = PendingOrder("T2-MISMATCH", "000490", "BUY", 2, 9_900, "BUY", 2, {})
                 engine.ledger.add_pending(order)
@@ -690,16 +690,18 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                 )
                 original_write = engine._write_lifecycles
                 reentered = False
+                reentered_task = None
 
                 def reentrant_write():
-                    nonlocal reentered
+                    nonlocal reentered, reentered_task
                     if not reentered:
                         reentered = True
-                        engine._refresh_dashboard_controls()
+                        reentered_task = asyncio.create_task(engine._refresh_dashboard_controls())
                     original_write()
 
                 engine._write_lifecycles = reentrant_write
-                engine._refresh_dashboard_controls()
+                await engine._refresh_dashboard_controls()
+                await reentered_task
                 activation_id = engine._symbol_lifecycles["000490"]["activation_id"]
                 await engine.sync_broker_state(force_balance=True)
                 self.assertTrue(reentered)

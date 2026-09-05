@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import time
 import unittest
@@ -23,6 +24,7 @@ from src.core.engine import (
     ReconciliationIncompleteReason,
     _AccountBalanceGate,
 )
+from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import RetryableError
 
 
@@ -81,6 +83,47 @@ def _clearance_snapshot(account, symbol, *, incomplete=False):
         unresolved_order_ids=(),
         unattributed_collision_order_ids=(),
     )
+
+
+def _dashboard_config(symbol="033320"):
+    return {
+        "symbol": symbol,
+        "market": "KR",
+        "commission_rate": 0.0,
+        "auto_buy": {"enabled": True, "order_type": "00"},
+        "auto_sell": {"enabled": True, "order_type": "00"},
+        "first_buy": {"mode": "manual", "amount": 10_000},
+        "buy_steps": [{"step": 2, "drop_pct": -1.0, "amount": 1_000}],
+        "sell_steps": [{"step": 1, "profit_pct": 1.0}],
+    }
+
+
+def _dashboard_engine(account, symbol, data_dir, reason=""):
+    engine = _engine(account, symbol, data_dir, reason=reason)
+    config = _dashboard_config(symbol)
+    engine.ctx.client = SimpleNamespace(market="KR")
+    engine.ctx.strategy = InfiniteGridStrategy(config)
+    engine.ctx.position = SimpleNamespace()
+    engine._control_symbol = None
+    engine._closed_symbols_blocked = set()
+    engine._symbol_lifecycles = {symbol: {"status": "open"}}
+    engine._dashboard_config_fingerprint = ""
+    engine._dashboard_symbol = ""
+    engine._dashboard_strategy_changed = False
+    engine._dashboard_auto_buy = False
+    engine._dashboard_auto_sell = False
+    engine._dashboard_profile_allowed = False
+    engine._last_allowlist_warning_symbol = ""
+    engine._last_execution_unavailable_symbol = ""
+    engine._lifecycle_pending_adoption = False
+    engine._prepare_lifecycle_scope = Mock()
+    engine._begin_manual_lifecycle_activation = Mock()
+    engine._restore_from_ledger = Mock()
+    settings = Path(data_dir) / f"dashboard_settings_{account}.json"
+    control = Path(data_dir) / f"dashboard_control_{account}.json"
+    settings.write_text(json.dumps({"profiles": [{"enabled": True, "config": config}]}), encoding="utf-8")
+    control.write_text(json.dumps({"symbol": symbol, "config": config, "auto_buy": True, "auto_sell": True}), encoding="utf-8")
+    return engine
 
 
 def test_below_threshold_does_not_pause():
@@ -278,6 +321,96 @@ def test_clear_event_fresh_check_exception_is_logged_and_retried(tmp_path):
         assert engine._pause_reason == "broker_quantity_unattributed"
         assert any("033320" in call.args[0] for call in engine.ctx.logger.warning.call_args_list)
         assert any("fresh balance unavailable" in call.args[0] for call in engine.ctx.logger.warning.call_args_list)
+    asyncio.run(check())
+
+
+def test_dashboard_activation_fresh_check_clears_all_matching_engines(tmp_path):
+    async def check():
+        first = _dashboard_engine("kr_mock", "033320", tmp_path, reason="broker_reconciliation_unavailable")
+        second = _dashboard_engine("kr_mock", "003480", tmp_path, reason="broker_reconciliation_unavailable")
+        gate = _AccountBalanceGate()
+        first._balance_gate = second._balance_gate = gate
+        gate.engines.update({first, second})
+        first._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "033320")
+        )
+        second._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "003480")
+        )
+
+        await first._refresh_dashboard_controls()
+
+        assert first._trading_paused is False
+        assert second._trading_paused is False
+        first._build_reconciliation_clearance_snapshot.assert_awaited_once()
+        second._build_reconciliation_clearance_snapshot.assert_awaited_once()
+    asyncio.run(check())
+
+
+def test_dashboard_activation_fresh_check_failure_is_all_or_nothing(tmp_path):
+    async def check():
+        first = _dashboard_engine("kr_mock", "033320", tmp_path, reason="broker_reconciliation_unavailable")
+        second = _dashboard_engine("kr_mock", "003480", tmp_path, reason="broker_reconciliation_unavailable")
+        gate = _AccountBalanceGate()
+        first._balance_gate = second._balance_gate = gate
+        gate.engines.update({first, second})
+        first._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "033320")
+        )
+        second._build_reconciliation_clearance_snapshot = AsyncMock(
+            return_value=_clearance_snapshot("kr_mock", "003480", incomplete=True)
+        )
+
+        await first._refresh_dashboard_controls()
+
+        assert first._trading_paused is True
+        assert second._trading_paused is True
+        assert any("003480" in call.args[0] for call in first.ctx.logger.warning.call_args_list)
+    asyncio.run(check())
+
+
+def test_dashboard_activation_fresh_check_exception_is_handled(tmp_path):
+    async def check():
+        engine = _dashboard_engine("kr_mock", "033320", tmp_path, reason="broker_reconciliation_unavailable")
+        engine._build_reconciliation_clearance_snapshot = AsyncMock(
+            side_effect=RuntimeError("fresh balance unavailable")
+        )
+
+        await engine._refresh_dashboard_controls()
+
+        assert engine._trading_paused is True
+        assert any("fresh balance unavailable" in call.args[0] for call in engine.ctx.logger.warning.call_args_list)
+    asyncio.run(check())
+
+
+def test_dashboard_activation_with_no_matching_engine_leaves_state_unchanged(tmp_path):
+    async def check():
+        engine = _dashboard_engine("kr_mock", "033320", tmp_path)
+        engine._balance_gate.engines.clear()
+        engine._build_reconciliation_clearance_snapshot = AsyncMock(
+            side_effect=RuntimeError("should not be needed")
+        )
+
+        await engine._refresh_dashboard_controls()
+
+        assert engine._trading_paused is False
+        assert engine._build_reconciliation_clearance_snapshot.await_count == 0
+    asyncio.run(check())
+
+
+def test_dashboard_activation_fresh_check_does_not_interfere_with_sync_lock(tmp_path):
+    async def check():
+        engine = _dashboard_engine("kr_mock", "033320", tmp_path, reason="broker_reconciliation_unavailable")
+        engine._sync_lock = asyncio.Lock()
+
+        async def snapshot(symbol, *, max_balance_age_sec):
+            assert engine._sync_lock.locked() is False
+            return _clearance_snapshot("kr_mock", symbol)
+
+        engine._build_reconciliation_clearance_snapshot = snapshot
+        await engine._refresh_dashboard_controls()
+
+        assert engine._trading_paused is False
     asyncio.run(check())
 
 

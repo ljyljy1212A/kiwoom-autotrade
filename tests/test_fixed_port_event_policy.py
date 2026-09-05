@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from unittest.mock import patch
@@ -44,7 +44,7 @@ def test_tick_writes_one_entry_event_before_the_ongoing_interval(tmp_path):
     engine.data_dir = tmp_path
     engine._sync_lock = asyncio.Lock()
     engine._refresh_runtime_control = Mock()
-    engine._refresh_dashboard_controls = Mock()
+    engine._refresh_dashboard_controls = AsyncMock()
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=None)
     enter_fixed_port_degraded_state("kr_mock", "test-operation")
     try:
@@ -65,7 +65,7 @@ def test_tick_writes_ongoing_event_only_after_fifteen_minutes(tmp_path):
     engine.data_dir = tmp_path
     engine._sync_lock = asyncio.Lock()
     engine._refresh_runtime_control = Mock()
-    engine._refresh_dashboard_controls = Mock()
+    engine._refresh_dashboard_controls = AsyncMock()
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=None)
     entered_at = datetime(2026, 8, 25, tzinfo=timezone.utc)
     before_interval = entered_at + timedelta(minutes=14, seconds=59)
