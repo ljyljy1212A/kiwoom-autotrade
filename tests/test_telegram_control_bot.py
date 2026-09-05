@@ -61,6 +61,7 @@ def _bot(chat_ids: set[str], accounts: list[AccountInfo], logger: _Logger) -> Te
     bot.allowed_chat_ids = chat_ids
     bot.accounts = {account.account_id: account for account in accounts}
     bot._account_order = [account.account_id for account in accounts]
+    bot._mock_account_order = [account_id for account_id in bot._account_order if _is_mock_account(account_id)]
     bot.operator_labels = {"111": "Johon"}
     return bot
 
@@ -324,6 +325,28 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("kr_mock: RUNNING / auto_trading: ON", text)
         self.assertIsNotNone(markup)
 
+    def test_root_read_paths_exclude_real_accounts(self):
+        logger = _Logger()
+        accounts = [
+            AccountInfo("kr_mock", "KR Mock", "KR"),
+            AccountInfo("us_mock", "US Mock", "US"),
+            AccountInfo("kr_real", "KR Real", "KR"),
+            AccountInfo("us_real", "US Real", "US"),
+        ]
+        bot = _bot({"111"}, accounts, logger)
+        with patch.object(bot_module, "worker_status", return_value={"running": True}):
+            text = bot._root_text()
+        markup = bot._root_markup()
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+        self.assertIn("kr_mock: RUNNING / auto_trading: OFF", text)
+        self.assertIn("us_mock: RUNNING / auto_trading: OFF", text)
+        self.assertNotIn("kr_real", text)
+        self.assertNotIn("us_real", text)
+        self.assertEqual(callbacks, ["acct|kr_mock", "acct|us_mock"])
+        self.assertNotIn("acct|kr_real", callbacks)
+        self.assertNotIn("acct|us_real", callbacks)
+
     async def test_confirm_yes_writes_control_file(self):
         logger = _Logger()
         bot = _bot({"111"}, [AccountInfo("kr_mock", "KR Mock", "KR")], logger)
@@ -431,7 +454,7 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("not available through Telegram control" in text for text, _ in query.message.edits))
         markup = query.message.edits[-1][1]
         callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-        self.assertIn("acct|kr_real", callbacks)
+        self.assertNotIn("acct|kr_real", callbacks)
         self.assertNotIn("action|kr_real|start", callbacks)
 
     async def test_unauthorized_reconciliation_clear_callback_is_ignored(self):

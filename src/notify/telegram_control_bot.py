@@ -102,6 +102,7 @@ class TelegramControlBot:
         self.accounts = {account.account_id: account for account in accounts}
         self.operator_labels = load_operator_labels()
         self._account_order = [account.account_id for account in accounts]
+        self._mock_account_order = [account_id for account_id in self._account_order if _is_mock_account(account_id)]
         self.app = Application.builder().token(bot_token).build()
         self.app.add_handler(CommandHandler("start", self._handle_start))
         self.app.add_handler(CommandHandler("status", self._handle_status))
@@ -134,11 +135,11 @@ class TelegramControlBot:
 
     def _root_text(self) -> str:
         lines = ["Telegram control status"]
-        lines.extend(self._status_line(account_id) for account_id in self._account_order)
+        lines.extend(self._status_line(account_id) for account_id in self._mock_account_order)
         return "\n".join(lines)
 
     def _root_markup(self) -> InlineKeyboardMarkup:
-        rows = [[InlineKeyboardButton(account_id, callback_data=f"acct|{account_id}")] for account_id in self._account_order]
+        rows = [[InlineKeyboardButton(account_id, callback_data=f"acct|{account_id}")] for account_id in self._mock_account_order]
         return InlineKeyboardMarkup(rows)
 
     def _account_text(self, account_id: str) -> str:
