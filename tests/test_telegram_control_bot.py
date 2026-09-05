@@ -679,6 +679,20 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
         reconciliation_write.assert_not_called()
         pause_write.assert_not_called()
 
+    def test_validate_mutating_account_rejects_real_suffix(self):
+        bot = _bot({"111"}, [AccountInfo("sentinel_real", "Sentinel", "US")], _Logger())
+
+        self.assertIsNone(bot._validate_mutating_account("sentinel_real", "confirm"))
+
+    def test_validate_mutating_account_rejects_ineligible_mock(self):
+        bot = _bot({"111"}, [AccountInfo("us_mock", "US Mock", "US")], _Logger())
+        with patch.object(
+            bot_module.account_catalog,
+            "reconciliation_clearance_eligible",
+            return_value=False,
+        ):
+            self.assertIsNone(bot._validate_mutating_account("us_mock", "confirm"))
+
 
 if __name__ == "__main__":
     unittest.main()
