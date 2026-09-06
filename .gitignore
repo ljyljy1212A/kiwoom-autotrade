@@ -67,3 +67,4 @@ pytest_tmp/
 /diagnostics/round274_alert_test.log
 /diagnostics/round274_scratch_status_20260822/worker_kr_mock.status.json
 /ops/archive/OPERATOR_RECORD_wrapup_through_reconciliation_r2.md
+diagnostics/*.log
