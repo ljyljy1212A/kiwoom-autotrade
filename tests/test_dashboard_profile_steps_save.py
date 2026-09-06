@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from dashboard import dashboard_server
 
 
@@ -121,6 +123,11 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         self.assertEqual(responses, [({"error": "Invalid settings payload"}, 400)])
         self.assertEqual(persisted, {"profiles": [existing_profile]})
 
+    @pytest.mark.skipif(
+        not (Path(__file__).parents[1] / "dashboard" / "index.html").exists(),
+        reason="dashboard/index.html is intentionally untracked (see .gitignore); "
+        "skip when not present locally",
+    )
     def test_step_save_action_uses_settings_only_and_preserves_side_flags(self):
         source = (Path(__file__).parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
         start = source.index("async function saveProfileSteps()")
