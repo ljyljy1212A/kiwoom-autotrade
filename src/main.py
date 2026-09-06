@@ -601,6 +601,8 @@ async def main():
             "Worker launch refused: set ACCOUNT_FILTER to exactly one account ID "
             "(for example, us_mock or kr_mock); multi-account launches are not allowed."
         )
+    # Real-account launch is intentionally retained here; AccountOrderAuthority
+    # and operator discipline are the safeguards at this boundary.
     contexts = load_accounts(
         "config/accounts.yaml", account_filter=account_filter, market_filter=market_filter,
     )
