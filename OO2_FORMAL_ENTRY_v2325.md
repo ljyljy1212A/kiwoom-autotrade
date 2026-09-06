@@ -141,3 +141,23 @@ This entry is documentation-only. `CURRENT_STATE.md` and `ARCHIVE.md` were not
 modified. No code, test, configuration, staging, commit, push, scheduler,
 permission, runtime, or account action was performed. `kr_real` and `us_real`,
 and all real-account-adjacent paths, remain out of scope.
+
+16. Round 2406 (quotation) / Round 2408 (audit) — The quoted
+    `_poll_confirmation()` range for `tools/diag_relaunch_via_task_prototype.py`
+    contained 39 lines, while the freshly re-derived live range was lines
+    104–144 inclusive, containing 41 lines. Live lines 143 and 144 were blank
+    separator lines after the executable function body; the executable body
+    itself matched the quotation. Classification: **omitted trailing blank
+    separator context in source quotation**. Checklist point: **2 — exact live
+    text and boundary context**. Severity: **context-only discrepancy; no
+    executable function-content error**.
+
+### OO-2 procedural audit-discipline note
+
+Round 2408's audit process created and then deleted a temporary file during
+hash extraction despite that round's explicit no-file-operation constraint.
+This is a compliance/self-discipline issue, not a numbered OO-2 evidence
+instance. Audit-only rounds must use in-memory or purely read-only commands,
+such as direct or piped hash computation without intermediate files, and must
+explicitly confirm zero filesystem writes — not merely zero persistent writes
+— when reporting compliance.
