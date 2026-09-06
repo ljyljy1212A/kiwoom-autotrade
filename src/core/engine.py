@@ -1,6 +1,8 @@
 """Per-account trading loop with REST-authoritative order synchronization."""
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import asyncio
 import json
 import math
@@ -890,9 +892,7 @@ class AccountEngine:
             "fxRateKrw": previous.get("fxRateKrw"),
         }
         balance_path.parent.mkdir(exist_ok=True)
-        tmp_path = balance_path.with_suffix(".json.tmp")
-        tmp_path.write_text(json.dumps(snapshot), encoding="utf-8")
-        tmp_path.replace(balance_path)
+        atomic_write_json(balance_path, snapshot, ensure_ascii=True)
 
     def _has_unresolved_order_for_cleanup(self, symbol: str) -> bool:
         """Read pending attribution state even from a passive account monitor.
@@ -1836,9 +1836,7 @@ class AccountEngine:
             # Each rapid fill gets its own temporary filename. The final
             # account event remains newest-event-wins by design, but parallel
             # background writers cannot collide on one .tmp file.
-            temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-            temporary.write_text(json.dumps(payload), encoding="utf-8")
-            temporary.replace(path)
+            atomic_write_json(path, payload, ensure_ascii=True)
         except Exception as exc:
             # Dashboard notification is never allowed to affect a confirmed
             # fill, broker reconciliation, or the next trading decision.
@@ -1848,9 +1846,7 @@ class AccountEngine:
         """Persist lifecycle markers without allowing cache I/O to affect trading."""
         try:
             self._lifecycle_path.parent.mkdir(exist_ok=True)
-            temporary = self._lifecycle_path.with_name(f"{self._lifecycle_path.name}.{uuid.uuid4().hex}.tmp")
-            temporary.write_text(json.dumps(self._symbol_lifecycles, ensure_ascii=False), encoding="utf-8")
-            temporary.replace(self._lifecycle_path)
+            atomic_write_json(self._lifecycle_path, self._symbol_lifecycles, ensure_ascii=False)
         except Exception as exc:
             self.ctx.logger.warning(f"Could not persist symbol lifecycle state: {exc}")
 
@@ -2000,14 +1996,7 @@ class AccountEngine:
                     return
                 latest[symbol] = price
                 self._tranche_bases_path.parent.mkdir(exist_ok=True)
-                temp_path = self._tranche_bases_path.with_name(
-                    f"{self._tranche_bases_path.name}.{uuid.uuid4().hex}.tmp"
-                )
-                temp_path.write_text(
-                    json.dumps(latest, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                temp_path.replace(self._tranche_bases_path)
+                atomic_write_json(self._tranche_bases_path, latest, ensure_ascii=False)
                 self._tranche_bases = latest
         except OSError as exc:
             # The in-memory recovery result remains safe even if persistence is
@@ -2029,14 +2018,7 @@ class AccountEngine:
                     latest = {}
                 latest.pop(symbol, None)
                 self._tranche_bases_path.parent.mkdir(exist_ok=True)
-                temp_path = self._tranche_bases_path.with_name(
-                    f"{self._tranche_bases_path.name}.{uuid.uuid4().hex}.tmp"
-                )
-                temp_path.write_text(
-                    json.dumps(latest, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                temp_path.replace(self._tranche_bases_path)
+                atomic_write_json(self._tranche_bases_path, latest, ensure_ascii=False)
                 self._tranche_bases = latest
         except OSError as exc:
             self.ctx.logger.warning(f"Could not remove tranche base for {symbol}: {exc}")
@@ -2213,9 +2195,7 @@ class AccountEngine:
         # Dashboard readers run in a different process. Replace the snapshot
         # atomically so they either see the previous complete balance or this
         # complete balance, never a partly-written JSON document.
-        balance_tmp = balance_path.with_suffix(".json.tmp")
-        balance_tmp.write_text(json.dumps(balance_snapshot), encoding="utf-8")
-        balance_tmp.replace(balance_path)
+        atomic_write_json(balance_path, balance_snapshot, ensure_ascii=True)
         if self._balance_only:
             return
         # One shared broker-authoritative orphan evaluator owns both startup
@@ -2719,9 +2699,7 @@ class AccountEngine:
                 "evaluatedAt": datetime.now(timezone.utc).isoformat(),
                 "currentStep": int(self.ctx.position.step), "nextBuyTrigger": trigger,
             }
-            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-            tmp.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
+            atomic_write_json(path, existing, ensure_ascii=False)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self.ctx.logger.warning(f"Quote diagnostic publication deferred: {exc}")
 

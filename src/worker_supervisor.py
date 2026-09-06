@@ -6,6 +6,8 @@ OS-level account lock remains the final authority if two start commands race.
 """
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import argparse
 import ctypes
 import json
@@ -54,9 +56,7 @@ def _intentional_stop_path(account: str) -> Path:
 
 def _write_atomic(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{time.time_ns()}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_json(path, payload, ensure_ascii=False)
 
 
 def _clear_intentional_stop(account: str) -> None:

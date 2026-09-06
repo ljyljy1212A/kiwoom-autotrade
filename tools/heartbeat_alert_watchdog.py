@@ -5,6 +5,8 @@ stale status. It never starts, stops, or modifies a worker.
 """
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import argparse
 import json
 import logging
@@ -78,9 +80,7 @@ def _read_alert_state(path: Path) -> dict:
 
 def _write_alert_state(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_json(path, payload, ensure_ascii=False, indent=2)
 
 
 def _degraded_identity(payload: dict) -> tuple[object, ...]:

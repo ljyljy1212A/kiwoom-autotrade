@@ -6,6 +6,8 @@ a symbol has no position and no unresolved order attribution.
 """
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import json
 import shutil
 import uuid
@@ -54,9 +56,7 @@ class OrphanStateCleaner:
     @staticmethod
     def _write_atomic(path: Path, value: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_json(path, value, ensure_ascii=False)
 
     def _controls(self) -> dict[str, list[Path]]:
         prefix = f"dashboard_control_{self.account_id}_"

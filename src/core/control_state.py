@@ -1,6 +1,8 @@
 """Account-wide runtime control state stored as atomic JSON files."""
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import json
 import logging
 import uuid
@@ -49,9 +51,7 @@ def write_control_state(
         "updated_by": updated_by,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-    temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    temp.replace(path)
+    atomic_write_json(path, payload, ensure_ascii=False)
     return payload
 
 
@@ -94,9 +94,7 @@ def write_fixed_port_degraded_event(
     }
     current["fixed_port_event"] = event
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-    temp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
-    temp.replace(path)
+    atomic_write_json(path, current, ensure_ascii=False)
     return event
 
 
@@ -122,9 +120,7 @@ def write_pause_clear_event(
     }
     current["pause_clear_event"] = event
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-    temp.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
-    temp.replace(path)
+    atomic_write_json(path, current, ensure_ascii=False)
     try:
         history_path = DIAGNOSTICS_DIR / "pause_clear_history" / account_id / f"{event['event_id']}.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)

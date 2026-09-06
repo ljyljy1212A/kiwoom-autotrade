@@ -19,6 +19,8 @@ register their own Task Scheduler entries at the same time.
 """
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import json
 import os
 import sys
@@ -87,9 +89,7 @@ def _intentional_stop_active(account: str) -> tuple[bool, str]:
 
 def _save_state(state: dict[str, dict]) -> None:
     WATCHDOG_STATE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = WATCHDOG_STATE.with_suffix(f".{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(WATCHDOG_STATE)
+    atomic_write_json(WATCHDOG_STATE, state, ensure_ascii=False)
 
 
 def _send_notification(account: str, market: str, event: str, message: str) -> None:

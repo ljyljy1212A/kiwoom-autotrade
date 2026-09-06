@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import asyncio
 import argparse
 import os
@@ -194,9 +196,7 @@ def _write_worker_status(identity: WorkerIdentity, state: str, active_symbols: l
         pass
     try:
         status_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = status_path.with_name(f"{status_path.name}.{uuid.uuid4().hex}.tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temp.replace(status_path)
+        atomic_write_json(status_path, payload, ensure_ascii=False)
     except Exception as exc:
         SYS_LOG.warning(f"Worker status publication deferred for {identity.account_id}: {exc}")
 

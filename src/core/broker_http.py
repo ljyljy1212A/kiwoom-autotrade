@@ -1,6 +1,8 @@
 """Broker HTTP transport with worker-scoped source-port binding."""
 from __future__ import annotations
 
+from src.core.atomic_write import atomic_write_json
+
 import asyncio
 import json
 import random
@@ -299,9 +301,7 @@ def _fixed_port_degraded_payload(state: FixedPortDegradedState) -> dict:
 def _persist_fixed_port_degraded_state(state: FixedPortDegradedState) -> None:
     path = _fixed_port_degraded_state_path(state.account_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{time.time_ns()}.tmp")
-    temporary.write_text(json.dumps(_fixed_port_degraded_payload(state), ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_json(path, _fixed_port_degraded_payload(state), ensure_ascii=False)
 
 
 def delete_persisted_fixed_port_degraded_state(account_id: str) -> None:
