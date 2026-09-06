@@ -54,13 +54,13 @@ schtasks.exe /Delete /TN "\WD_Test\Relaunch_Prototype_Validation" /F
 This `/Delete` command is standard syntax composed for operator reference; it
 was not found verbatim in the existing handoff source and was not executed.
 
-## 6. OPEN ITEM — Pass/Fail Criterion Undefined
+## 6. RESOLVED — Pass/Fail Criterion (Operator Decision, Round 2472)
 
-No formal numeric `integrityLevelRid` pass/fail threshold exists in any source
-document. The only available reference is the observed baseline `8192` (Medium
-integrity) from prior interactive-session test runs. The operator must decide
-the expected/passing RID under `RunLevel=Limited`, which may differ from
-Medium, before Track A results can be evaluated as pass/fail.
+- PASS: integrityLevelRid == 8192 (Medium — expected, no elevation occurred)
+- FAIL (critical / actual IL-mismatch): integrityLevelRid >= 12288 (High or System —
+  unexpected elevation despite RunLevel=Limited; this is the failure mode the test exists
+  to catch)
+- ANOMALOUS (flag, distinct failure mode): integrityLevelRid is 4096 (Low) or 0 (Untrusted)
 
 ## Execution boundary
 

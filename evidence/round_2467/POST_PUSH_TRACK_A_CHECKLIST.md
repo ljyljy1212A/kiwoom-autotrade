@@ -10,9 +10,9 @@ The exact command syntax is maintained only in:
 
 1. Operator confirms that commit `4e4839e` has been pushed and that
    `origin/master` now points to that commit.
-2. Operator decides and records the numeric `integrityLevelRid` pass/fail
-   criterion for `RunLevel=Limited`. The observed `8192` value for
-   Medium/interactive execution is not assumed to be equivalent to Limited.
+2. Step: RID pass/fail criterion decided (Round 2472) — see the "RESOLVED — Pass/Fail
+   Criterion" section in evidence/round_2464/TRACK_A_COMMAND_REFERENCE.md for the exact
+   PASS/FAIL/ANOMALOUS thresholds. Do not duplicate the numeric values here.
 3. After steps 1 and 2 are complete, the operator—or a newly authorized Codex
    round—performs the task-registration step documented in
    `evidence/round_2464/TRACK_A_COMMAND_REFERENCE.md`.
