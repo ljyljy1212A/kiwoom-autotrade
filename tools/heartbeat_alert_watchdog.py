@@ -23,6 +23,7 @@ DEFAULT_LOG_PATH = PROJECT_ROOT / "diagnostics" / "heartbeat_alert_watchdog.log"
 ALERT_STATE_PATH = PROJECT_ROOT / "data" / "heartbeat_alert_watchdog.alert_state.json"
 NTFY_URL = "https://ntfy.sh/kiwoom-alert-9885xloihafe"
 STALE_AFTER_SECONDS = 120
+CONTROLLER_STALE_AFTER_SECONDS = 120
 REMINDER_AFTER_SECONDS = 6 * 60 * 60
 ACCOUNTS = ("kr_mock", "us_mock")
 REQUIRED_FIELDS = ("account", "market", "pid", "state", "updatedAt")
@@ -67,6 +68,19 @@ def _problem(account: str, status_dir: Path, now: datetime) -> str | None:
     age = (now - updated.astimezone(timezone.utc)).total_seconds()
     if age > STALE_AFTER_SECONDS:
         return f"{account} stale: last heartbeat {int(age)}s ago"
+
+    controller_cycle_at = payload.get("lastControllerCycleAt")
+    if controller_cycle_at is None:
+        return None
+    try:
+        controller_cycle = datetime.fromisoformat(str(controller_cycle_at).replace("Z", "+00:00"))
+        if controller_cycle.tzinfo is None:
+            controller_cycle = controller_cycle.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError) as exc:
+        return f"{account} controller progress timestamp invalid: {exc}"
+    controller_age = (now - controller_cycle.astimezone(timezone.utc)).total_seconds()
+    if controller_age > CONTROLLER_STALE_AFTER_SECONDS:
+        return f"{account} controller progress stale: last cycle {int(controller_age)}s ago"
     return None
 
 

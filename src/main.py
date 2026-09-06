@@ -97,6 +97,7 @@ class SymbolEngineRegistry:
 
     def __init__(self):
         self._slots: dict[tuple[str, str], _EngineSlot] = {}
+        self._controller_cycles: dict[str, str] = {}
 
     @staticmethod
     def key(account_id: str, market: str, symbol: str) -> tuple[str, str]:
@@ -144,6 +145,13 @@ class SymbolEngineRegistry:
         return tuple(sorted(slot.original_symbol for (slot_account, _), slot in self._slots.items()
                             if slot_account == str(account_id) and slot.state is EngineState.RUNNING))
 
+    def mark_controller_cycle(self, account_id: str) -> None:
+        """Record completion of the account's symbol-controller scan."""
+        self._controller_cycles[str(account_id)] = datetime.now(timezone.utc).isoformat()
+
+    def controller_cycle_at(self, account_id: str) -> str | None:
+        return self._controller_cycles.get(str(account_id))
+
 
 class DispatchProfileVersion:
     def __init__(self):
@@ -178,15 +186,25 @@ def _worker_stop_request_path(account_id: str) -> Path:
     return DATA_DIR / f"worker_{account_id}.stop.request.json"
 
 
-def _write_worker_status(identity: WorkerIdentity, state: str, active_symbols: list[str]) -> None:
+def _write_worker_status(
+    identity: WorkerIdentity,
+    state: str,
+    active_symbols: list[str],
+    controller_cycle_at: str | None = None,
+) -> None:
     """Atomically publish ownership metadata for dashboard/supervisor reads."""
     status_path = _worker_status_path(identity.account_id)
+    now = datetime.now(timezone.utc).isoformat()
     payload = {
         "account": identity.account_id, "market": identity.market, "pid": identity.pid,
         "instanceId": identity.instance_id, "startedAt": identity.started_at, "state": state,
         "active_symbols": active_symbols,
-        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "activityState": "active" if active_symbols else "expected-idle",
+        "updatedAt": now,
+        "processHeartbeatAt": now,
     }
+    if controller_cycle_at is not None:
+        payload["lastControllerCycleAt"] = controller_cycle_at
     quote_path = DATA_DIR / f"worker_{identity.account_id}.quotes.json"
     try:
         quotes = json.loads(quote_path.read_text(encoding="utf-8"))
@@ -208,7 +226,12 @@ async def _publish_worker_heartbeat(
     while True:
         await asyncio.sleep(interval_sec)
         state = EngineState.DEGRADED_FIXED_PORT.value if get_fixed_port_degraded_state(identity.account_id) is not None else EngineState.RUNNING.value
-        _write_worker_status(identity, state, list(registry.running_symbols(identity.account_id)))
+        _write_worker_status(
+            identity,
+            state,
+            list(registry.running_symbols(identity.account_id)),
+            registry.controller_cycle_at(identity.account_id),
+        )
 
 
 def _startup_worker_status_state(account_id: str) -> str:
@@ -571,6 +594,7 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                     if registry.request_stop(ctx.account_id, ctx.client.market, symbol, task):
                         task.cancel()
                         ctx.logger.info(f"Stopping independent symbol engine: {symbol}; registry=STOPPING")
+            registry.mark_controller_cycle(ctx.account_id)
             await asyncio.sleep(1)
     finally:
         quote_health_monitor.cancel()

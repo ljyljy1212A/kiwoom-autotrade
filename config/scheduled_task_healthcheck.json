@@ -11,16 +11,6 @@
     "target_path": "C:\\auto\\작업7차\\kiwoom-autotrade\\src\\worker_supervisor.py"
   },
   {
-    "task_name": "Kiwoom Worker Watchdog",
-    "task_path": "\\",
-    "target_path": "C:\\kiwoom_wd_test\\tools\\worker_watchdog.py"
-  },
-  {
-    "task_name": "Kiwoom Worker Watchdog",
-    "task_path": "\\WD_Test\\",
-    "target_path": "C:\\kiwoom_wd_test\\tools\\wd_test2.py"
-  },
-  {
     "task_name": "Kiwoom Heartbeat Alert",
     "task_path": "\\",
     "target_path": "C:\\auto\\작업7차\\kiwoom-autotrade\\tools\\heartbeat_alert_watchdog.py"

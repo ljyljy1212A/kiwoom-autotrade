@@ -34,7 +34,6 @@ EXPECTED_TASK_NAMES = Counter(
     {
         "Kiwoom Worker - KR Mock": 1,
         "Kiwoom Worker - US Mock": 1,
-        "Kiwoom Worker Watchdog": 2,
         "Kiwoom Heartbeat Alert": 1,
         "Kiwoom Telegram Control Bot": 1,
         "Kiwoom Project Database Backup": 1,
@@ -146,7 +145,7 @@ def _load_config(config_path: Path, mode: str | None = None) -> tuple[list[TaskS
         raise ValueError(f"unsupported healthcheck mode: {mode!r}")
     elif actual_names != EXPECTED_TASK_NAMES:
         raise ValueError(
-            "healthcheck config must contain exactly the inventoried eight "
+            "healthcheck config must contain exactly the inventoried six "
             f"tasks; expected={dict(EXPECTED_TASK_NAMES)!r} "
             f"actual={dict(actual_names)!r}"
         )

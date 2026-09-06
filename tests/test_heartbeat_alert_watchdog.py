@@ -106,6 +106,50 @@ class HeartbeatAlertWatchdogTests(unittest.TestCase):
             self.assertIsNotNone(stale)
         self.assertTrue(state["us_mock"]["identity"])
 
+    def test_fresh_heartbeat_with_stale_controller_progress_alerts(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status_dir = Path(tmpdir)
+            (status_dir / "worker_us_mock.status.json").write_text(
+                json.dumps({
+                    "account": "us_mock",
+                    "market": "US",
+                    "pid": 16684,
+                    "state": "RUNNING",
+                    "updatedAt": now.isoformat(),
+                    "activityState": "active",
+                    "lastControllerCycleAt": (
+                        now - timedelta(seconds=heartbeat_alert_watchdog.CONTROLLER_STALE_AFTER_SECONDS + 1)
+                    ).isoformat(),
+                }),
+                encoding="utf-8",
+            )
+
+            problem = heartbeat_alert_watchdog._problem("us_mock", status_dir, now)
+
+        self.assertIn("controller progress stale", problem)
+
+    def test_fresh_expected_idle_worker_is_not_an_alert(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status_dir = Path(tmpdir)
+            (status_dir / "worker_us_mock.status.json").write_text(
+                json.dumps({
+                    "account": "us_mock",
+                    "market": "US",
+                    "pid": 16684,
+                    "state": "RUNNING",
+                    "updatedAt": now.isoformat(),
+                    "activityState": "expected-idle",
+                    "lastControllerCycleAt": now.isoformat(),
+                }),
+                encoding="utf-8",
+            )
+
+            problem = heartbeat_alert_watchdog._problem("us_mock", status_dir, now)
+
+        self.assertIsNone(problem)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,8 +19,6 @@ from tools import scheduled_task_healthcheck as healthcheck
 TASKS = [
     {"task_name": "Kiwoom Worker - KR Mock", "task_path": "\\", "target_path": "C:\\scratch\\worker_kr.py"},
     {"task_name": "Kiwoom Worker - US Mock", "task_path": "\\", "target_path": "C:\\scratch\\worker_us.py"},
-    {"task_name": "Kiwoom Worker Watchdog", "task_path": "\\", "target_path": "C:\\scratch\\watchdog.py"},
-    {"task_name": "Kiwoom Worker Watchdog", "task_path": "\\WD_Test\\", "target_path": "C:\\scratch\\wd_test2.py"},
     {"task_name": "Kiwoom Heartbeat Alert", "task_path": "\\", "target_path": "C:\\scratch\\heartbeat.py"},
     {"task_name": "Kiwoom Telegram Control Bot", "task_path": "\\", "target_path": "C:\\scratch\\telegram.py"},
     {"task_name": "Kiwoom Project Database Backup", "task_path": "\\", "target_path": "C:\\scratch\\database_backup.py"},
@@ -129,6 +127,6 @@ def test_load_config_accepts_legacy_and_dashboard_object_formats(tmp_path):
 
     assert legacy_dashboard is None
     assert [task.task_name for task in legacy_tasks] == [task.task_name for task in object_tasks]
-    assert len(object_tasks) == 8
+    assert len(object_tasks) == 6
     assert dashboard == healthcheck.DashboardSpec("http://127.0.0.1:39999/api/health", 2.0)
     assert healthcheck._load_tasks(object_path) == object_tasks

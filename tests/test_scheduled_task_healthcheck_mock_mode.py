@@ -25,11 +25,11 @@ def _write_config(tmp_path, names):
     return path
 
 
-def test_default_mode_all_eight_existing_tasks_load_successfully():
+def test_default_mode_all_six_deployed_tasks_load_successfully():
     tasks, dashboard = healthcheck._load_config(
         REPO_ROOT / "config" / "scheduled_task_healthcheck.json"
     )
-    assert len(tasks) == 8
+    assert len(tasks) == 6
     assert dashboard is not None
 
 
@@ -37,14 +37,27 @@ def test_default_mode_missing_task_still_fails(tmp_path):
     names = [
         "Kiwoom Worker - KR Mock",
         "Kiwoom Worker - US Mock",
-        "Kiwoom Worker Watchdog",
-        "Kiwoom Worker Watchdog",
         "Kiwoom Heartbeat Alert",
         "Kiwoom Telegram Control Bot",
         "Kiwoom Project Database Backup",
     ]
-    with pytest.raises(ValueError, match="exactly the inventoried eight tasks"):
+    with pytest.raises(ValueError, match="exactly the inventoried six tasks"):
         healthcheck._load_config(_write_config(tmp_path, names))
+
+
+def test_default_inventory_excludes_design_only_watchdog_tasks():
+    tasks, _ = healthcheck._load_config(
+        REPO_ROOT / "config" / "scheduled_task_healthcheck.json"
+    )
+
+    assert [(task.task_name, task.task_path, Path(task.target_path).name) for task in tasks] == [
+        ("Kiwoom Worker - KR Mock", "\\", "worker_supervisor.py"),
+        ("Kiwoom Worker - US Mock", "\\", "worker_supervisor.py"),
+        ("Kiwoom Heartbeat Alert", "\\", "heartbeat_alert_watchdog.py"),
+        ("Kiwoom Telegram Control Bot", "\\", "telegram_control_supervisor.py"),
+        ("Kiwoom Project Database Backup", "\\", "backup_project_databases.py"),
+        ("Kiwoom Project Files Backup", "\\", "backup_project_files.py"),
+    ]
 
 
 @pytest.mark.parametrize(
