@@ -61,6 +61,9 @@ def get_logger(account: str, log_file: str | Path = "logs/app.log"):
             # Logging is diagnostic only. A Windows sharing/ACL failure must
             # never prevent a market worker from starting or processing a
             # broker-confirmed position.
-            print(f"Warning: file logging disabled for {log_path}: {exc}", file=sys.stderr)
+            try:
+                print(f"Warning: file logging disabled for {log_path}: {exc}", file=sys.stderr)
+            except (TypeError, ValueError, OSError):
+                pass
 
     return _logger.bind(account=account, worker_identity="pid=- instance=-", symbol="-")
