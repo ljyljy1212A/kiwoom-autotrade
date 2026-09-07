@@ -5,19 +5,22 @@ stale status. It never starts, stops, or modifies a worker.
 """
 from __future__ import annotations
 
-from src.core.atomic_write import atomic_write_json
-
 import argparse
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.core.atomic_write import atomic_write_json
+
 DEFAULT_STATUS_DIR = PROJECT_ROOT / "data"
 DEFAULT_LOG_PATH = PROJECT_ROOT / "diagnostics" / "heartbeat_alert_watchdog.log"
 ALERT_STATE_PATH = PROJECT_ROOT / "data" / "heartbeat_alert_watchdog.alert_state.json"

@@ -19,8 +19,6 @@ register their own Task Scheduler entries at the same time.
 """
 from __future__ import annotations
 
-from src.core.atomic_write import atomic_write_json
-
 import json
 import os
 import sys
@@ -30,13 +28,15 @@ from types import SimpleNamespace
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from dotenv import load_dotenv
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from dotenv import load_dotenv
+
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
+from src.core.atomic_write import atomic_write_json
 from src import worker_supervisor
 from src.core.process_inventory import query_win32_processes
 from src.core.runtime_paths import DATA_DIR, LOG_DIR
