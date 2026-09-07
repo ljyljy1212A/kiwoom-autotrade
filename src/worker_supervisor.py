@@ -299,6 +299,9 @@ def _record_stopped_status(account: str, pid: int) -> None:
 
 
 def start(account: str, market: str) -> tuple[int, dict]:
+    guard = _reject_real_account(account)
+    if guard is not None:
+        return guard
     current = status(account)
     if current.get("liveness") == "suspect":
         return 8, {**current, "started": False, "reason": "status-indeterminate"}

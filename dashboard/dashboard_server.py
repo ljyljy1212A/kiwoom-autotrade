@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -23,6 +24,7 @@ import yaml
 from src.core.runtime_paths import DATA_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
+_CONTROL_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,11}$")
 
 
 def _load_dotenv() -> None:
@@ -60,8 +62,21 @@ def _supervisor(action: str, account: str, market: str) -> tuple[int, dict]:
     timeout = 20 if action == "stop" else 8
     command = [sys.executable, "-m", "src.worker_supervisor", action,
                "--account", account, "--market", market]
+    env = os.environ.copy()
+    if (
+        action == "start"
+        and env.get("ALLOW_LIVE_DASHBOARD", "false").lower() == "true"
+    ):
+        env["ALLOW_LIVE_SUPERVISOR"] = "true"
     try:
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return 4, {
             "account": account, "market": market, "running": True,
@@ -483,8 +498,12 @@ class Handler(BaseHTTPRequestHandler):
                 if self._reject_real_account(account):
                     return
                 _validate_market_config(account, payload.get("config"))
+                symbol = str(payload.get("symbol", "")).upper()
+                if not _CONTROL_SYMBOL_RE.fullmatch(symbol):
+                    self._json({"error": "Invalid symbol"}, 400)
+                    return
                 control = {
-                    "symbol": str(payload.get("symbol", "")).upper(),
+                    "symbol": symbol,
                     "auto_buy": bool(payload.get("auto_buy", False)),
                     "auto_sell": bool(payload.get("auto_sell", False)),
                     "config": payload.get("config") if isinstance(payload.get("config"), dict) else None,

@@ -463,6 +463,56 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         status_mock.assert_not_called()
         taskkill_mock.assert_not_called()
 
+    def test_start_blocks_synthetic_real_account_without_allow_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir(parents=True)
+            (root / "config" / "accounts.yaml").write_text(
+                "accounts:\n"
+                "  - id: synthetic_catalog_real\n"
+                "    display_name: Synthetic Real Test Account\n"
+                "    market: KR\n"
+                "    mode: real\n",
+                encoding="utf-8",
+            )
+            with patch.object(account_catalog, "PROJECT_ROOT", root), \
+                 patch.dict(os.environ, {}, clear=False), \
+                 patch.object(supervisor, "status") as status_mock, \
+                 patch.object(supervisor.subprocess, "Popen") as popen_mock:
+                os.environ.pop("ALLOW_LIVE_SUPERVISOR", None)
+                code, payload = supervisor.start("synthetic_catalog_real", "KR")
+        self.assertEqual(code, 7)
+        self.assertEqual(payload["mode"], "blocked")
+        self.assertEqual(payload["reason"], "real-account-guard")
+        status_mock.assert_not_called()
+        popen_mock.assert_not_called()
+
+    def test_start_allows_synthetic_real_account_with_allow_env_true(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config").mkdir(parents=True)
+            (root / "config" / "accounts.yaml").write_text(
+                "accounts:\n"
+                "  - id: synthetic_catalog_real\n"
+                "    display_name: Synthetic Real Test Account\n"
+                "    market: KR\n"
+                "    mode: real\n",
+                encoding="utf-8",
+            )
+            child = MagicMock(pid=999, returncode=0)
+            child.poll.return_value = None
+            with patch.object(account_catalog, "PROJECT_ROOT", root), \
+                 patch.dict(os.environ, {"ALLOW_LIVE_SUPERVISOR": "true"}, clear=False), \
+                 patch.object(supervisor, "status", side_effect=[{"running": False}, {"running": True, "pid": 999}]), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor.subprocess, "Popen", return_value=child) as popen_mock, \
+                 patch.object(supervisor.time, "sleep"), \
+                 patch.object(supervisor.time, "monotonic", side_effect=[0, 0.1]):
+                code, payload = supervisor.start("synthetic_catalog_real", "KR")
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["started"])
+        popen_mock.assert_called_once()
+
     def test_kill_blocks_synthetic_real_account_without_allow_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

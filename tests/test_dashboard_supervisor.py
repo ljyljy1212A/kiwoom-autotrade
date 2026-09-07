@@ -1,4 +1,6 @@
 import json
+import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -104,6 +106,44 @@ class DashboardSupervisorTests(unittest.TestCase):
         self.assertEqual(code, 4)
         self.assertFalse(payload["stopped"])
         self.assertEqual(payload["reason"], "dashboard-supervisor-timeout")
+
+    def test_dashboard_start_propagates_supervisor_authorization(self):
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout='{"started": true}\n', stderr=""
+        )
+        with patch.dict(os.environ, {"ALLOW_LIVE_DASHBOARD": "true"}, clear=False), \
+             patch.object(dashboard_server.subprocess, "run", return_value=completed) as run:
+            dashboard_server._supervisor("start", "synthetic_catalog_real", "KR")
+            start_env = run.call_args.kwargs["env"]
+            self.assertEqual(start_env["ALLOW_LIVE_SUPERVISOR"], "true")
+
+            dashboard_server._supervisor("stop", "synthetic_catalog_real", "KR")
+            stop_env = run.call_args.kwargs["env"]
+            self.assertNotIn("ALLOW_LIVE_SUPERVISOR", stop_env)
+
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(dashboard_server.subprocess, "run", return_value=completed) as run:
+            os.environ.pop("ALLOW_LIVE_DASHBOARD", None)
+            dashboard_server._supervisor("start", "synthetic_catalog_real", "KR")
+            self.assertNotIn("ALLOW_LIVE_SUPERVISOR", run.call_args.kwargs["env"])
+
+    def test_dashboard_start_without_dashboard_authorization_returns_403(self):
+        body = json.dumps({"accounts": ["synthetic_catalog_real"]}).encode()
+        handler = object.__new__(dashboard_server.Handler)
+        handler.headers = {"Content-Length": str(len(body))}
+        handler.rfile = io.BytesIO(body)
+        handler._path_and_query = lambda: ("/api/start", {})
+        response = Mock()
+        handler._json = response
+        accounts = [{"id": "synthetic_catalog_real", "market": "KR", "mode": "real"}]
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(dashboard_server, "_account_catalog", return_value=accounts), \
+             patch.object(dashboard_server, "_supervisor") as supervisor_call:
+            os.environ.pop("ALLOW_LIVE_DASHBOARD", None)
+            handler.do_POST()
+
+        response.assert_called_once_with({"error": "Live accounts are disabled by the dashboard"}, 403)
+        supervisor_call.assert_not_called()
 
 
 if __name__ == "__main__":
