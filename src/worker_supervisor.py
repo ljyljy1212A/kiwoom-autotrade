@@ -235,6 +235,10 @@ def status(account: str) -> dict:
         **liveness,
         "instanceId": metadata.get("instanceId"), "startedAt": metadata.get("startedAt"),
         "state": metadata.get("state"), "market": metadata.get("market"),
+        "active_symbols": metadata.get("active_symbols", []),
+        "activityState": metadata.get("activityState"),
+        "processHeartbeatAt": metadata.get("processHeartbeatAt"),
+        "lastControllerCycleAt": metadata.get("lastControllerCycleAt"),
     }
 
 
