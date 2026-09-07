@@ -11,6 +11,7 @@ import asyncio
 import argparse
 import os
 import json
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, replace
@@ -38,6 +39,8 @@ from src.utils.logger import get_logger
 # variables so a dashboard restarted after a credential rotation uses the new
 # App Key and Secret Key.
 load_dotenv(override=True)
+
+_CONTROL_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,11}$")
 
 # A dashboard and KR/US workers are independent Windows processes.  Do not
 # make a fresh worker contend for a shared Loguru file handle during restart.
@@ -571,6 +574,11 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                 balance_monitor = None
                 ctx.logger.info("Stopped passive account balance monitor (strategy engine active)")
             for symbol, config in wanted.items():
+                if not _CONTROL_SYMBOL_RE.fullmatch(symbol):
+                    ctx.logger.warning(
+                        f"Skipping unsafe dashboard symbol for account={ctx.account_id}: {symbol!r}"
+                    )
+                    continue
                 control_path = DATA_DIR / f"dashboard_control_{ctx.account_id}_{symbol}.json"
                 if not control_path.exists():
                     control_path.write_text(json.dumps({

@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -12,6 +13,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from src import main as main_module
 from src import worker_supervisor
 from src.core.process_lock import AccountOrderAuthority
+
+
+class _StopControllerScan(Exception):
+    pass
 
 
 class MainAccountAuthorityTests(unittest.IsolatedAsyncioTestCase):
@@ -27,6 +32,79 @@ class MainAccountAuthorityTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(main_module, "_acquire_worker_pid", side_effect=acquire_pid):
                 result = await main_module.main()
         return result, load_accounts
+
+    async def test_symbol_engine_scan_skips_traversal_symbol_without_crashing_and_processes_valid_symbol(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            data_dir.mkdir()
+            sentinel = f"unexpected_{uuid.uuid4().hex}"
+            traversal_symbol = f"/../../../{sentinel}"
+            valid_symbol = "SOXL"
+            def profile(symbol):
+                return {
+                    "enabled": True,
+                    "config": {
+                        "market": "US",
+                        "symbol": symbol,
+                        "auto_buy": {"enabled": True},
+                        "auto_sell": {"enabled": False},
+                        "first_buy": {"amount": 1},
+                        "buy_steps": [],
+                        "sell_steps": [],
+                    },
+                }
+            (data_dir / "dashboard_settings_us_mock.json").write_text(
+                json.dumps({"profiles": [profile(traversal_symbol), profile(valid_symbol)]}),
+                encoding="utf-8",
+            )
+            out_of_bounds = root.parent / f"{sentinel.upper()}.json"
+            self.assertFalse(out_of_bounds.exists())
+
+            logger = Mock()
+            logger.bind.return_value = logger
+            ctx = SimpleNamespace(
+                account_id="us_mock",
+                client=SimpleNamespace(market="US"),
+                price_feed_obj=object(),
+                logger=logger,
+            )
+            claimed = []
+
+            class Registry:
+                def mark_running(self, *args):
+                    pass
+
+                def claim(self, account_id, market, symbol):
+                    claimed.append(symbol)
+                    return True
+
+                def bind_task(self, *args):
+                    pass
+
+                def running_symbols(self, account_id):
+                    return ()
+
+                def mark_controller_cycle(self, account_id):
+                    pass
+
+                def request_stop(self, *args):
+                    return False
+
+            with patch.object(main_module, "DATA_DIR", data_dir), \
+                 patch.object(main_module, "make_price_feed", new=AsyncMock(return_value=object())), \
+                 patch.object(main_module, "run_quote_health_monitor", new=AsyncMock()), \
+                 patch.object(main_module, "DispatchClearanceService", return_value=Mock()), \
+                 patch.object(main_module.asyncio, "sleep", new=AsyncMock(side_effect=_StopControllerScan)):
+                with self.assertRaises(_StopControllerScan):
+                    await main_module.run_symbol_engines(ctx, Mock(), Registry())
+
+            self.assertNotIn(traversal_symbol.upper(), claimed)
+            self.assertIn(valid_symbol, claimed)
+            self.assertTrue((data_dir / "dashboard_control_us_mock_SOXL.json").exists())
+            self.assertFalse(out_of_bounds.exists())
+            logger.warning.assert_called_once()
+            self.assertIn(repr(traversal_symbol.upper()), logger.warning.call_args.args[0])
 
     async def test_missing_account_filter_fails_before_account_loading(self):
         with patch.dict(os.environ, {}, clear=True), \
