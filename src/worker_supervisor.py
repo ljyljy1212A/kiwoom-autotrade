@@ -94,6 +94,25 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _list_posix_process_ids() -> list[int]:
+    try:
+        return sorted(
+            int(entry.name)
+            for entry in Path("/proc").iterdir()
+            if entry.name.isdigit()
+        )
+    except OSError:
+        return []
+
+
+def _read_posix_process_file(relative_name: str) -> bytes:
+    return (Path("/proc") / relative_name).read_bytes()
+
+
+def _posix_sysconf(name: str) -> int:
+    return os.sysconf(name)
+
+
 def _scan_unmanaged_worker_processes(account: str, market: str) -> list[dict]:
     """Read-only scan for externally launched workers matching a market.
 
@@ -101,12 +120,46 @@ def _scan_unmanaged_worker_processes(account: str, market: str) -> list[dict]:
     Win32_Process. Therefore candidates are reported with an unverifiable
     account match; no candidate is selected or acted upon.
     """
-    if os.name != "nt":
-        raise RuntimeError("unmanaged worker scan requires Windows")
     if not isinstance(market, str) or not market:
         raise ValueError("worker market is unavailable for unmanaged scan")
 
     signature = f"-m src.main --market {market}"
+    if os.name != "nt":
+        matches = []
+        for pid in _list_posix_process_ids():
+            try:
+                name = _read_posix_process_file(
+                    f"{pid}/comm"
+                ).decode("utf-8", errors="replace").strip()
+                if name not in {"python", "python3"}:
+                    continue
+                command_line = _read_posix_process_file(
+                    f"{pid}/cmdline"
+                ).replace(b"\0", b" ").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+                if signature not in command_line:
+                    continue
+                matches.append(
+                    {
+                        "pid": pid,
+                        "account": account,
+                        "market": market,
+                        "accountMatch": "unverifiable",
+                        "commandLine": command_line,
+                        "startTime": _process_creation_time(pid),
+                    }
+                )
+            except (
+                FileNotFoundError,
+                PermissionError,
+                OSError,
+                UnicodeError,
+                ValueError,
+            ):
+                continue
+        return matches
+
     worker_names = {"python.exe", "pythonw.exe"}
     matches = []
     for record in query_win32_processes():
@@ -168,7 +221,43 @@ def _unmanaged_process_result(account: str, current: dict):
 
 
 def _process_creation_time(pid: int):
-    if os.name != "nt" or pid <= 0:
+    if os.name != "nt":
+        if pid <= 0:
+            return None
+        try:
+            stat_text = _read_posix_process_file(
+                f"{pid}/stat"
+            ).decode("utf-8", errors="replace")
+            close_paren = stat_text.rfind(")")
+            if close_paren < 0:
+                return None
+            fields = stat_text[close_paren + 2:].split()
+            if len(fields) <= 19:
+                return None
+            start_ticks = int(fields[19])
+            uptime_text = _read_posix_process_file(
+                "uptime"
+            ).decode("ascii", errors="strict")
+            uptime_seconds = float(uptime_text.split()[0])
+            ticks_per_second = _posix_sysconf("SC_CLK_TCK")
+            if ticks_per_second <= 0:
+                return None
+            boot_epoch = time.time() - uptime_seconds
+            return datetime.fromtimestamp(
+                boot_epoch + start_ticks / ticks_per_second,
+                timezone.utc,
+            )
+        except (
+            FileNotFoundError,
+            PermissionError,
+            OSError,
+            UnicodeError,
+            ValueError,
+            IndexError,
+            OverflowError,
+        ):
+            return None
+    if pid <= 0:
         return None
     class FILETIME(ctypes.Structure):
         _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]

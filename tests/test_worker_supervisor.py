@@ -6,7 +6,7 @@ import tempfile
 import textwrap
 import unittest
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -574,6 +574,148 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 code, payload = supervisor.stop("synthetic_catalog_mock")
         self.assertEqual(code, 0)
         self.assertEqual(payload["mode"], "already_stopped")
+
+
+    def test_posix_scan_returns_matching_python_process(self):
+        command_line = "python3 -m src.main --market KR"
+        creation_time = datetime(2026, 9, 7, tzinfo=timezone.utc)
+
+        def read_file(name):
+            return {
+                "101/comm": b"python3\n",
+                "101/cmdline": command_line.replace(" ", "\0").encode(),
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_list_posix_process_ids", return_value=[101]), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file), \
+             patch.object(supervisor, "_process_creation_time", return_value=creation_time), \
+             patch.object(supervisor.os, "kill") as kill, \
+             patch.object(supervisor.subprocess, "run") as run:
+            matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+        self.assertEqual(matches[0]["pid"], 101)
+        self.assertEqual(matches[0]["market"], "KR")
+        self.assertEqual(matches[0]["startTime"], creation_time)
+        kill.assert_not_called()
+        run.assert_not_called()
+
+    def test_posix_scan_excludes_non_python_process(self):
+        def read_file(name):
+            return {
+                "101/comm": b"bash\n",
+                "101/cmdline": b"bash\0-m\0src.main\0--market\0KR",
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_list_posix_process_ids", return_value=[101]), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file):
+            matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+        self.assertEqual(matches, [])
+
+    def test_posix_scan_excludes_wrong_market(self):
+        def read_file(name):
+            return {
+                "101/comm": b"python3\n",
+                "101/cmdline": b"python3\0-m\0src.main\0--market\0US",
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_list_posix_process_ids", return_value=[101]), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file):
+            matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+        self.assertEqual(matches, [])
+
+    def test_posix_scan_skips_unreadable_pid_and_continues(self):
+        def read_file(name):
+            if name == "101/comm":
+                raise PermissionError("denied")
+            return {
+                "102/comm": b"python3\n",
+                "102/cmdline": b"python3\0-m\0src.main\0--market\0KR",
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_list_posix_process_ids", return_value=[101, 102]), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file), \
+             patch.object(supervisor, "_process_creation_time", return_value=None):
+            matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+        self.assertEqual([item["pid"] for item in matches], [102])
+
+    def test_posix_scan_returns_empty_when_no_match(self):
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_list_posix_process_ids", return_value=[]):
+            matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+        self.assertEqual(matches, [])
+
+    def test_posix_creation_time_returns_utc_datetime(self):
+        post_comm_fields = ["S"] + ["0"] * 18 + ["2500"]
+        stat_payload = (
+            "123 (python3) " + " ".join(post_comm_fields)
+        ).encode()
+
+        def read_file(name):
+            return {
+                "123/stat": stat_payload,
+                "uptime": b"1000.0 0.0\n",
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file), \
+             patch.object(supervisor, "_posix_sysconf", return_value=100), \
+             patch.object(supervisor.time, "time", return_value=1700000000.0):
+            result = supervisor._process_creation_time(123)
+
+        self.assertEqual(result, datetime.fromtimestamp(1699999025.0, timezone.utc))
+        self.assertIsNotNone(result.tzinfo)
+
+    def test_posix_creation_time_returns_none_for_missing_pid(self):
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(
+                 supervisor,
+                 "_read_posix_process_file",
+                 side_effect=FileNotFoundError,
+             ):
+            result = supervisor._process_creation_time(999)
+
+        self.assertIsNone(result)
+
+    def test_posix_creation_time_returns_none_for_malformed_stat(self):
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(
+                 supervisor,
+                 "_read_posix_process_file",
+                 return_value=b"malformed",
+             ):
+            result = supervisor._process_creation_time(123)
+
+        self.assertIsNone(result)
+
+    def test_posix_creation_time_returns_none_when_sysconf_unavailable(self):
+        stat_payload = (
+            "123 (python3) " + " ".join(["S"] + ["0"] * 18 + ["2500"])
+        ).encode()
+
+        def read_file(name):
+            return {
+                "123/stat": stat_payload,
+                "uptime": b"1000.0 0.0\n",
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file), \
+             patch.object(
+                 supervisor,
+                 "_posix_sysconf",
+                 side_effect=ValueError("unsupported"),
+             ):
+            result = supervisor._process_creation_time(123)
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
