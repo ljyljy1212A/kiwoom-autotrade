@@ -263,7 +263,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
 
     def test_stop_scan_failure_remains_already_stopped(self):
         with patch.object(supervisor, "status", return_value=self._stopped_status()), \
-             patch.object(supervisor, "query_win32_processes", side_effect=RuntimeError("PowerShell failed")), \
+             patch.object(supervisor, "_scan_unmanaged_worker_processes", side_effect=RuntimeError("scan failed")), \
              patch.object(supervisor, "_remove_pid_after_confirmed_exit") as remove_pid, \
              patch.object(supervisor.os, "kill") as os_kill, \
              patch.object(supervisor.subprocess, "run") as subprocess_run:
@@ -279,7 +279,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
 
     def test_kill_scan_failure_remains_already_stopped(self):
         with patch.object(supervisor, "status", return_value=self._stopped_status()), \
-             patch.object(supervisor, "query_win32_processes", side_effect=RuntimeError("PowerShell failed")), \
+             patch.object(supervisor, "_scan_unmanaged_worker_processes", side_effect=RuntimeError("scan failed")), \
              patch.object(supervisor, "_remove_pid_after_confirmed_exit") as remove_pid, \
              patch.object(supervisor.os, "kill") as os_kill, \
              patch.object(supervisor.subprocess, "run") as subprocess_run:

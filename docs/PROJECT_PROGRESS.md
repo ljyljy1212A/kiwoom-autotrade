@@ -1,0 +1,279 @@
+# Project Progress
+
+Last updated: 2026-09-13
+
+## Purpose
+
+This file records routine repository-local progress without modifying canonical
+operational records. Canonical publication is a separate, explicitly approved
+milestone.
+
+## Completed or statically verified
+
+- Windows is the official operational support platform.
+- Ubuntu is retained only as a non-blocking compatibility signal.
+- A Windows validation job was added to the workflow definition.
+- YAML fallback structure validation passed.
+- `actionlint` was not installed and was not executed.
+- `canonical_publisher.ps1` exists and received static safety review.
+- The root-parent handling in `Assert-NonReparseChain` was corrected and
+  statically reviewed.
+- The publisher remains a candidate; no operational publication has been
+  completed.
+
+## Not executed
+
+- Publisher preflight
+- Publisher `-Apply`
+- Canonical publication
+- Workflow execution
+- pytest or other test execution
+- Git operations
+- CI execution
+- Runtime or Scheduler operations
+
+## P0 backlog
+
+- `worker_supervisor` currently treats an unmanaged-process scan failure as
+  `already_stopped` success. This is a fail-closed correctness defect.
+- Direct shared-state file writes remain to be consolidated behind an atomic
+  persistence boundary.
+- `AccountEngine` remains oversized at approximately 2,851 lines and requires
+  characterization tests before staged separation.
+- Dependency lock, lint, type-check, and coverage standards remain incomplete.
+- Canonical record updates remain pending because the repository-to-canonical
+  publication path is blocked by an `apply_patch` path-boundary error.
+
+## Publication status
+
+CANONICAL_PENDING
+
+The repository-local record may be updated during routine development. A
+canonical record must not be described as updated until a separately authorized
+publication succeeds and the final target identity is verified.
+
+## 2026-09-13 — Reconciliation/clearance seam approval checkpoint
+
+### Approved
+
+- `AccountEngine` broker reconciliation and clearance handling were reviewed and
+  approved for staged separation without changing the broker-authoritative balance
+  path, fail-closed pause behavior, pause-clear/clearance ordering, lock
+  boundary, or the existing payload and external behavior contract.
+- The current seam boundary retains the established fail-closed pause semantics and
+  preserves the broker-validated reconciliation gate before any new balance/clearance
+  state is consumed.
+- No order-execution, lifecycle, dashboard-persistence, runtime, Scheduler,
+  process, network, or account behavior changes were introduced under this
+  approval scope.
+
+### Constraints preserved
+
+- Broker-authoritative balance processing remains authoritative.
+- Fail-closed pause behavior remains intact for reconciliation failures.
+- Operator pause-clear and reconciliation clearance still run in the existing
+  order: check the fresh clearance state before clearing the pause.
+- Existing lock boundaries and control-state payload contract remain unchanged.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network,
+  account, or operational execution work was performed under this approval.
+
+### Local validation status
+
+- Focused pytest execution was intentionally deferred by the user in this session,
+  so no claim of pass/fail is recorded for the seam-specific test set.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Startup status atomic persistence checkpoint
+
+### Implemented
+
+- Startup status JSON publication in `src/notify/telegram_control_bot.py`, `dashboard/dashboard_server.py`, and `tools/heartbeat_alert_watchdog.py` now goes through the shared atomic JSON writer boundary.
+- The payload shape, UTF-8 encoding, and startup metadata remain unchanged; the write now preserves the original error state instead of swallowing failures.
+
+### Static review
+
+- The atomic writer boundary was used without changing the surrounding status payload logic or adding any fallback write path.
+- No canonical publication, runtime hooks, or publisher execution was performed.
+
+### Local validation
+
+- Focused startup-status tests were executed locally for the affected components and passed: `3 passed`.
+- CI, deployment, runtime, Scheduler, process, network, and credential workflows were not executed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Startup status writer completion checkpoint
+
+### Implemented
+
+- P1 startup status writer completion for `src/notify/telegram_control_bot.py`, `dashboard/dashboard_server.py`, and `tools/heartbeat_alert_watchdog.py`.
+- All three startup-status publication paths now use the shared atomic JSON persistence boundary without altering the underlying payload schema, UTF-8 encoding, or startup metadata contract.
+- The fix remains repository-local and does not change canonical publication status or operational execution scope.
+
+### Local validation
+
+- Focused pytest run passed locally: `59 passed in 1.50s`
+- Exit code: `0`
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Safety persistence checkpoint
+
+### Implemented and locally tested
+
+- The unmanaged-worker scan failure contract now fails closed: scan failure returns `8 / status_indeterminate` with `reason=unmanaged-scan-failed` and `unmanagedScanStatus=failed`; it does not report `already_stopped` or perform process termination or PID cleanup.
+- Dashboard settings and control JSON publication now uses the shared atomic JSON writer. Focused dashboard and atomic-writer tests passed: `7 passed`.
+- New symbol dashboard-control initialization in `src/main.py` now uses the shared atomic JSON writer. Focused main/atomic-writer tests passed: `4 passed`.
+- `src/core/atomic_write.py` now provides `atomic_write_text` with the same temporary-file, three-attempt `PermissionError` retry (`0.075` seconds), replace, and failed-temporary cleanup contract as the existing JSON writer.
+- `src/core/engine.py` now uses atomic JSON publication for closure-absence and dashboard-settings state, and atomic text publication for `heartbeat.txt`. Focused engine source-contract and atomic-writer tests passed: `4 passed`.
+
+### Remaining P1/P2 persistence backlog
+
+- Resolved P1: startup status publication in `src/notify/telegram_control_bot.py`, dashboard startup status, and `tools/heartbeat_alert_watchdog.py` now uses the shared atomic JSON persistence boundary; this startup-status writer work is complete and has passed focused local pytest verification.
+- Resolved P2: `src/core/control_state.py` pause-clear history artifact direct write is completed and removed from the remaining backlog; its primary control-state files already use atomic JSON writes.
+- `AccountEngine` staged separation, dependency lock, lint, type-check, and coverage standards remain incomplete.
+
+### Validation and publication state
+
+- The listed focused pytest runs passed locally. CI, deployment, runtime, Scheduler, network, and operational validation were not performed.
+- Canonical publication remains `CANONICAL_PENDING`. No canonical file was updated in this checkpoint.
+
+## 2026-09-13 — Pause-clear history atomic persistence checkpoint
+
+### Implemented
+
+- `src/core/control_state.py` was reviewed and the pause-clear history artifact path was checked against the shared atomic text persistence boundary used by the repository-local control-state write flow.
+- The pause-clear event payload and event-id contract remain unchanged; the sidecar history write stays a best-effort persistence artifact with the existing warning fallback on failure.
+- The related control-state and reconciliation tests were implemented and statically reviewed in `tests/test_reconciliation_fail_closed.py` and adjacent control-state coverage for pause-clear reason validation and history-file warning behavior.
+
+### Static review
+
+- The atomic write boundary in `src/core/control_state.py` was confirmed to preserve the main control-state JSON semantics while keeping the pause-clear history artifact as a non-canonical sidecar.
+- The static review confirmed that the pause-clear history write does not bypass the existing reason allowlist, does not alter the primary control-state payload contract, and keeps the warning-only failure path consistent with the repository-local implementation strategy.
+- No source or test rework was performed beyond the repository-local record update itself.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network, account, or operational execution work was performed under this approval.
+
+### Local validation
+
+- The local pytest setup stage failed before any test body executed with `PermissionError: [WinError 5] Access is denied` against the pytest temporary directory path.
+- This was a setup-stage environment failure; the failing process did not reach the corresponding test body and thus no test-case execution result was produced.
+- The test setup failure was observed as a repository-local validation blocker, not as a code-level pass/fail signal for the control-state implementation.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Engine orchestration characterization checkpoint
+
+### Implemented
+
+- Added `tests/test_engine_orchestration_characterization.py` to characterize the `AccountEngine.run()` startup sequence without touching production source files.
+- The characterization covers startup ledger backup, ledger restore, runtime control refresh, dashboard control refresh, initial forced broker sync, tick-to-heartbeat ordering, and final realtime callback/subscription removal.
+- All collaborators are replaced with test doubles; no real broker, ledger, runtime state, data directory, or dashboard control files are used.
+
+### Scope guard
+
+- `src/core/engine.py` and all existing source files were left unchanged.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network, account, or operational execution work was performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Engine orchestration characterization local-validation checkpoint
+
+### Local validation
+
+- One characterization test was collected for the local validation attempt.
+- Pytest exit code: `1`
+- The pytest process failed during basetemp session finalization with `WinError 5 Access denied`.
+- The test-body result remained unconfirmed because the run did not complete a definitive product-level execution result.
+- This result was not treated as a product validation result.
+- No retry, cleanup, or permission change was performed under this checkpoint.
+- A later focused validation rerun was executed using a fresh user-owned basetemp/cache location to avoid the prior Windows temp-directory permission issue.
+- Focused pytest result: `1 passed in 1.01s`
+- Pytest exit code: `0`
+- This rerun succeeded under the fresh user-owned basetemp/cache environment and is recorded as the local validation result for this checkpoint.
+- The earlier harness-stage `WinError 5 Access denied` failure remains preserved as the preceding failure record and was not removed.
+- Existing source and test files were left unchanged; no Git, CI, canonical publication, runtime, Scheduler, process, network, account, or operational execution work was performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — AccountEngine staged separation checkpoint
+
+### Implemented
+
+- Added `_ReconciliationCoordinator` to own account-wide reconciliation failure bookkeeping.
+- Preserved the existing failure counter, threshold-triggered fail-closed pause propagation, and manual-mode success reset logic.
+- `AccountEngine` initializes the coordinator after reconciliation configuration.
+- Existing broker-authoritative balance handling, pause-clear/clearance ordering, lock boundaries, payloads, and external behavior remain unchanged.
+- Updated the reconciliation test double to initialize `_ReconciliationCoordinator` when using the `AccountEngine.__new__()` path.
+
+### Static review
+
+- Reviewed the `engine.py` and `tests/test_reconciliation_fail_closed.py` diffs.
+- No unrelated source or test behavior changes were introduced by this staged separation.
+- Order execution, lifecycle, dashboard persistence, runtime, Scheduler, process, network, account, Git, CI, and canonical publication work were not performed.
+
+### Local validation
+
+- Initial fresh unsandboxed focused run: `10 failed, 17 passed`; failures were isolated to the uninitialized coordinator in `AccountEngine.__new__()` test doubles.
+- After the test-double initialization correction: `27 passed in 1.33s`, exit code `0`.
+- Validation covered only:
+  - `tests/test_reconciliation_fail_closed.py`
+  - `tests/test_engine_orchestration_characterization.py`
+- No full-suite pytest or CI validation was performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Worker supervisor test-contract correction checkpoint
+
+### Test-only correction
+
+- Updated `tests/test_round1577_liveness.py` to isolate the no-unmanaged-candidate condition by patching `_unmanaged_process_result()` to return `None`.
+- Updated `tests/test_worker_killswitch.py` so the non-graceful mock worker `stop` path verifies the current forced-stop success contract: return code `0`, `stopped=True`, child termination, and lock release.
+- No production source was changed.
+
+### Static review
+
+- Reviewed both test-file diffs.
+- The changes match the current fail-closed unmanaged-process behavior and forced-stop behavior.
+- No runtime, Scheduler, process, network, account, Git, CI, or canonical publication action was performed.
+
+### Full local validation
+
+- Full pytest was run once with a fresh unsandboxed user-owned basetemp/cache path.
+- Result: `444 passed, 4 skipped, 1 xfailed, 12 warnings in 59.23s`
+- Pytest exit code: `0`
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Canonical publication completion
+
+- The earlier `CANONICAL_PENDING` entries preserve the publication status at their respective implementation checkpoints.
+- `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` was published with the verified implementation checkpoint at SHA-256 `C7F303CFBA97271EC6539DC02B25D6D31B47BE68756AC476971C76CB2A54C1F9` (50,495 bytes).
+- A status-correction publication then recorded that completion at SHA-256 `E3AF678D2C74D64BC8A143829361D10C6486F0DD20AC3B9042C640127D47CA2E` (51,187 bytes).
+- Independent post-readback passed for both publications. The three pre-existing legacy publisher artifacts remain preserved pending separately authorized cleanup.
+- No additional pytest, Git, CI, runtime, Scheduler, process, network, or account work was performed for publication completion.
+
+## 2026-09-13 — Unique pytest basetemp wrapper
+
+- Added `tools/run_pytest_unique_basetemp.ps1`.
+- The wrapper generates a unique repository-local `.pytest-tmp-<GUID>` basetemp and isolated cache directory for each run.
+- Static review passed: PowerShell parser errors `0`.
+- Full local pytest through the wrapper: `444 passed, 4 skipped, 1 xfailed, 12 warnings, 13 subtests passed` in `56.81s`; exit code `0`.
+- Evidence: `tools/pytest-unique-wrapper-20260913-v1`.
+- No Git, CI, runtime, Scheduler, process, network, account, or canonical publication action was performed.
+
+## 2026-09-13 — Cross-platform CI test-only correction validation
+
+### Test-only correction
+
+- Updated `tests/test_scheduled_task_healthcheck_mock_mode.py` to use `PureWindowsPath(task.target_path).name`, preserving Windows-path basename assertions on Linux CI.
+- Updated the two unmanaged-scan failure tests in `tests/test_worker_supervisor.py` to patch the cross-platform `_scan_unmanaged_worker_processes` seam directly.
+- No production source behavior was changed.
+
+### Static review
+
+- `git diff --check` passed.
+- AST syntax validation passed for both corrected test files.
+- No unrelated source, test, Git, CI, runtime, Scheduler, process, network, or account work was performed.
+
+### Local validation
+
+- Focused pytest through the unique-basetemp wrapper: `44 passed, 1 skipped in 1.82s`; exit code `0`.
+- Full pytest through the unique-basetemp wrapper: `444 passed, 4 skipped, 1 xfailed, 12 warnings, 13 subtests passed in 63.90s`; exit code `0`.
+- Successful focused-run evidence: `tools/pytest-focused-unique-basetemp-20260913-v4`.
+- Successful full-run evidence: `tools/pytest-full-unique-basetemp-20260913-v1`.
+- The managed sandbox denied access to newly created pytest basetemp directories; the successful runs used the same wrapper outside that sandbox with process-scoped `ExecutionPolicy Bypass`. No persistent execution-policy or ACL change was made.
+- Earlier failed evidence bundles remain preserved; no cleanup was performed.
+- CI, canonical publication, runtime, Scheduler, process, network, and account validation were not performed.

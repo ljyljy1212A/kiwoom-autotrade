@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -50,7 +50,7 @@ def test_default_inventory_excludes_design_only_watchdog_tasks():
         REPO_ROOT / "config" / "scheduled_task_healthcheck.json"
     )
 
-    assert [(task.task_name, task.task_path, Path(task.target_path).name) for task in tasks] == [
+    assert [(task.task_name, task.task_path, PureWindowsPath(task.target_path).name) for task in tasks] == [
         ("Kiwoom Worker - KR Mock", "\\", "worker_supervisor.py"),
         ("Kiwoom Worker - US Mock", "\\", "worker_supervisor.py"),
         ("Kiwoom Heartbeat Alert", "\\", "heartbeat_alert_watchdog.py"),
