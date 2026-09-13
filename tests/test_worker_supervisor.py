@@ -264,28 +264,34 @@ class WorkerSupervisorStopTests(unittest.TestCase):
     def test_stop_scan_failure_remains_already_stopped(self):
         with patch.object(supervisor, "status", return_value=self._stopped_status()), \
              patch.object(supervisor, "query_win32_processes", side_effect=RuntimeError("PowerShell failed")), \
+             patch.object(supervisor, "_remove_pid_after_confirmed_exit") as remove_pid, \
              patch.object(supervisor.os, "kill") as os_kill, \
              patch.object(supervisor.subprocess, "run") as subprocess_run:
             code, payload = supervisor.stop("kr_mock")
 
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["mode"], "already_stopped")
+        self.assertEqual(code, 8)
+        self.assertEqual(payload["mode"], "status_indeterminate")
+        self.assertEqual(payload["reason"], "unmanaged-scan-failed")
         self.assertEqual(payload["unmanagedScanStatus"], "failed")
         os_kill.assert_not_called()
         subprocess_run.assert_not_called()
+        remove_pid.assert_not_called()
 
     def test_kill_scan_failure_remains_already_stopped(self):
         with patch.object(supervisor, "status", return_value=self._stopped_status()), \
              patch.object(supervisor, "query_win32_processes", side_effect=RuntimeError("PowerShell failed")), \
+             patch.object(supervisor, "_remove_pid_after_confirmed_exit") as remove_pid, \
              patch.object(supervisor.os, "kill") as os_kill, \
              patch.object(supervisor.subprocess, "run") as subprocess_run:
             code, payload = supervisor.kill("kr_mock")
 
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["mode"], "already_stopped")
+        self.assertEqual(code, 8)
+        self.assertEqual(payload["mode"], "status_indeterminate")
+        self.assertEqual(payload["reason"], "unmanaged-scan-failed")
         self.assertEqual(payload["unmanagedScanStatus"], "failed")
         os_kill.assert_not_called()
         subprocess_run.assert_not_called()
+        remove_pid.assert_not_called()
 
     @unittest.skipUnless(os.name != "nt", "POSIX-only signal test")
     def test_stop_escalates_to_sigkill_on_posix(self):
@@ -550,6 +556,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             )
             with patch.object(account_catalog, "PROJECT_ROOT", root), \
                  patch.dict(os.environ, {"ALLOW_LIVE_SUPERVISOR": "true"}, clear=False), \
+                 patch.object(supervisor, "_scan_unmanaged_worker_processes", return_value=[]), \
                  patch.object(supervisor, "status", return_value={"running": False}):
                 code, payload = supervisor.stop("synthetic_catalog_real")
         self.assertEqual(code, 0)
@@ -569,6 +576,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             )
             with patch.object(account_catalog, "PROJECT_ROOT", root), \
                  patch.dict(os.environ, {}, clear=False), \
+                 patch.object(supervisor, "_scan_unmanaged_worker_processes", return_value=[]), \
                  patch.object(supervisor, "status", return_value={"running": False}):
                 os.environ.pop("ALLOW_LIVE_SUPERVISOR", None)
                 code, payload = supervisor.stop("synthetic_catalog_mock")
@@ -628,7 +636,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
 
         self.assertEqual(matches, [])
 
-    def test_posix_scan_skips_unreadable_pid_and_continues(self):
+    def test_posix_scan_raises_when_pid_is_unreadable(self):
         def read_file(name):
             if name == "101/comm":
                 raise PermissionError("denied")
@@ -641,9 +649,28 @@ class WorkerSupervisorStopTests(unittest.TestCase):
              patch.object(supervisor, "_list_posix_process_ids", return_value=[101, 102]), \
              patch.object(supervisor, "_read_posix_process_file", side_effect=read_file), \
              patch.object(supervisor, "_process_creation_time", return_value=None):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "POSIX unmanaged process scan was incomplete",
+            ):
+                supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
+
+    def test_posix_scan_keeps_match_when_creation_time_is_unknown(self):
+        def read_file(name):
+            return {
+                "101/comm": b"python3\n",
+                "101/cmdline": b"python3\0-m\0src.main\0--market\0KR",
+            }[name]
+
+        with patch.object(supervisor.os, "name", "posix"), \
+             patch.object(supervisor, "_list_posix_process_ids", return_value=[101]), \
+             patch.object(supervisor, "_read_posix_process_file", side_effect=read_file), \
+             patch.object(supervisor, "_process_creation_time", return_value=None):
             matches = supervisor._scan_unmanaged_worker_processes("kr_mock", "KR")
 
-        self.assertEqual([item["pid"] for item in matches], [102])
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["pid"], 101)
+        self.assertIsNone(matches[0]["startTime"])
 
     def test_posix_scan_returns_empty_when_no_match(self):
         with patch.object(supervisor.os, "name", "posix"), \
