@@ -102,7 +102,7 @@ def _list_posix_process_ids() -> list[int]:
             if entry.name.isdigit()
         )
     except OSError:
-        return []
+         raise
 
 
 def _read_posix_process_file(relative_name: str) -> bytes:
@@ -126,6 +126,8 @@ def _scan_unmanaged_worker_processes(account: str, market: str) -> list[dict]:
     signature = f"-m src.main --market {market}"
     if os.name != "nt":
         matches = []
+        scan_complete = True
+
         for pid in _list_posix_process_ids():
             try:
                 name = _read_posix_process_file(
@@ -157,7 +159,12 @@ def _scan_unmanaged_worker_processes(account: str, market: str) -> list[dict]:
                 UnicodeError,
                 ValueError,
             ):
+                scan_complete = False
                 continue
+
+        if not scan_complete:
+            raise RuntimeError("POSIX unmanaged process scan was incomplete")
+
         return matches
 
     worker_names = {"python.exe", "pythonw.exe"}
@@ -201,9 +208,10 @@ def _unmanaged_process_result(account: str, current: dict):
             f"Unable to scan for unmanaged worker processes: "
             f"account={account} market={market!r} error={exc}"
         )
-        return 0, {
+        return 8, {
             **current,
-            "mode": "already_stopped",
+            "mode":  "status_indeterminate",
+            "reason": "unmanaged-scan-failed",
             "unmanagedScanStatus": "failed",
         }
     if not matches:
