@@ -303,3 +303,25 @@ publication succeeds and the final target identity is verified.
 - Source and test files were not modified during validation.
 - Git, CI, canonical publication, runtime, Scheduler, process, network, account, credential, and cleanup actions were not performed.
 - Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-14 — CI validation after atomic writer and reconciliation test fixes
+
+- Pushed commits:
+  - `6e92ad2` — passive ledger and concurrency regression checkpoint
+  - `d653aba` — atomic text writer implementation
+  - `b3958a2` — reconciliation coordinator test setup
+  - `6f81c3f` — pause-clear history atomic writer
+- GitHub Actions run `34802983476` for `6f81c3f` completed successfully.
+- Linux CI executed `436` tests with no failures.
+- Dependency installation and pytest completed successfully.
+- The reported CI job was Linux `test`; Windows validation was not reported and remains unverified.
+- Local working-tree changes outside these commits remain preserved.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-14 — Canonical publication completion
+
+- Canonical target `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` was repaired and verified after the CI checkpoint append.
+- Verified target length: `53,587` bytes.
+- Verified SHA-256: `4AED8F4101F8E9ABCB41253109DDAD3F54DB10328BDA147118DF01F3302B52BD`.
+- Strict UTF-8, no BOM, EOF LF, CRLF `3`, LF-only `810`, and bare CR `0` were verified.
+- The `CANONICAL_PENDING` text inside the published checkpoint is historical pre-publication status; this entry records verified completion.
