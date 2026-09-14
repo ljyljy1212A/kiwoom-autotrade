@@ -247,11 +247,10 @@ class BrokerHTTPCloseTest(unittest.IsolatedAsyncioTestCase):
                         timeout=1,
                     )
                 await stream.aclose()
-                close_state = backend._close_state
                 await asyncio.sleep(0)
-                close_state.completion_count = 0
-                close_state.completion_scheduled = False
+                close_state = _CloseCompletionState()
                 close_state.event.clear()
+                backend._close_state = close_state
                 release_at = time.monotonic() + 0.05
                 release_task = asyncio.create_task(asyncio.sleep(0.05))
 
