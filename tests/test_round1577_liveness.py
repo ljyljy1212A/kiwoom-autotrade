@@ -63,7 +63,11 @@ class Round1577Tests(unittest.TestCase):
         creation.assert_not_called()
 
     def test_4_absent_mutex_and_pid_preserves_already_stopped(self):
-        with patch.object(supervisor, "status", return_value={"running": False, "liveness": "dead", "livenessError": 2, "pid": 0}):
+        with patch.object(
+            supervisor,
+            "status",
+            return_value={"running": False, "liveness": "dead", "livenessError": 2, "pid": 0},
+        ), patch.object(supervisor, "_unmanaged_process_result", return_value=None):
             code, payload = supervisor.stop("kr_mock")
         self.assertEqual(code, 0)
         self.assertEqual(payload["mode"], "already_stopped")

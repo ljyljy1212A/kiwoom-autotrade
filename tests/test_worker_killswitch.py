@@ -70,7 +70,7 @@ class SupervisorKillTests(unittest.TestCase):
                 payload = json.loads(command.stdout)
                 print(f"{action}_command_returncode={code} stdout={command.stdout.strip()}")
 
-                if action == "kill":
+                if action in ("kill", "stop"):
                     self.assertEqual(code, 0, payload)
                     self.assertTrue(payload["stopped"])
                 else:
@@ -82,7 +82,7 @@ class SupervisorKillTests(unittest.TestCase):
                     self.assertIn("state", payload)
                     self.assertEqual(payload["mode"], "forced")
                     self.assertFalse(payload["stopped"])
-                if action == "kill":
+                if action in ("kill", "stop"):
                     self.assertFalse(child.poll() is None)
                     self.assertFalse(ProcessLock(account_id, data_dir).is_alive())
                 else:
