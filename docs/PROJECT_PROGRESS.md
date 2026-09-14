@@ -334,3 +334,22 @@ publication succeeds and the final target identity is verified.
 - 전체 workflow: 성공 (`2m 3s`).
 - 원격 `master` HEAD는 `1afc661e3d3cc9d42bfe8281e8edea9f415ffee8`로 확인되었다.
 - source/test, canonical publication, runtime, Scheduler, process, network, account 작업은 수행하지 않았다.
+
+## 2026-09-14 — Broker HTTP delayed close loopback churn local-validation checkpoint
+
+### Targeted test
+
+- `tests/test_broker_http.py::BrokerHTTPCloseTest::test_delayed_close_loopback_churn_waits_before_each_rebind`
+
+### Execution environment
+
+- Windows
+- Python
+- Fresh user-owned basetemp/cache path
+
+### Local validation
+
+- Result: `1 passed, 1 warning in 1.92s`
+- Status: local focused test passed
+- No CI success or operational validation claim is recorded for this checkpoint.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network, or account execution work was performed under this validation record.
