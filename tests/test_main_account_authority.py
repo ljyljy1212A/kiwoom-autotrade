@@ -177,6 +177,19 @@ class MainConcurrencyTests(unittest.TestCase):
                 from types import SimpleNamespace
                 from unittest.mock import AsyncMock, patch
 
+                # ``src.main`` creates its module-level logger at import time.
+                # Keep this lock-contention fixture free of file sinks so its
+                # forcibly terminated children cannot retain ``system.log``.
+                class BootstrapLogger:
+                    def bind(self, **_kwargs):
+                        return self
+
+                    def __getattr__(self, _name):
+                        return lambda *_args, **_kwargs: None
+
+                import src.utils.logger as logger_module
+                logger_module.get_logger = lambda *_args, **_kwargs: BootstrapLogger()
+
                 base_dir = Path(sys.argv[1])
                 account_id = sys.argv[2]
                 os.environ["KIWOOM_DATA_DIR"] = str(base_dir)

@@ -421,9 +421,13 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                     thread.start()
                 start_gate.wait(timeout=5)
                 for thread in threads:
-                    thread.join(timeout=15)
+                    thread.join(timeout=supervisor._STARTUP_ACK_TIMEOUT_SEC + 5)
 
             try:
+                self.assertFalse(
+                    any(thread.is_alive() for thread in threads),
+                    "concurrent supervisor starts did not complete within the startup acknowledgement budget",
+                )
                 self.assertEqual(errors, [])
                 self.assertEqual(len(results), 2)
 

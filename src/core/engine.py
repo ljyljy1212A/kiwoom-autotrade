@@ -1,7 +1,7 @@
 """Per-account trading loop with REST-authoritative order synchronization."""
 from __future__ import annotations
 
-from src.core.atomic_write import atomic_write_json
+from src.core.atomic_write import atomic_write_json, atomic_write_text
 
 import asyncio
 import json
@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 import weakref
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -91,6 +91,31 @@ class _AccountBalanceGate:
         )
         # Forward-compatible only; manual mode does not use this value.
         self.session_failure_ceiling = max(1, int(config.get("session_failure_ceiling", 3)))
+
+
+class _ReconciliationCoordinator:
+    """Keep account-wide manual reconciliation state and fail-closed propagation together."""
+
+    def record_failure(self, engine: "AccountEngine", exc: Exception) -> None:
+        gate = engine._balance_gate
+        if gate.reconciliation_mode != "manual":
+            return
+        gate.reconciliation_failure_count += 1
+        engine.ctx.logger.warning(
+            "Broker reconciliation unavailable: "
+            f"consecutive_cycle_failures={gate.reconciliation_failure_count}; {exc}"
+        )
+        if gate.reconciliation_failure_count < gate.reconciliation_failure_threshold:
+            return
+        for account_engine in list(gate.engines):
+            if not account_engine._pause_reason or account_engine._pause_reason == "broker_reconciliation_unavailable":
+                account_engine._trading_paused = True
+                account_engine._pause_reason = "broker_reconciliation_unavailable"
+
+    def record_success(self, engine: "AccountEngine") -> None:
+        gate = engine._balance_gate
+        if gate.reconciliation_mode == "manual":
+            gate.reconciliation_failure_count = 0
 
 
 _ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
@@ -193,6 +218,60 @@ class AccountClearanceFailure:
 class AccountClearanceResult:
     cleared: bool
     failures: tuple[AccountClearanceFailure, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ReadOnlyOrderReference:
+    ord_no: str
+
+
+class _ReadOnlyClearanceLedger:
+    """Read-only ledger view for passive reconciliation clearance."""
+
+    def __init__(self, path: Path, account_id: str):
+        self.account_id = account_id
+        self.db = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro",
+            uri=True,
+            timeout=0.25,
+        )
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA query_only=ON")
+
+    def close(self) -> None:
+        self.db.close()
+
+    def pending_orders(self, symbol: str) -> list[_ReadOnlyOrderReference]:
+        rows = self.db.execute(
+            "SELECT ord_no FROM pending_orders "
+            "WHERE account_id=? AND symbol=? "
+            "AND (status='open' "
+            "OR (status='filled' AND filled_qty<=0) "
+            "OR status='awaiting_execution_history')",
+            (self.account_id, symbol),
+        ).fetchall()
+        return [_ReadOnlyOrderReference(str(row["ord_no"])) for row in rows]
+
+    def execution_recovery_orders(self, symbol: str) -> list[_ReadOnlyOrderReference]:
+        return self.pending_orders(symbol)
+
+    def open_tranche_qty(self, symbol: str, step: int) -> float:
+        row = self.db.execute(
+            "SELECT COALESCE(SUM(CASE "
+            "WHEN type='buy' THEN qty "
+            "WHEN type='sell' THEN -qty ELSE 0 END), 0) AS qty "
+            "FROM trade_ledger WHERE account_id=? AND symbol=? AND step=?",
+            (self.account_id, symbol, step),
+        ).fetchone()
+        return max(0.0, float(row["qty"] if row else 0.0))
+
+    def ledger_rows(self, symbol: str) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT type, step, qty, price FROM trade_ledger "
+            "WHERE account_id=? AND symbol=? ORDER BY created_at, id",
+            (self.account_id, symbol),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 class DispatchClearanceService:
@@ -563,6 +642,7 @@ class AccountEngine:
                 f"{ctx.client.market} mock reconciliation dispatch clearance is enabled ({ctx.account_id})"
             )
         self._balance_gate.configure_reconciliation(getattr(ctx, "reconciliation_fail_closed", None))
+        self._reconciliation_coordinator = _ReconciliationCoordinator()
         initial_state = read_control_state(ctx.account_id, self.data_dir) or {}
         initial_event = initial_state.get("pause_clear_event")
         if not isinstance(initial_event, dict):
@@ -749,8 +829,10 @@ class AccountEngine:
         qty: float, known_tranche_qty: float = 0.0,
         open_rows: list[tuple[int, float, float]] | None = None,
         unattributed_remainder: float = 0.0, complete_zero_balance: bool = False,
+        ledger=None,
     ) -> frozenset[ReconciliationIncompleteReason]:
         """Classify reconciliation holds without mutating engine or ledger state."""
+        ledger = self.ledger if ledger is None else ledger
         symbol_key = self._symbol_key(symbol)
         reasons: set[ReconciliationIncompleteReason] = set()
         if holding is None or not balance_recognized:
@@ -759,12 +841,12 @@ class AccountEngine:
         expected_qty = self._broker_fill_catchup_qty.get(symbol_key)
         if expected_qty is not None and qty + 1e-9 < expected_qty:
             reasons.add(ReconciliationIncompleteReason.BROKER_FILL_CATCHUP)
-        if self.ledger.pending_orders(symbol) and abs(float(self.ctx.position.qty) - qty) > 1e-9:
+        if ledger.pending_orders(symbol) and abs(float(self.ctx.position.qty) - qty) > 1e-9:
             reasons.add(ReconciliationIncompleteReason.PENDING_QUANTITY_DEFERRAL)
         lifecycle = self._symbol_lifecycles.get(symbol_key, {})
         if isinstance(lifecycle, dict) and lifecycle.get("status") == "open":
             minimum = max(0.0, float(lifecycle.get("manual_qty", 0) or 0)) + sum(
-                self.ledger.open_tranche_qty(symbol, step) for step in range(2, self.ctx.strategy.max_step + 1)
+                ledger.open_tranche_qty(symbol, step) for step in range(2, self.ctx.strategy.max_step + 1)
             )
             if minimum > 0 and qty + 1e-9 < minimum:
                 reasons.add(ReconciliationIncompleteReason.STALE_LIFECYCLE_HOLD)
@@ -777,24 +859,47 @@ class AccountEngine:
                 reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
         return frozenset(reasons)
 
-    def _unresolved_reconciliation_order_ids(self, symbol: str) -> tuple[str, ...]:
+    def _unresolved_reconciliation_order_ids(self, symbol: str, *, ledger=None) -> tuple[str, ...]:
+        ledger = self.ledger if ledger is None else ledger
         return tuple(sorted({
             order.ord_no
-            for order in (self.ledger.pending_orders(symbol) + self.ledger.execution_recovery_orders(symbol))
+            for order in (ledger.pending_orders(symbol) + ledger.execution_recovery_orders(symbol))
             if order.ord_no
         }))
 
-    def _reconciliation_open_rows(self, symbol: str, avg_price: float) -> list[tuple[int, float, float]]:
+    def _reconciliation_open_rows(self, symbol: str, avg_price: float, *, ledger=None) -> list[tuple[int, float, float]]:
+        ledger = self.ledger if ledger is None else ledger
         rows = []
         for step in range(1, self.ctx.strategy.max_step + 1):
-            open_qty = self.ledger.open_tranche_qty(symbol, step)
+            open_qty = ledger.open_tranche_qty(symbol, step)
             if open_qty > 0:
-                buys = [row for row in self.ledger.ledger_rows(symbol)
+                buys = [row for row in ledger.ledger_rows(symbol)
                         if row.get("type", "").lower() == "buy" and int(row.get("step", 0)) == step]
                 total = sum(float(row.get("qty", 0)) for row in buys)
                 weighted = sum(float(row.get("qty", 0)) * float(row.get("price", 0)) for row in buys)
                 rows.append((step, min(float(open_qty), total), weighted / total if total else avg_price))
         return rows
+
+    @contextmanager
+    def _clearance_ledger(self, symbol: str):
+        if self.ledger is not None:
+            yield self.ledger
+            return
+
+        reader = None
+        try:
+            reader = _ReadOnlyClearanceLedger(
+                self.data_dir / f"trades_{self.ctx.account_id}.db",
+                self.ctx.account_id,
+            )
+            yield reader
+        except sqlite3.Error as exc:
+            raise RuntimeError(
+                f"read-only reconciliation clearance ledger unavailable: {exc}"
+            ) from exc
+        finally:
+            if reader is not None:
+                reader.close()
 
     async def _build_reconciliation_clearance_snapshot(
         self, symbol: str, *, max_balance_age_sec: float,
@@ -810,7 +915,6 @@ class AccountEngine:
         target = next((item for item in holdings if _same_symbol(self.ctx.client.market, item["symbol"], symbol)), None)
         holding = NormalizedBalanceHolding(symbol, float(target["qty"]), float(target["avgPrice"])) if target else NormalizedBalanceHolding(symbol, 0.0, 0.0)
         known_tranche_qty = sum(qty for qty in self.ctx.strategy.step_qty.values() if qty > 0)
-        open_rows = self._reconciliation_open_rows(symbol, holding.avg_price) if known_tranche_qty > holding.qty + 1e-9 else None
         lifecycle = self._symbol_lifecycles.get(self._symbol_key(symbol), {})
         allocation = _manual_tranche_allocation(
             qty=holding.qty, known_tranche_qty=known_tranche_qty,
@@ -818,22 +922,36 @@ class AccountEngine:
             lifecycle_open=isinstance(lifecycle, dict) and lifecycle.get("status") == "open",
             lifecycle_manual_qty=float(lifecycle.get("manual_qty", 0) or 0) if isinstance(lifecycle, dict) else 0.0,
         )
-        snapshot = ReconciliationClearanceSnapshot(
-            account_id=self.ctx.account_id, symbol=symbol,
-            market=self.ctx.client.market,
-            balance_api_id="ust21070" if self.ctx.client.market == "US" else "kt00018",
-            balance_fetched_fresh=True, balance_from_shared_cache=False,
-            balance_recognized=recognized, holding=holding,
-            balance_received_at=balance_received_at,
-            max_balance_age_sec=max_balance_age_sec,
-            incomplete_reasons=self._reconciliation_incomplete_reasons(
-                symbol, balance_recognized=recognized, holding=holding, qty=holding.qty,
-                known_tranche_qty=known_tranche_qty, open_rows=open_rows,
-                unattributed_remainder=allocation.unattributed_remainder,
-                complete_zero_balance=recognized and holding.qty <= 1e-9,
-            ),
-            unresolved_order_ids=self._unresolved_reconciliation_order_ids(symbol),
-        )
+        with self._clearance_ledger(symbol) as clearance_ledger:
+            open_rows = (
+                self._reconciliation_open_rows(
+                    symbol,
+                    holding.avg_price,
+                    ledger=clearance_ledger,
+                )
+                if known_tranche_qty > holding.qty + 1e-9
+                else None
+            )
+            snapshot = ReconciliationClearanceSnapshot(
+                account_id=self.ctx.account_id, symbol=symbol,
+                market=self.ctx.client.market,
+                balance_api_id="ust21070" if self.ctx.client.market == "US" else "kt00018",
+                balance_fetched_fresh=True, balance_from_shared_cache=False,
+                balance_recognized=recognized, holding=holding,
+                balance_received_at=balance_received_at,
+                max_balance_age_sec=max_balance_age_sec,
+                incomplete_reasons=self._reconciliation_incomplete_reasons(
+                    symbol, balance_recognized=recognized, holding=holding, qty=holding.qty,
+                    known_tranche_qty=known_tranche_qty, open_rows=open_rows,
+                    unattributed_remainder=allocation.unattributed_remainder,
+                    complete_zero_balance=recognized and holding.qty <= 1e-9,
+                    ledger=clearance_ledger,
+                ),
+                unresolved_order_ids=self._unresolved_reconciliation_order_ids(
+                    symbol,
+                    ledger=clearance_ledger,
+                ),
+            )
         return with_unattributed_collision_order_ids(snapshot, data_dir=self.data_dir)
 
     def _publish_passive_balance_snapshot(self, broker_holdings: list[dict], balance_recognized: bool) -> None:
@@ -1556,25 +1674,10 @@ class AccountEngine:
         )
 
     def _record_reconciliation_failure(self, exc: Exception) -> None:
-        gate = self._balance_gate
-        if gate.reconciliation_mode != "manual":
-            return
-        gate.reconciliation_failure_count += 1
-        self.ctx.logger.warning(
-            "Broker reconciliation unavailable: "
-            f"consecutive_cycle_failures={gate.reconciliation_failure_count}; {exc}"
-        )
-        if gate.reconciliation_failure_count < gate.reconciliation_failure_threshold:
-            return
-        for engine in list(gate.engines):
-            if not engine._pause_reason or engine._pause_reason == "broker_reconciliation_unavailable":
-                engine._trading_paused = True
-                engine._pause_reason = "broker_reconciliation_unavailable"
+        self._reconciliation_coordinator.record_failure(self, exc)
 
     def _record_reconciliation_success(self) -> None:
-        gate = self._balance_gate
-        if gate.reconciliation_mode == "manual":
-            gate.reconciliation_failure_count = 0
+        self._reconciliation_coordinator.record_success(self)
 
     def _pause_clear_event(self) -> tuple[str, str]:
         state = read_control_state(self.ctx.account_id, getattr(self, "data_dir", DATA_DIR)) or {}
@@ -2535,8 +2638,10 @@ class AccountEngine:
             if symbol not in configured_symbols:
                 self._closure_absence_confirmations.pop(symbol, None)
         self._closure_absence_path.parent.mkdir(exist_ok=True)
-        self._closure_absence_path.write_text(
-            json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
+        atomic_write_json(
+            self._closure_absence_path,
+            self._closure_absence_confirmations,
+            ensure_ascii=False,
         )
         closed_symbols = {
             symbol for symbol, count in self._closure_absence_confirmations.items() if count >= 2
@@ -2549,11 +2654,13 @@ class AccountEngine:
         if len(retained) == len(profiles):
             return
         settings["profiles"] = retained
-        settings_path.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(settings_path, settings, ensure_ascii=False)
         for symbol in closed_symbols:
             self._closure_absence_confirmations.pop(symbol, None)
-        self._closure_absence_path.write_text(
-            json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
+        atomic_write_json(
+            self._closure_absence_path,
+            self._closure_absence_confirmations,
+            ensure_ascii=False,
         )
         self.ctx.logger.info(
             f"Trade Settings removed after broker-confirmed position closure: {sorted(closed_symbols)}"
@@ -2583,14 +2690,16 @@ class AccountEngine:
             retained = [p for p in profiles if self._symbol_key((p.get("config") or {}).get("symbol", "")) != symbol]
             if len(retained) != len(profiles):
                 settings["profiles"] = retained
-                settings_path.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+                atomic_write_json(settings_path, settings, ensure_ascii=False)
         except (OSError, json.JSONDecodeError, TypeError):
             pass
 
         self._remove_tranche_base(symbol)
         self._closure_absence_confirmations.pop(symbol, None)
-        self._closure_absence_path.write_text(
-            json.dumps(self._closure_absence_confirmations, ensure_ascii=False), encoding="utf-8"
+        atomic_write_json(
+            self._closure_absence_path,
+            self._closure_absence_confirmations,
+            ensure_ascii=False,
         )
         closed_orders = self.ledger.close_open_orders_for_symbol(symbol)
         self._buy_reentry_after.pop(symbol, None)
@@ -2712,7 +2821,7 @@ class AccountEngine:
 
     def _heartbeat(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        (self.data_dir / "heartbeat.txt").write_text(datetime.now().isoformat())
+        atomic_write_text(self.data_dir / "heartbeat.txt", datetime.now().isoformat())
 
 
 def _executed_rows(data: dict) -> list[dict]:

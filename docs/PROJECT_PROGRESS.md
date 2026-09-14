@@ -277,3 +277,29 @@ publication succeeds and the final target identity is verified.
 - The managed sandbox denied access to newly created pytest basetemp directories; the successful runs used the same wrapper outside that sandbox with process-scoped `ExecutionPolicy Bypass`. No persistent execution-policy or ACL change was made.
 - Earlier failed evidence bundles remain preserved; no cleanup was performed.
 - CI, canonical publication, runtime, Scheduler, process, network, and account validation were not performed.
+
+## 2026-09-14 — Base-Python bypass full validation checkpoint
+
+### Environment diagnosis
+
+- Existing `.venv` and newly created sibling venv both fail during native-extension initialization with `ImportError: DLL initialization routine failed` for `_ssl` and `_ctypes`.
+- The verified base interpreter remains functional.
+- A process-local base-Python bypass using the existing `.venv\Lib\site-packages` successfully imported `ssl`, `_ctypes`, and pytest 9.1.1.
+- No venv deletion, repair, ACL change, package installation, or cleanup was performed.
+
+### Local validation
+
+- Authorized concurrent regression tests: `2 passed in 6.24s`; exit code `0`.
+- Full local pytest through the base-Python bypass: `446 passed, 4 skipped, 1 xfailed, 12 warnings`; `451 collected`; exit code `0`; duration `61.48s`.
+- Full-run evidence: `tools/pytest-full-basepython-20260914-v1`.
+- Bound source/test SHA-256 values matched the preflight values for:
+  - `src/core/engine.py`
+  - `tests/test_dispatch_clearance_integration.py`
+  - `tests/test_main_account_authority.py`
+  - `tests/test_worker_supervisor.py`
+
+### Scope boundary
+
+- Source and test files were not modified during validation.
+- Git, CI, canonical publication, runtime, Scheduler, process, network, account, credential, and cleanup actions were not performed.
+- Canonical publication remains `CANONICAL_PENDING`.

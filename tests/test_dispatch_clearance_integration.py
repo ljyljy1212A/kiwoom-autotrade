@@ -10,6 +10,8 @@ from src.core.engine import (
     AccountEngine, DispatchClearanceService, NormalizedBalanceHolding,
     ReconciliationClearanceSnapshot,
 )
+from src.data.trade_ledger import TradeLedgerStore
+from src.utils.exceptions import OrderDispatchBlockedError
 from src.strategy.base import Action, OrderIntent
 from tests.support.telegram_double import make_telegram_double
 
@@ -44,6 +46,34 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine.ledger = SimpleNamespace(add_pending=Mock())
     engine.sync_broker_state = AsyncMock()
     engine._build_reconciliation_clearance_snapshot = AsyncMock(return_value=snapshot)
+    return engine
+
+
+def _passive_snapshot_engine(data_dir, *, balance_qty=1.0):
+    engine = object.__new__(AccountEngine)
+    engine.data_dir = data_dir
+    engine.ledger = None
+    engine.ctx = SimpleNamespace(
+        account_id="us_mock",
+        client=SimpleNamespace(
+            market="US",
+            get_balance=AsyncMock(return_value={
+                "result_list": [{
+                    "ovrs_pdno": "SOXL",
+                    "ovrs_item_name": "Direxion Daily Semiconductor Bull 3X Shares",
+                    "ovrs_cblc_qty": str(balance_qty),
+                    "pchs_avg_pric": "10.0",
+                    "ovrs_now_pric": "10.0",
+                    "prev_close": "10.0",
+                }],
+            }),
+        ),
+        position=SimpleNamespace(qty=balance_qty),
+        strategy=SimpleNamespace(max_step=3, step_qty={}),
+    )
+    engine._broker_fill_catchup_qty = {}
+    engine._symbol_lifecycles = {}
+    engine._pause_reason = ""
     return engine
 
 
@@ -218,6 +248,51 @@ def test_concurrent_recovery_probes_produce_one_attempt(tmp_path):
             clear_fixed_port_degraded_state("us_mock")
 
     asyncio.run(probe())
+
+
+def test_passive_engine_reads_existing_ledger_without_mutating_sqlite(tmp_path):
+    ledger_path = tmp_path / "trades_us_mock.db"
+    ledger = TradeLedgerStore(ledger_path, "us_mock")
+    ledger.close()
+    before = ledger_path.read_bytes()
+    engine = _passive_snapshot_engine(tmp_path)
+
+    snapshot = asyncio.run(
+        engine._build_reconciliation_clearance_snapshot("SOXL", max_balance_age_sec=1.0)
+    )
+
+    assert snapshot.balance_recognized is True
+    assert snapshot.unresolved_order_ids == ()
+    assert ledger_path.read_bytes() == before
+
+
+def test_passive_clearance_ledger_failure_keeps_degraded_marker(tmp_path):
+    async def check():
+        clear_fixed_port_degraded_state("us_mock")
+        enter_fixed_port_degraded_state("us_mock", "rest")
+        service = DispatchClearanceService("us_mock")
+        service.observe_active_profile(("SOXL",), 0)
+        engine = _passive_snapshot_engine(tmp_path)
+        try:
+            try:
+                await engine._build_reconciliation_clearance_snapshot(
+                    "SOXL", max_balance_age_sec=1.0,
+                )
+            except RuntimeError as exc:
+                assert "read-only reconciliation clearance ledger unavailable" in str(exc)
+            else:
+                raise AssertionError("missing read-only ledger did not raise RuntimeError")
+            try:
+                await service.check(engine, "SOXL")
+            except OrderDispatchBlockedError as exc:
+                assert "read-only reconciliation clearance ledger unavailable" in str(exc)
+            else:
+                raise AssertionError("read-only ledger failure did not block clearance")
+            assert get_fixed_port_degraded_state("us_mock") is not None
+        finally:
+            clear_fixed_port_degraded_state("us_mock")
+
+    asyncio.run(check())
 
 
 def test_recovery_probe_logs_snapshot_failures_without_propagating(tmp_path):
