@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from src.core.atomic_write import atomic_write_json, atomic_write_text
 from src.core.runtime_paths import DATA_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -609,7 +610,7 @@ def _write_startup_status() -> None:
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    status_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(status_path, json.dumps(payload, indent=2) + "\n")
 
 
 def main() -> None:
