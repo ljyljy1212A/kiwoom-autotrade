@@ -388,3 +388,14 @@ publication succeeds and the final target identity is verified.
   `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-full-reconciliation-extract-20260914-v2`.
 - CI, Git commit/push, canonical publication, runtime, Scheduler, process,
   network, account, and credential validation were not performed.
+
+## 2026-09-14 — GitHub master CI merge gate created
+
+- GitHub ruleset `master CI merge gate` was created and verified as Active.
+- Ruleset ID: `23281651`.
+- The ruleset targets the repository default branch, currently `master`.
+- Pull requests are required before merging.
+- Required status check: `Windows validation (pending merge gate)` from GitHub Actions.
+- Branches are not required to be up to date before merging.
+- Force pushes are blocked and the bypass list is empty.
+- This records repository-policy configuration only; no source, test, Git, canonical, runtime, Scheduler, process, network, account, or credential work was performed in this checkpoint.
