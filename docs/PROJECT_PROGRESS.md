@@ -415,3 +415,22 @@ publication succeeds and the final target identity is verified.
 - Branches are not required to be up to date before merging.
 - Force pushes are blocked and the bypass list is empty.
 - This records repository-policy configuration only; no source, test, Git, canonical, runtime, Scheduler, process, network, account, or credential work was performed in this checkpoint.
+
+## 2026-09-15 — Dashboard startup-status and task-XML delivery
+
+- Commit `52272af5cb3e5b0ca6312b075a2829814823e974`
+  (`Preserve dashboard startup status and fix task XML encoding`) was created
+  from the approved hunks in `dashboard/dashboard_server.py` and
+  `ops/installer/scheduled_task_healthcheck_task.xml`.
+- Local validation for this commit passed: full pytest reported `446 passed,
+  4 skipped, 1 xfailed, 12 warnings` in `61.49s`; focused dashboard tests,
+  XML parsing, AST syntax validation, and Git diff checks also passed.
+- Pull request #2 was created and merged after GitHub Actions runs
+  `34904861185` and `34905080344` each reported successful Windows validation
+  and successful non-blocking Ubuntu compatibility checks.
+- The verified merge commit is `062f07b435af722b6abc2f593cc6b1e0784f1183`.
+  Local `master` was fast-forwarded to that same `origin/master` revision.
+- Existing tracked modifications and untracked evidence remain preserved; the
+  source branch was not deleted. No canonical publication, runtime, Scheduler,
+  process, network, account, or credential validation was performed by this
+  delivery record.
