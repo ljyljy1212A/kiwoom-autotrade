@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.core.broker_http import (
     clear_fixed_port_degraded_state,
@@ -23,6 +23,7 @@ from src.core.engine import (
     NormalizedBalanceHolding,
     ReconciliationIncompleteReason,
     _AccountBalanceGate,
+    _ReconciliationCoordinator,
 )
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import RetryableError
@@ -41,6 +42,7 @@ def _engine(account, symbol, data_dir, reason=""):
         "consecutive_failure_threshold": 3,
         "session_failure_ceiling": 3,
     })
+    engine._reconciliation_coordinator = _ReconciliationCoordinator()
     engine._balance_gate.engines.add(engine)
     return engine
 
@@ -222,6 +224,25 @@ def test_legacy_reconciliation_event_is_inferred(tmp_path):
 def test_pause_clear_writer_rejects_unknown_reason(tmp_path):
     with unittest.TestCase().assertRaises(ValueError):
         write_pause_clear_event("kr_mock", "not_a_pause_reason", data_dir=tmp_path)
+
+
+def test_pause_clear_history_uses_atomic_write_and_preserves_warning_contract(tmp_path):
+    with patch("src.core.control_state.atomic_write_text", side_effect=OSError("disk full")) as atomic_write, \
+         patch("src.core.control_state.logger.warning") as warning:
+        event = write_pause_clear_event(
+            "kr_mock",
+            FIXED_PORT_DEGRADED_PAUSE_REASON,
+            data_dir=tmp_path,
+        )
+
+        assert event["reason"] == FIXED_PORT_DEGRADED_PAUSE_REASON
+        assert atomic_write.call_count == 1
+        history_path = atomic_write.call_args.args[0]
+        assert history_path.parent.name == "kr_mock"
+        assert history_path.name == f"{event['event_id']}.json"
+        assert atomic_write.call_args.args[1] == json.dumps(event, ensure_ascii=False)
+        assert "Pause-clear history write failed for kr_mock" in warning.call_args.args[0]
+        assert event["event_id"] in warning.call_args.args[0]
 
 
 def test_fixed_port_pause_reason_is_allowlisted(tmp_path):
