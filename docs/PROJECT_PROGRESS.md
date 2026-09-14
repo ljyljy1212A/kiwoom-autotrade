@@ -325,3 +325,12 @@ publication succeeds and the final target identity is verified.
 - Verified SHA-256: `4AED8F4101F8E9ABCB41253109DDAD3F54DB10328BDA147118DF01F3302B52BD`.
 - Strict UTF-8, no BOM, EOF LF, CRLF `3`, LF-only `810`, and bare CR `0` were verified.
 - The `CANONICAL_PENDING` text inside the published checkpoint is historical pre-publication status; this entry records verified completion.
+
+## 2026-09-14 — Windows CI rerun success
+
+- GitHub Actions run `34806898003`, Attempt `#2`, commit `1afc661`을 재실행했다.
+- Ubuntu compatibility signal: 성공 (`1m 4s`).
+- Windows validation: 성공 (`1m 58s`).
+- 전체 workflow: 성공 (`2m 3s`).
+- 원격 `master` HEAD는 `1afc661e3d3cc9d42bfe8281e8edea9f415ffee8`로 확인되었다.
+- source/test, canonical publication, runtime, Scheduler, process, network, account 작업은 수행하지 않았다.
