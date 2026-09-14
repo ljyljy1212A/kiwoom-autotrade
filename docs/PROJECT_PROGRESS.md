@@ -353,3 +353,20 @@ publication succeeds and the final target identity is verified.
 - Status: local focused test passed
 - No CI success or operational validation claim is recorded for this checkpoint.
 - No Git, CI, canonical publication, runtime, Scheduler, process, network, or account execution work was performed under this validation record.
+
+## 2026-09-14 — Broker close timing test stabilization and CI verification
+
+- Test-only correction applied to `tests/test_broker_http.py`.
+- Replaced the predicted `time.monotonic() + 0.05` release deadline with the
+  actual observed release timestamp.
+- Production source was not modified.
+- Focused local Windows test passed: `1 passed in 1.95s`, exit code `0`.
+- Commit created and pushed:
+  `ca86e76fa1532a91a2793116948a5540fd1ed165`
+  (`Stabilize broker close timing test`)
+- GitHub Actions run `34811187957` completed successfully.
+- Ubuntu compatibility signal: `417 passed, 18 skipped, 1 xfailed`.
+- Windows validation: `430 passed, 5 skipped, 1 xfailed`.
+- POSIX watchdog integration remains outside the verified support scope.
+- Canonical publication, runtime, Scheduler, process, account, and credential
+  validation were not performed.
