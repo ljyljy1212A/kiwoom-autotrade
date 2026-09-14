@@ -251,11 +251,12 @@ class BrokerHTTPCloseTest(unittest.IsolatedAsyncioTestCase):
                 close_state = _CloseCompletionState()
                 close_state.event.clear()
                 backend._close_state = close_state
-                release_at = time.monotonic() + 0.05
+                release_times = []
                 release_task = asyncio.create_task(asyncio.sleep(0.05))
 
                 async def release_after_delay():
                     await release_task
+                    release_times.append(time.monotonic())
                     close_state.event.set()
 
                 delayed_release = asyncio.create_task(release_after_delay())
@@ -271,7 +272,7 @@ class BrokerHTTPCloseTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(connect_calls), before_wait)
                     reconnected = await reconnect
                 await delayed_release
-                self.assertGreaterEqual(connect_calls[-1], release_at)
+                self.assertGreaterEqual(connect_calls[-1], release_times[-1])
                 await reconnected.aclose()
         finally:
             for http_server in http_servers:
