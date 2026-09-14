@@ -1,7 +1,7 @@
 """Account-wide runtime control state stored as atomic JSON files."""
 from __future__ import annotations
 
-from src.core.atomic_write import atomic_write_json
+from src.core.atomic_write import atomic_write_json, atomic_write_text
 
 import json
 import logging
@@ -123,8 +123,7 @@ def write_pause_clear_event(
     atomic_write_json(path, current, ensure_ascii=False)
     try:
         history_path = DIAGNOSTICS_DIR / "pause_clear_history" / account_id / f"{event['event_id']}.json"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        history_path.write_text(json.dumps(event, ensure_ascii=False), encoding="utf-8")
+        atomic_write_text(history_path, json.dumps(event, ensure_ascii=False))
     except (OSError, KeyError, TypeError, ValueError) as exc:
         logger.warning(
             f"Pause-clear history write failed for {account_id}, "
