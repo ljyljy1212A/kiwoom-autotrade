@@ -388,3 +388,19 @@ publication succeeds and the final target identity is verified.
   `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-full-reconciliation-extract-20260914-v2`.
 - CI, Git commit/push, canonical publication, runtime, Scheduler, process,
   network, account, and credential validation were not performed.
+
+## 2026-09-14 — Clean clone isolation and full local validation
+
+- Created a clean clone at
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-autotrade-clean-e8023b9`
+  from commit `e8023b9ed160e040c371032a02c88da48b099a0d`.
+- The clone and its `.git` directory were verified as non-reparse paths, with
+  a clean detached HEAD at the approved commit.
+- Focused reconciliation tests passed: `26 passed in 1.60s`, exit code `0`.
+- Full local pytest passed: `430 passed, 5 skipped, 1 xfailed, 12 warnings,
+  12 subtests passed in 57.53s`, exit code `0`.
+- Pytest evidence was captured under the repository-independent path
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-runs`.
+- This milestone records local validation in the clean clone only. Git commit,
+  push, CI, canonical publication, runtime, Scheduler, process, network,
+  account, and credential validation were not performed after this record.
