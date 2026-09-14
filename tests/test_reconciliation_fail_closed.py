@@ -23,8 +23,8 @@ from src.core.engine import (
     NormalizedBalanceHolding,
     ReconciliationIncompleteReason,
     _AccountBalanceGate,
-    _ReconciliationCoordinator,
 )
+from src.core.reconciliation import _ReconciliationCoordinator
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import RetryableError
 

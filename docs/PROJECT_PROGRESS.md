@@ -370,3 +370,21 @@ publication succeeds and the final target identity is verified.
 - POSIX watchdog integration remains outside the verified support scope.
 - Canonical publication, runtime, Scheduler, process, account, and credential
   validation were not performed.
+
+## 2026-09-14 — Reconciliation coordinator extraction and local validation
+
+- Extracted `_ReconciliationCoordinator` from `src/core/engine.py` into
+  `src/core/reconciliation.py` without changing its fail-closed propagation,
+  threshold, or manual-mode reset behavior.
+- Updated `tests/test_reconciliation_fail_closed.py` to import the extracted
+  coordinator.
+- Focused reconciliation tests passed: `26 passed in 4.17s`, exit code `0`,
+  empty stderr.
+- Full local pytest passed: `446 passed, 4 skipped, 1 xfailed, 12 warnings,
+  13 subtests passed in 61.21s`, exit code `0`, empty stderr.
+- Evidence bundles are preserved at:
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-reconciliation-coordinator-20260914-v2`
+  and
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-full-reconciliation-extract-20260914-v2`.
+- CI, Git commit/push, canonical publication, runtime, Scheduler, process,
+  network, account, and credential validation were not performed.

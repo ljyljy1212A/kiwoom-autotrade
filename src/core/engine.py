@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
+from src.core.reconciliation import _ReconciliationCoordinator
 
 import asyncio
 import json
@@ -91,31 +92,6 @@ class _AccountBalanceGate:
         )
         # Forward-compatible only; manual mode does not use this value.
         self.session_failure_ceiling = max(1, int(config.get("session_failure_ceiling", 3)))
-
-
-class _ReconciliationCoordinator:
-    """Keep account-wide manual reconciliation state and fail-closed propagation together."""
-
-    def record_failure(self, engine: "AccountEngine", exc: Exception) -> None:
-        gate = engine._balance_gate
-        if gate.reconciliation_mode != "manual":
-            return
-        gate.reconciliation_failure_count += 1
-        engine.ctx.logger.warning(
-            "Broker reconciliation unavailable: "
-            f"consecutive_cycle_failures={gate.reconciliation_failure_count}; {exc}"
-        )
-        if gate.reconciliation_failure_count < gate.reconciliation_failure_threshold:
-            return
-        for account_engine in list(gate.engines):
-            if not account_engine._pause_reason or account_engine._pause_reason == "broker_reconciliation_unavailable":
-                account_engine._trading_paused = True
-                account_engine._pause_reason = "broker_reconciliation_unavailable"
-
-    def record_success(self, engine: "AccountEngine") -> None:
-        gate = engine._balance_gate
-        if gate.reconciliation_mode == "manual":
-            gate.reconciliation_failure_count = 0
 
 
 _ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
