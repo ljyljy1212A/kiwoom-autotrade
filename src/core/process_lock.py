@@ -96,11 +96,67 @@ class ProcessLock:
 
     def _acquire_windows(self) -> None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+        class SecurityAttributes(ctypes.Structure):
+            _fields_ = [
+                ("nLength", ctypes.c_uint32),
+                ("lpSecurityDescriptor", ctypes.c_void_p),
+                ("bInheritHandle", ctypes.c_int),
+            ]
+
+        convert_sddl = advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW
+        convert_sddl.argtypes = (
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_uint32),
+        )
+        convert_sddl.restype = ctypes.c_bool
+        local_free = kernel32.LocalFree
+        local_free.argtypes = (ctypes.c_void_p,)
+        local_free.restype = ctypes.c_void_p
+        kernel32.OpenMutexW.argtypes = (ctypes.c_uint32, ctypes.c_bool, ctypes.c_wchar_p)
+        kernel32.OpenMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = (
+            ctypes.POINTER(SecurityAttributes),
+            ctypes.c_bool,
+            ctypes.c_wchar_p,
+        )
         kernel32.CreateMutexW.restype = ctypes.c_void_p
         kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
         kernel32.CloseHandle.restype = ctypes.c_bool
-        handle = kernel32.CreateMutexW(None, True, self.mutex_name)
+
+        # Keep mutex access available to the authenticated task/supervisor
+        # principals while retaining mutex ownership as the authority to
+        # release it.  The explicit ACL avoids the default descriptor mismatch
+        # seen between a scheduled worker and its later supervisor probes.
+        descriptor = ctypes.c_void_p()
+        descriptor_size = ctypes.c_uint32()
+        sddl = "D:P(A;;0x100001;;;OW)(A;;0x100001;;;AU)(A;;0x100001;;;SY)"
+        if not convert_sddl(sddl, 1, ctypes.byref(descriptor), ctypes.byref(descriptor_size)):
+            error = ctypes.get_last_error()
+            raise ProcessLockError(
+                f"Worker launch refused: could not create account mutex security descriptor for {self.account_id} (winerror={error})."
+            )
+        attributes = SecurityAttributes(
+            ctypes.sizeof(SecurityAttributes), descriptor, False
+        )
+        try:
+            existing = kernel32.OpenMutexW(0x00100001, False, self.mutex_name)
+            if existing:
+                kernel32.CloseHandle(existing)
+                raise ProcessLockError(
+                    f"Worker launch refused: {self.account_id} is already running."
+                )
+            if ctypes.get_last_error() != 2:
+                error = ctypes.get_last_error()
+                raise ProcessLockError(
+                    f"Worker launch refused: could not inspect account mutex for {self.account_id} (winerror={error})."
+                )
+            handle = kernel32.CreateMutexW(ctypes.byref(attributes), True, self.mutex_name)
+        finally:
+            local_free(descriptor)
         if not handle:
             raise ProcessLockError(f"Worker launch refused: could not create account mutex for {self.account_id}.")
         if ctypes.get_last_error() == 183:
