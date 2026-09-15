@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from src.core.symbol_keys import canonical_symbol_key
@@ -9,6 +10,85 @@ from src.core.us_market import normalize_us_holdings, us_balance_recognized
 
 if TYPE_CHECKING:
     from src.core.engine import AccountEngine
+
+
+class ReconciliationIncompleteReason(Enum):
+    UNRECOGNIZED_BALANCE = "unrecognized balance response"
+    BROKER_FILL_CATCHUP = "broker-fill catch-up marker"
+    PENDING_QUANTITY_DEFERRAL = "pending-quantity deferral"
+    STALE_LIFECYCLE_HOLD = "stale-lifecycle hold"
+    UNATTRIBUTED_QUANTITY_PAUSE = "unattributed-quantity pause"
+    TRANCHE_REBUILD_AMBIGUOUS = "tranche-rebuild ambiguous"
+
+
+@dataclass(frozen=True)
+class NormalizedBalanceHolding:
+    symbol: str
+    qty: float
+    avg_price: float
+
+
+@dataclass(frozen=True)
+class ManualTrancheAllocation:
+    restored_manual_qty: float = 0.0
+    adopt_manual_qty: float = 0.0
+    unattributed_remainder: float = 0.0
+
+
+def _manual_tranche_allocation(
+    *, qty: float, known_tranche_qty: float, has_step_one: bool,
+    lifecycle_open: bool, lifecycle_manual_qty: float,
+) -> ManualTrancheAllocation:
+    """Purely classify how a broker remainder can be assigned to tranche 1."""
+    remainder = qty - known_tranche_qty
+    if remainder <= 1e-9:
+        return ManualTrancheAllocation()
+    if not has_step_one and lifecycle_open and lifecycle_manual_qty > 1e-9:
+        restored = min(remainder, lifecycle_manual_qty)
+        remainder -= restored
+        return ManualTrancheAllocation(
+            restored_manual_qty=restored,
+            unattributed_remainder=max(0.0, remainder),
+        )
+    if not has_step_one:
+        return ManualTrancheAllocation(adopt_manual_qty=remainder)
+    return ManualTrancheAllocation(unattributed_remainder=remainder)
+
+
+def classify_reconciliation_incomplete_reasons(
+    *,
+    balance_recognized: bool,
+    holding: NormalizedBalanceHolding | None,
+    qty: float,
+    position_qty: float,
+    expected_qty: float | None,
+    has_pending_orders: bool,
+    lifecycle_min_qty: float,
+    pause_reason: str,
+    known_tranche_qty: float = 0.0,
+    open_rows: list[tuple[int, float, float]] | None = None,
+    unattributed_remainder: float = 0.0,
+    complete_zero_balance: bool = False,
+) -> frozenset[ReconciliationIncompleteReason]:
+    """Classify reconciliation holds from immutable broker and local facts."""
+    reasons: set[ReconciliationIncompleteReason] = set()
+    if holding is None or not balance_recognized:
+        reasons.add(ReconciliationIncompleteReason.UNRECOGNIZED_BALANCE)
+        return frozenset(reasons)
+    if expected_qty is not None and qty + 1e-9 < expected_qty:
+        reasons.add(ReconciliationIncompleteReason.BROKER_FILL_CATCHUP)
+    if has_pending_orders and abs(position_qty - qty) > 1e-9:
+        reasons.add(ReconciliationIncompleteReason.PENDING_QUANTITY_DEFERRAL)
+    if lifecycle_min_qty > 0 and qty + 1e-9 < lifecycle_min_qty:
+        reasons.add(ReconciliationIncompleteReason.STALE_LIFECYCLE_HOLD)
+    if complete_zero_balance or unattributed_remainder > 1e-9 or pause_reason == "broker_quantity_unattributed":
+        reasons.add(ReconciliationIncompleteReason.UNATTRIBUTED_QUANTITY_PAUSE)
+    if pause_reason == "tranche_rebuild_ambiguous":
+        reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
+    if open_rows is not None and known_tranche_qty > qty + 1e-9:
+        if not any(row[0] == 1 for row in open_rows) and qty > 1e-9:
+            reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
+    return frozenset(reasons)
 
 
 def _number(value) -> float:
