@@ -1483,34 +1483,8 @@ class AccountEngine:
                 # This worker owns no strategy/order state.  In particular, it
                 # must not inspect or cancel pending orders belonging to an
                 # automated symbol on the same account.
-                try:
-                    await self._reconcile_balance()
-                except RetryableError as exc:
-                    self._record_reconciliation_failure(exc)
+                if not await self._run_balance_reconciliation_cycle(flush_dashboard_fills=False):
                     return False
-                except KiwoomAPIError as exc:
-                    if "429" not in str(exc) and "1700" not in str(exc):
-                        raise
-                    emit_rate_limit_event(
-                        self.ctx.logger,
-                        market=self.ctx.client.market,
-                        mode=self.ctx.client.mode,
-                        account_id=self.ctx.account_id,
-                        appkey=self.ctx.client.token_mgr.appkey,
-                        api_id=exc.api_id,
-                        return_code=exc.return_code,
-                        error_text=str(exc),
-                        trigger="balance_reconciliation_deferred",
-                        cooldown_sec=self._balance_gate.balance_backoff_sec,
-                    )
-                    self._record_balance_rate_limit()
-                    self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
-                    return False
-                completed_at = asyncio.get_running_loop().time()
-                self._last_balance_request_at = completed_at
-                self._last_balance_reconciliation = completed_at
-                self._balance_gate.balance_backoff_sec = 5.0
-                self._record_reconciliation_success()
                 self._balance_sync_blocked = False
                 return True
             if self.ledger.pending_orders(self.ctx.strategy.symbol):
@@ -1588,40 +1562,47 @@ class AccountEngine:
                 await self._cancel_stale_orders()
             now = asyncio.get_running_loop().time()
             if confirmed_fill or force_balance or now - self._last_balance_reconciliation >= self.balance_reconcile_sec:
-                try:
-                    await self._reconcile_balance()
-                except RetryableError as exc:
-                    self._record_reconciliation_failure(exc)
+                if not await self._run_balance_reconciliation_cycle(flush_dashboard_fills=True):
                     return False
-                except KiwoomAPIError as exc:
-                    if "429" not in str(exc) and "1700" not in str(exc):
-                        raise
-                    # Quota exhaustion is transient. Keep this symbol's
-                    # prior broker-confirmed state and retry on the next
-                    # normal reconciliation without an exception traceback.
-                    emit_rate_limit_event(
-                        self.ctx.logger,
-                        market=self.ctx.client.market,
-                        mode=self.ctx.client.mode,
-                        account_id=self.ctx.account_id,
-                        appkey=self.ctx.client.token_mgr.appkey,
-                        api_id=exc.api_id,
-                        return_code=exc.return_code,
-                        error_text=str(exc),
-                        trigger="balance_reconciliation_deferred",
-                        cooldown_sec=self._balance_gate.balance_backoff_sec,
-                    )
-                    self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
-                    self._record_balance_rate_limit()
-                    return False
-                completed_at = asyncio.get_running_loop().time()
-                self._last_balance_request_at = completed_at
-                self._last_balance_reconciliation = completed_at
-                self._flush_dashboard_fills()
-                self._balance_gate.balance_backoff_sec = 5.0
-                self._record_reconciliation_success()
             self._balance_sync_blocked = False
             return True
+
+    async def _run_balance_reconciliation_cycle(self, *, flush_dashboard_fills: bool) -> bool:
+        """Reconcile the broker balance and record its account-wide outcome."""
+        try:
+            await self._reconcile_balance()
+        except RetryableError as exc:
+            self._record_reconciliation_failure(exc)
+            return False
+        except KiwoomAPIError as exc:
+            if "429" not in str(exc) and "1700" not in str(exc):
+                raise
+            # Quota exhaustion is transient. Keep this symbol's prior
+            # broker-confirmed state and retry on the next normal
+            # reconciliation without an exception traceback.
+            emit_rate_limit_event(
+                self.ctx.logger,
+                market=self.ctx.client.market,
+                mode=self.ctx.client.mode,
+                account_id=self.ctx.account_id,
+                appkey=self.ctx.client.token_mgr.appkey,
+                api_id=exc.api_id,
+                return_code=exc.return_code,
+                error_text=str(exc),
+                trigger="balance_reconciliation_deferred",
+                cooldown_sec=self._balance_gate.balance_backoff_sec,
+            )
+            self._record_balance_rate_limit()
+            self.ctx.logger.warning("Broker balance rate-limited; reconciliation deferred to the next poll")
+            return False
+        completed_at = asyncio.get_running_loop().time()
+        self._last_balance_request_at = completed_at
+        self._last_balance_reconciliation = completed_at
+        if flush_dashboard_fills:
+            self._flush_dashboard_fills()
+        self._balance_gate.balance_backoff_sec = 5.0
+        self._record_reconciliation_success()
+        return True
 
     def _log_skipped_execution_row(
         self,
