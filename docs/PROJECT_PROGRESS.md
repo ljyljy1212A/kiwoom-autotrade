@@ -434,3 +434,45 @@ publication succeeds and the final target identity is verified.
   source branch was not deleted. No canonical publication, runtime, Scheduler,
   process, network, account, or credential validation was performed by this
   delivery record.
+
+## 2026-09-15 — Worker startup identity handshake delivery
+
+- Implemented a unique supervisor launch ID propagated through the worker
+  environment and status payload. ACK/final worker-state matching now prefers
+  the launch token, while legacy status retains PID fallback compatibility.
+- Updated `src/main.py`, `src/worker_supervisor.py`, and
+  `tests/test_worker_supervisor.py`; unrelated atomic-write changes remained
+  unstaged and outside this delivery.
+- Focused local pytest passed: `38 passed, 1 skipped in 4.78s`, exit code `0`.
+- Full local pytest passed: `457 passed, 4 skipped, 1 xfailed, 12 warnings`
+  in `127.91s`, exit code `0`.
+- Commit `340d8fa` (`Fix worker startup identity handshake`) was pushed to the
+  feature branch and delivered through pull request #7.
+- GitHub Actions verified all 4 checks passed.
+- Pull request #7 was merged into `master` with merge commit
+  `645b8fd7a3bd6614e7e2ef4fa8e61d1a9fcc6ece`.
+- Canonical publication, runtime, Scheduler, process, network, account, and
+  credential validation remain outside this record.
+
+## 2026-09-16 — Windows mutex access delivery and mock runtime validation
+
+- Updated `src/core/process_lock.py` to create account mutexes with an
+  explicit security descriptor and to probe an existing mutex before creation.
+  The existing fail-closed refusal path for inaccessible mutexes remains
+  intact.
+- Focused process-lock tests passed: `9 passed, 2 skipped`, exit code `0`.
+- Commit `de4b4ce` (`Fix Windows process mutex access`) was pushed to the
+  feature branch and delivered through pull request #9.
+- GitHub Actions run `35033315885` verified Windows validation and the
+  non-blocking Ubuntu compatibility signal successfully.
+- Pull request #9 was merged into `master` with merge commit
+  `6f3633d64d007809a431d219c9a55e571acbf980`; local `master` was synchronized
+  to the same `origin/master` revision without changing the dirty worktree.
+- `Kiwoom Heartbeat Alert` was verified as `Enabled` and `Ready` with last
+  result `0`.
+- KR mock PID `5708` and US mock PID `18352` were verified as `RUNNING` with
+  confirmed liveness and expected-idle activity state. No real account,
+  credential, or order execution was involved.
+- The existing Canonical `CURRENT_STATE.md` was read-only hash-verified at
+  `1D0F9DCB2A79A9188EE95BEAF1112629617578E27E744A278F891154E2151143`.
+  No Canonical Apply was performed in this milestone.
