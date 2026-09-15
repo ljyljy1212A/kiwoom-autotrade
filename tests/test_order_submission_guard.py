@@ -76,6 +76,32 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(call_started_at), 2)
         self.assertGreaterEqual(call_started_at[1] - call_started_at[0], 0.18)
 
+    async def test_record_attempt_delay_keeps_post_spacing_deterministic(self):
+        call_started_at: list[float] = []
+        attempts = Mock()
+        attempts.record_attempt.side_effect = lambda *_args: (
+            time.sleep(0.08),
+            Mock(attempt_id="attempt-id"),
+        )[1]
+        self.kr._attempt_store = Mock(return_value=attempts)
+
+        async def post_once(*_args, **kwargs):
+            call_started_at.append(time.monotonic())
+            self.assertFalse(kwargs["allow_reauth_retry"])
+            return {"ord_no": f"{len(call_started_at):07d}"}
+
+        self.kr._post_once = post_once
+
+        first, second = await asyncio.gather(
+            self.kr.place_order("BUY", "005930", 1, 70000),
+            self.kr.place_order("BUY", "000660", 1, 80000),
+        )
+
+        self.assertEqual(first.ord_no, "0000001")
+        self.assertEqual(second.ord_no, "0000002")
+        self.assertEqual(attempts.record_attempt.call_count, 2)
+        self.assertGreaterEqual(call_started_at[1] - call_started_at[0], 0.18)
+
     async def test_lost_response_does_not_retry_order_submission(self):
         calls = 0
 

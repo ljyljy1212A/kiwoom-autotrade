@@ -347,8 +347,8 @@ class KiwoomClient:
                 if wait_for > 0:
                     await asyncio.sleep(wait_for)
                 self._order_authority.assert_owned()
-                self._order_gate.last_request_at = time.monotonic()
                 attempt = self._attempt_store().record_attempt(side, symbol, qty, price, order_type)
+                self._order_gate.last_request_at = time.monotonic()
                 try:
                     data = await self._post_once(path, api_id, body, allow_reauth_retry=False)
                 except Exception as exc:

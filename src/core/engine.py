@@ -3,13 +3,18 @@ from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
 from src.core.reconciliation import (
+    ManualTrancheAllocation,
+    NormalizedBalanceHolding,
+    ReconciliationIncompleteReason,
     _ReconciliationCoordinator,
     _all_balance_holdings,
     _balance_holding,
     _holding_summary,
     _kr_balance_recognized,
+    _manual_tranche_allocation,
     _normalize_broker_balance,
     _number,
+    classify_reconciliation_incomplete_reasons,
 )
 
 import asyncio
@@ -24,7 +29,6 @@ import weakref
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from pathlib import Path
 
 from src.calendar_utils.market_calendar import MarketCalendar
@@ -103,49 +107,6 @@ class _AccountBalanceGate:
 _ACCOUNT_BALANCE_GATES: dict[str, _AccountBalanceGate] = {}
 _TRANCHE_BASES_WRITE_LOCK = threading.RLock()
 _STARTUP_BACKUP_ACCOUNTS: set[str] = set()
-
-
-class ReconciliationIncompleteReason(Enum):
-    UNRECOGNIZED_BALANCE = "unrecognized balance response"
-    BROKER_FILL_CATCHUP = "broker-fill catch-up marker"
-    PENDING_QUANTITY_DEFERRAL = "pending-quantity deferral"
-    STALE_LIFECYCLE_HOLD = "stale-lifecycle hold"
-    UNATTRIBUTED_QUANTITY_PAUSE = "unattributed-quantity pause"
-    TRANCHE_REBUILD_AMBIGUOUS = "tranche-rebuild ambiguous"
-
-
-@dataclass(frozen=True)
-class NormalizedBalanceHolding:
-    symbol: str
-    qty: float
-    avg_price: float
-
-
-@dataclass(frozen=True)
-class ManualTrancheAllocation:
-    restored_manual_qty: float = 0.0
-    adopt_manual_qty: float = 0.0
-    unattributed_remainder: float = 0.0
-
-
-def _manual_tranche_allocation(
-    *, qty: float, known_tranche_qty: float, has_step_one: bool,
-    lifecycle_open: bool, lifecycle_manual_qty: float,
-) -> ManualTrancheAllocation:
-    """Purely classify how a broker remainder can be assigned to tranche 1."""
-    remainder = qty - known_tranche_qty
-    if remainder <= 1e-9:
-        return ManualTrancheAllocation()
-    if not has_step_one and lifecycle_open and lifecycle_manual_qty > 1e-9:
-        restored = min(remainder, lifecycle_manual_qty)
-        remainder -= restored
-        return ManualTrancheAllocation(
-            restored_manual_qty=restored,
-            unattributed_remainder=max(0.0, remainder),
-        )
-    if not has_step_one:
-        return ManualTrancheAllocation(adopt_manual_qty=remainder)
-    return ManualTrancheAllocation(unattributed_remainder=remainder)
 
 
 @dataclass(frozen=True)
@@ -816,30 +777,40 @@ class AccountEngine:
         """Classify reconciliation holds without mutating engine or ledger state."""
         ledger = self.ledger if ledger is None else ledger
         symbol_key = self._symbol_key(symbol)
-        reasons: set[ReconciliationIncompleteReason] = set()
         if holding is None or not balance_recognized:
-            reasons.add(ReconciliationIncompleteReason.UNRECOGNIZED_BALANCE)
-            return frozenset(reasons)
+            return classify_reconciliation_incomplete_reasons(
+                balance_recognized=balance_recognized,
+                holding=holding,
+                qty=qty,
+                position_qty=0.0,
+                expected_qty=None,
+                has_pending_orders=False,
+                lifecycle_min_qty=0.0,
+                pause_reason="",
+            )
         expected_qty = self._broker_fill_catchup_qty.get(symbol_key)
-        if expected_qty is not None and qty + 1e-9 < expected_qty:
-            reasons.add(ReconciliationIncompleteReason.BROKER_FILL_CATCHUP)
-        if ledger.pending_orders(symbol) and abs(float(self.ctx.position.qty) - qty) > 1e-9:
-            reasons.add(ReconciliationIncompleteReason.PENDING_QUANTITY_DEFERRAL)
+        has_pending_orders = bool(ledger.pending_orders(symbol))
+        position_qty = float(self.ctx.position.qty) if has_pending_orders else qty
         lifecycle = self._symbol_lifecycles.get(symbol_key, {})
+        lifecycle_min_qty = 0.0
         if isinstance(lifecycle, dict) and lifecycle.get("status") == "open":
-            minimum = max(0.0, float(lifecycle.get("manual_qty", 0) or 0)) + sum(
+            lifecycle_min_qty = max(0.0, float(lifecycle.get("manual_qty", 0) or 0)) + sum(
                 ledger.open_tranche_qty(symbol, step) for step in range(2, self.ctx.strategy.max_step + 1)
             )
-            if minimum > 0 and qty + 1e-9 < minimum:
-                reasons.add(ReconciliationIncompleteReason.STALE_LIFECYCLE_HOLD)
-        if complete_zero_balance or unattributed_remainder > 1e-9 or self._pause_reason == "broker_quantity_unattributed":
-            reasons.add(ReconciliationIncompleteReason.UNATTRIBUTED_QUANTITY_PAUSE)
-        if self._pause_reason == "tranche_rebuild_ambiguous":
-            reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
-        if open_rows is not None and known_tranche_qty > qty + 1e-9:
-            if not any(row[0] == 1 for row in open_rows) and qty > 1e-9:
-                reasons.add(ReconciliationIncompleteReason.TRANCHE_REBUILD_AMBIGUOUS)
-        return frozenset(reasons)
+        return classify_reconciliation_incomplete_reasons(
+            balance_recognized=balance_recognized,
+            holding=holding,
+            qty=qty,
+            position_qty=position_qty,
+            expected_qty=expected_qty,
+            has_pending_orders=has_pending_orders,
+            lifecycle_min_qty=lifecycle_min_qty,
+            pause_reason=self._pause_reason,
+            known_tranche_qty=known_tranche_qty,
+            open_rows=open_rows,
+            unattributed_remainder=unattributed_remainder,
+            complete_zero_balance=complete_zero_balance,
+        )
 
     def _unresolved_reconciliation_order_ids(self, symbol: str, *, ledger=None) -> tuple[str, ...]:
         ledger = self.ledger if ledger is None else ledger
