@@ -69,6 +69,7 @@ class WorkerIdentity:
     pid: int
     instance_id: str
     started_at: str
+    supervisor_launch_id: str | None = None
 
     @property
     def log_value(self) -> str:
@@ -208,6 +209,8 @@ def _write_worker_status(
     }
     if controller_cycle_at is not None:
         payload["lastControllerCycleAt"] = controller_cycle_at
+    if identity.supervisor_launch_id:
+        payload["supervisorLaunchId"] = identity.supervisor_launch_id
     quote_path = DATA_DIR / f"worker_{identity.account_id}.quotes.json"
     try:
         quotes = json.loads(quote_path.read_text(encoding="utf-8"))
@@ -668,6 +671,7 @@ async def main():
             pid=os.getpid(),
             instance_id=uuid.uuid4().hex,
             started_at=datetime.now(timezone.utc).isoformat(),
+            supervisor_launch_id=os.environ.get("KIWOOM_SUPERVISOR_LAUNCH_ID") or None,
         )
         for ctx in contexts:
             _apply_worker_identity(ctx, worker_identity)

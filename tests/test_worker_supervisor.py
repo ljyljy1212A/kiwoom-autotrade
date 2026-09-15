@@ -351,6 +351,8 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             account = f"concurrent_start_{uuid.uuid4().hex}"
             children = []
             results = []
+            launches = []
+            thread_results = []
             errors = []
             start_gate = threading.Barrier(3)
             launch_gate = threading.Barrier(2)
@@ -366,8 +368,11 @@ class WorkerSupervisorStopTests(unittest.TestCase):
 
                 account = sys.argv[1]
                 base_dir = Path(sys.argv[2])
+                hold_sec = float(sys.argv[3])
+                launch_id = os.environ["KIWOOM_SUPERVISOR_LAUNCH_ID"]
                 lock = ProcessLock(account, base_dir)
                 status_path = base_dir / f"worker_{account}.status.json"
+                pid_path = base_dir / f"worker_{account}.pid"
                 try:
                     lock.acquire()
                 except ProcessLockError:
@@ -376,12 +381,17 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                         time.sleep(0.01)
                     raise SystemExit(3)
 
+                pid_path.write_text(
+                    json.dumps({"pid": os.getpid(), "account": account}),
+                    encoding="utf-8",
+                )
                 status_path.write_text(
                     json.dumps(
                         {
                             "account": account,
                             "pid": os.getpid(),
                             "instanceId": "concurrent-test",
+                            "supervisorLaunchId": launch_id,
                             "state": "RUNNING",
                             "market": "KR",
                         }
@@ -389,7 +399,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 try:
-                    time.sleep(30)
+                    time.sleep(hold_sec)
                 finally:
                     lock.release()
                 """
@@ -398,18 +408,25 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             def spawn_mutex_owner(_command, **_kwargs):
                 launch_gate.wait(timeout=5)
                 child = real_popen(
-                    [sys.executable, "-c", worker_script, account, str(base_dir)],
+                    [sys.executable, "-c", worker_script, account, str(base_dir),
+                     str(supervisor._STARTUP_ACK_TIMEOUT_SEC + 10)],
                     cwd=supervisor.ROOT,
+                    env=_kwargs["env"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
                 children.append(child)
+                launches.append((threading.get_ident(), threading.get_native_id(), child.pid))
                 return child
 
             def call_start():
                 try:
                     start_gate.wait(timeout=5)
-                    results.append(supervisor.start(account, "KR"))
+                    thread_ident = threading.get_ident()
+                    native_id = threading.get_native_id()
+                    result = supervisor.start(account, "KR")
+                    results.append(result)
+                    thread_results.append((thread_ident, native_id, result))
                 except Exception as exc:
                     errors.append(exc)
 
@@ -422,28 +439,58 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 start_gate.wait(timeout=5)
                 for thread in threads:
                     thread.join(timeout=supervisor._STARTUP_ACK_TIMEOUT_SEC + 5)
+                def snapshot_file(path):
+                    try:
+                        if not path.exists():
+                            return {"exists": False, "text": None}
+                        try:
+                            text = path.read_text(encoding="utf-8")
+                        except Exception as exc:
+                            text = repr(exc)
+                        return {"exists": True, "text": text}
+                    except Exception as exc:
+                        return {"exists": repr(exc), "text": repr(exc)}
+
+                pid_path = supervisor._pid_path(account)
+                status_path = supervisor._status_path(account)
+                path_snapshot = {
+                    "base_dir": base_dir,
+                    "supervisor_data_dir": supervisor.DATA_DIR,
+                    "pid_path": pid_path,
+                    "status_path": status_path,
+                    "pid_file": snapshot_file(pid_path),
+                    "status_file": snapshot_file(status_path),
+                }
 
             try:
+                diagnostic = (
+                    f"results={results!r}; errors={errors!r}; "
+                    f"launches={launches!r}; thread_results={thread_results!r}; "
+                    f"path_snapshot={path_snapshot!r}; "
+                    f"child_returncodes={[child.returncode for child in children]!r}"
+                )
                 self.assertFalse(
                     any(thread.is_alive() for thread in threads),
-                    "concurrent supervisor starts did not complete within the startup acknowledgement budget",
+                    "concurrent supervisor starts did not complete within the startup acknowledgement budget; "
+                    + diagnostic,
                 )
-                self.assertEqual(errors, [])
-                self.assertEqual(len(results), 2)
+                self.assertEqual(errors, [], diagnostic)
+                self.assertEqual(len(results), 2, diagnostic)
 
                 started = [(code, payload) for code, payload in results if payload.get("started")]
                 rejected = [(code, payload) for code, payload in results if not payload.get("started")]
 
-                self.assertEqual(len(started), 1)
-                self.assertEqual(started[0][0], 0)
-                self.assertEqual(len(rejected), 1)
-                self.assertEqual(rejected[0][0], 3)
+                self.assertEqual(len(started), 1, diagnostic)
+                self.assertEqual(started[0][0], 0, diagnostic)
+                self.assertEqual(len(rejected), 1, diagnostic)
+                self.assertEqual(rejected[0][0], 3, diagnostic)
                 self.assertIn(
                     rejected[0][1].get("reason"),
                     ("already-running", "worker-refused-or-exited"),
+                    diagnostic,
                 )
                 if rejected[0][1].get("reason") == "worker-refused-or-exited":
-                    self.assertEqual(rejected[0][1].get("failureClass"), "lock-conflict")
+                    self.assertEqual(rejected[0][1].get("failureClass"), "lock-conflict", diagnostic)
             finally:
                 for child in children:
                     if child.poll() is None:

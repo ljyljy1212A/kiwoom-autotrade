@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -332,6 +333,7 @@ def status(account: str) -> dict:
         **liveness,
         "instanceId": metadata.get("instanceId"), "startedAt": metadata.get("startedAt"),
         "state": metadata.get("state"), "market": metadata.get("market"),
+        "supervisorLaunchId": metadata.get("supervisorLaunchId"),
         "active_symbols": metadata.get("active_symbols", []),
         "activityState": metadata.get("activityState"),
         "processHeartbeatAt": metadata.get("processHeartbeatAt"),
@@ -363,6 +365,13 @@ def _wait_for_stopped(account: str, pid: int, timeout_sec: float) -> bool:
             return True
         time.sleep(0.1)
     return not _pid_alive(pid) and not lock.is_alive()
+
+
+def _is_started_child(payload: dict, child: subprocess.Popen, launch_id: str) -> bool:
+    payload_launch_id = payload.get("supervisorLaunchId")
+    if payload_launch_id is not None:
+        return payload_launch_id == launch_id
+    return payload.get("pid") == child.pid
 
 
 def _remove_pid_after_confirmed_exit(account: str, pid: int) -> None:
@@ -407,9 +416,11 @@ def start(account: str, market: str) -> tuple[int, dict]:
         _clear_intentional_stop(account)
         return 3, {**current, "started": False, "reason": "already-running"}
 
+    launch_id = uuid.uuid4().hex
     env = os.environ.copy()
     env["ACCOUNT_FILTER"] = account
     env["MARKET_INSTANCE"] = market
+    env["KIWOOM_SUPERVISOR_LAUNCH_ID"] = launch_id
     env.setdefault("KIWOOM_ENV", "mock")
     env["PRICE_FEED_MODE"] = "auto"
     env["TELEGRAM_APPROVAL_REQUIRED"] = "false"
@@ -450,7 +461,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
         if current.get("liveness") == "suspect":
             return 8, {**current, "started": False, "reason": "status-indeterminate"}
         if current["running"]:
-            if current["pid"] == child.pid:
+            if _is_started_child(current, child, launch_id):
                 # Any confirmed running path consumes the intentional-stop marker.
                 _clear_intentional_stop(account)
                 return 0, {**current, "started": True}
@@ -463,7 +474,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
             current["started"] = False
             current["reason"] = "worker-refused-or-exited"
             current["failureClass"] = (
-                "lock-conflict" if current.get("running") and current.get("pid") != child.pid
+                "lock-conflict" if current.get("running") and not _is_started_child(current, child, launch_id)
                 else "worker-exited-before-start"
             )
             return 3, current
@@ -472,6 +483,11 @@ def start(account: str, market: str) -> tuple[int, dict]:
     if final.get("liveness") == "suspect":
         return 8, {**final, "started": False, "reason": "status-indeterminate"}
     if final["running"]:
+        # Preserve the same child-identity success contract used inside the
+        # acknowledgement loop at the final deadline observation.
+        if _is_started_child(final, child, launch_id):
+            _clear_intentional_stop(account)
+            return 0, {**final, "started": True}
         # Any confirmed running path consumes the intentional-stop marker.
         _clear_intentional_stop(account)
         return 3, {**final, "started": False, "reason": "already-running"}
