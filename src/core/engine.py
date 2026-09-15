@@ -2,7 +2,15 @@
 from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
-from src.core.reconciliation import _ReconciliationCoordinator
+from src.core.reconciliation import (
+    _ReconciliationCoordinator,
+    _all_balance_holdings,
+    _balance_holding,
+    _holding_summary,
+    _kr_balance_recognized,
+    _normalize_broker_balance,
+    _number,
+)
 
 import asyncio
 import json
@@ -25,8 +33,6 @@ from src.data.order_attempts import unattributed_attempt_ids
 from src.core.us_market import (
     extract_us_fx_rate,
     normalize_us_execution_rows,
-    normalize_us_holdings,
-    us_balance_recognized,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner
 from src.core.control_state import (
@@ -882,12 +888,9 @@ class AccountEngine:
     ) -> ReconciliationClearanceSnapshot:
         raw_balance = await self.ctx.client.get_balance()
         balance_received_at = time.monotonic()
-        if self.ctx.client.market == "US":
-            holdings = normalize_us_holdings(raw_balance)
-            recognized = us_balance_recognized(raw_balance)
-        else:
-            holdings = _all_balance_holdings(self.ctx.client.market, raw_balance)
-            recognized = _kr_balance_recognized(raw_balance)
+        normalized_balance = _normalize_broker_balance(self.ctx.client.market, raw_balance)
+        holdings = normalized_balance.holdings
+        recognized = normalized_balance.recognized
         target = next((item for item in holdings if _same_symbol(self.ctx.client.market, item["symbol"], symbol)), None)
         holding = NormalizedBalanceHolding(symbol, float(target["qty"]), float(target["avgPrice"])) if target else NormalizedBalanceHolding(symbol, 0.0, 0.0)
         known_tranche_qty = sum(qty for qty in self.ctx.strategy.step_qty.values() if qty > 0)
@@ -2161,12 +2164,9 @@ class AccountEngine:
         balance_change_msg: str | None = None
         balance_result = await self._shared_broker_balance()
         raw_balance = balance_result[0] if isinstance(balance_result, tuple) else balance_result
-        if self.ctx.client.market == "US":
-            broker_holdings = normalize_us_holdings(raw_balance)
-            balance_recognized = us_balance_recognized(raw_balance)
-        else:
-            broker_holdings = _all_balance_holdings(self.ctx.client.market, raw_balance)
-            balance_recognized = _kr_balance_recognized(raw_balance)
+        normalized_balance = _normalize_broker_balance(self.ctx.client.market, raw_balance)
+        broker_holdings = normalized_balance.holdings
+        balance_recognized = normalized_balance.recognized
         if balance_recognized:
             self._run_symbol_key_migration(broker_holdings)
             if self._symbol_key_manual_review(self.ctx.strategy.symbol):
@@ -2787,11 +2787,6 @@ def _executed_rows(data: dict) -> list[dict]:
             return data[key]
     return []
 
-def _number(value) -> float:
-    try: return abs(float(str(value).replace(",", "").replace("+", "").strip()))
-    except (TypeError, ValueError): return 0.0
-
-
 def _kr_tick_size(price: float) -> int:
     """Return the domestic limit-order tick for the price bands used by Kiwoom."""
     if price < 1_000:
@@ -2820,98 +2815,6 @@ def _filled_at(row: dict) -> str:
     value = str(row.get("ord_dt") or "").replace("-", "")
     return f"{value[:4]}-{value[4:6]}-{value[6:]}" if len(value) == 8 and value.isdigit() else datetime.now().date().isoformat()
 
-def _balance_holding(market: str, data: dict, symbol: str) -> tuple[float, float] | None:
-    saw_holdings = False
-    for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "acnt_bal", "result_list", "result_lsit", "holdings"):
-        rows = data.get(key)
-        if isinstance(rows, dict):
-            rows = [rows]
-        if not isinstance(rows, list):
-            continue
-        saw_holdings = True
-        for row in rows:
-            if _same_symbol(market, row.get("stk_cd", ""), symbol):
-                for qty_key in ("rmnd_qty", "poss_qty", "hold_qty", "cur_qty", "qty"):
-                    if qty_key in row:
-                        avg = next((_number(row[k]) for k in ("buy_uv", "avg_prc", "pur_pric") if k in row), 0.0)
-                        return _number(row[qty_key]), avg
-    # An authoritative empty holdings list means the account owns zero shares.
-    # Returning None is reserved for an unrecognized/malformed response.
-    if saw_holdings:
-        return (0.0, 0.0)
-
-    # Some mock responses wrap the holdings list in another object. Walk only
-    # dictionaries that look like holding rows; never interpret arbitrary
-    # account totals as a position quantity.
-    def walk(value):
-        if isinstance(value, dict):
-            code = next((value.get(k) for k in ("stk_cd", "symbol", "code") if value.get(k) is not None), None)
-            if code is not None and _same_symbol(market, code, symbol):
-                qty_key = next((k for k in ("rmnd_qty", "cur_qty", "poss_qty", "hold_qty", "qty", "setl_remn") if k in value), None)
-                if qty_key:
-                    avg = next((_number(value[k]) for k in ("buy_uv", "avg_prc", "pur_pric", "cntr_uv") if k in value), 0.0)
-                    return _number(value[qty_key]), avg
-            for child in value.values():
-                found = walk(child)
-                if found is not None:
-                    return found
-        elif isinstance(value, list):
-            for child in value:
-                found = walk(child)
-                if found is not None:
-                    return found
-        return None
-
-    found = walk(data)
-    if found is not None:
-        return found
-    return None
-
-
 def _same_symbol(market: str, value, symbol: str) -> bool:
     """Compare symbols with the shared market-aware runtime key."""
     return canonical_symbol_key(market, value) == canonical_symbol_key(market, symbol)
-
-
-def _holding_summary(data: dict) -> str:
-    """Safe diagnostic: structure/field names only, never account credentials."""
-    rows = data.get("acnt_evlt_remn_indv_tot")
-    if isinstance(rows, dict):
-        rows = [rows]
-    if not isinstance(rows, list):
-        return f"acnt_evlt_remn_indv_tot={type(rows).__name__}"
-    if not rows:
-        return "acnt_evlt_remn_indv_tot=[]"
-    first = rows[0] if isinstance(rows[0], dict) else {}
-    codes = [str(r.get("stk_cd", "")).strip() for r in rows if isinstance(r, dict)]
-    return f"rows={len(rows)}, codes={codes}, row_fields={sorted(first.keys())}"
-
-
-def _kr_balance_recognized(data: dict) -> bool:
-    """Whether a domestic balance response contains an authoritative rows field."""
-    return any(key in data for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "acnt_bal", "result_list", "holdings"))
-
-
-def _all_balance_holdings(market: str, data: dict) -> list[dict]:
-    """Map the authoritative Kiwoom holdings list for dashboard display."""
-    rows = data.get("acnt_evlt_remn_indv_tot", [])
-    if isinstance(rows, dict):
-        rows = [rows]
-    if not isinstance(rows, list):
-        return []
-    holdings = []
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("stk_cd"):
-            continue
-        qty = _number(row.get("rmnd_qty"))
-        if qty <= 0:
-            continue
-        holdings.append({
-            "symbol": canonical_symbol_key(market, row["stk_cd"]),
-            "name": str(row.get("stk_nm", "")).strip(),
-            "qty": qty,
-            "avgPrice": _number(row.get("pur_pric")),
-            "currentPrice": _number(row.get("cur_prc")),
-            "prevClose": _number(row.get("pred_close_pric")),
-        })
-    return holdings

@@ -26,7 +26,7 @@ from src.core.engine import (
 )
 from src.core.reconciliation import _ReconciliationCoordinator
 from src.strategy.infinite_grid import InfiniteGridStrategy
-from src.utils.exceptions import RetryableError
+from src.utils.exceptions import KiwoomAPIError, RetryableError
 
 
 def _engine(account, symbol, data_dir, reason=""):
@@ -474,6 +474,81 @@ def test_sync_broker_state_runs_clearance_before_sync_lock(tmp_path):
         assert await engine.sync_broker_state() is True
         assert observed_lock_states == [False]
     asyncio.run(check())
+
+
+class BalanceReconciliationCycleCharacterizationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_success_resets_shared_state_and_flushes_dashboard_fills_when_requested(self):
+        engine = _sync_engine("kr_mock", ".", balance_only=False)
+        engine._balance_gate.balance_backoff_sec = 20.0
+        engine._record_reconciliation_failure(RetryableError("prior failure"))
+        engine._reconcile_balance = AsyncMock()
+        engine._flush_dashboard_fills = Mock()
+
+        self.assertTrue(await engine._run_balance_reconciliation_cycle(flush_dashboard_fills=True))
+
+        engine._reconcile_balance.assert_awaited_once()
+        engine._flush_dashboard_fills.assert_called_once_with()
+        self.assertGreater(engine._last_balance_request_at, 0.0)
+        self.assertEqual(engine._last_balance_request_at, engine._last_balance_reconciliation)
+        self.assertEqual(engine._balance_gate.balance_backoff_sec, 5.0)
+        self.assertEqual(engine._balance_gate.reconciliation_failure_count, 0)
+
+    async def test_success_for_passive_worker_does_not_flush_dashboard_fills(self):
+        engine = _sync_engine("kr_mock", ".", balance_only=True)
+        engine._reconcile_balance = AsyncMock()
+        engine._flush_dashboard_fills = Mock()
+
+        self.assertTrue(await engine._run_balance_reconciliation_cycle(flush_dashboard_fills=False))
+
+        engine._reconcile_balance.assert_awaited_once()
+        engine._flush_dashboard_fills.assert_not_called()
+
+    async def test_retryable_failure_records_failure_without_success_side_effects(self):
+        engine = _sync_engine("kr_mock", ".", balance_only=True)
+        engine._last_balance_request_at = 11.0
+        engine._last_balance_reconciliation = 12.0
+        engine._reconcile_balance = AsyncMock(side_effect=RetryableError("balance unavailable"))
+        engine._flush_dashboard_fills = Mock()
+
+        self.assertFalse(await engine._run_balance_reconciliation_cycle(flush_dashboard_fills=True))
+
+        engine._flush_dashboard_fills.assert_not_called()
+        self.assertEqual(engine._last_balance_request_at, 11.0)
+        self.assertEqual(engine._last_balance_reconciliation, 12.0)
+        self.assertEqual(engine._balance_gate.reconciliation_failure_count, 1)
+
+    async def test_rate_limit_is_deferred_without_failure_or_success_side_effects(self):
+        engine = _sync_engine("kr_mock", ".", balance_only=True)
+        engine._last_balance_request_at = 11.0
+        engine._last_balance_reconciliation = 12.0
+        engine._balance_gate.balance_backoff_sec = 5.0
+        engine._reconcile_balance = AsyncMock(
+            side_effect=KiwoomAPIError("kt00018", "429", "rate limited")
+        )
+        engine._flush_dashboard_fills = Mock()
+
+        with patch("src.core.engine.emit_rate_limit_event") as emit_rate_limit:
+            self.assertFalse(await engine._run_balance_reconciliation_cycle(flush_dashboard_fills=True))
+
+        emit_rate_limit.assert_called_once()
+        engine._flush_dashboard_fills.assert_not_called()
+        self.assertEqual(engine._last_balance_request_at, 11.0)
+        self.assertEqual(engine._last_balance_reconciliation, 12.0)
+        self.assertEqual(engine._balance_gate.reconciliation_failure_count, 0)
+        self.assertEqual(engine._balance_gate.balance_backoff_sec, 10.0)
+        self.assertTrue(engine._balance_sync_blocked)
+
+    async def test_non_rate_limit_api_error_is_reraised(self):
+        engine = _sync_engine("kr_mock", ".", balance_only=False)
+        api_error = KiwoomAPIError("kt00018", "500", "broker error")
+        engine._reconcile_balance = AsyncMock(side_effect=api_error)
+        engine._flush_dashboard_fills = Mock()
+
+        with self.assertRaisesRegex(KiwoomAPIError, "broker error"):
+            await engine._run_balance_reconciliation_cycle(flush_dashboard_fills=True)
+
+        engine._flush_dashboard_fills.assert_not_called()
+        self.assertEqual(engine._balance_gate.reconciliation_failure_count, 0)
 
 
 class SyncBrokerStateIntegrationTests(unittest.IsolatedAsyncioTestCase):

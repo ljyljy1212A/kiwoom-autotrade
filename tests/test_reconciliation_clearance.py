@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock
 
 from src.core.engine import (
     AccountEngine,
+    _all_balance_holdings,
+    _balance_holding,
+    _kr_balance_recognized,
     _manual_tranche_allocation,
     NormalizedBalanceHolding,
     ReconciliationClearanceSnapshot,
@@ -13,7 +16,96 @@ from src.core.engine import (
     evaluate_reconciliation_clearance,
     with_unattributed_collision_order_ids,
 )
+from src.core.reconciliation import _normalize_broker_balance
 from src.data.order_attempts import OrderAttestationOutcome, OrderAttemptStore
+
+
+def test_balance_holding_normalizes_kr_payload_to_symbol_and_average_price():
+    data = {
+        "acnt_evlt_remn_indv_tot": [{
+            "stk_cd": "005930",
+            "rmnd_qty": "10",
+            "avg_prc": "12300",
+        }],
+    }
+
+    assert _balance_holding("KR", data, "005930") == (10.0, 12300.0)
+
+
+def test_kr_balance_recognized_identifies_authoritative_holdings_rows():
+    assert _kr_balance_recognized({"acnt_evlt_remn_indv_tot": [{"stk_cd": "005930"}]}) is True
+    assert _kr_balance_recognized({"result_list": [{"stk_cd": "005930"}]}) is True
+    assert _kr_balance_recognized({"status": "ok"}) is False
+
+
+def test_all_balance_holdings_canonicalizes_symbols_and_skips_zero_qty_entries():
+    data = {
+        "acnt_evlt_remn_indv_tot": [
+            {
+                "stk_cd": "005930",
+                "stk_nm": "삼성전자",
+                "rmnd_qty": "10",
+                "pur_pric": "5000",
+                "cur_prc": "5200",
+                "pred_close_pric": "5100",
+            },
+            {
+                "stk_cd": "SOXL",
+                "rmnd_qty": "0",
+                "pur_pric": "0",
+                "cur_prc": "0",
+                "pred_close_pric": "0",
+            },
+        ],
+    }
+
+    assert _all_balance_holdings("KR", data) == [{
+        "symbol": "005930",
+        "name": "삼성전자",
+        "qty": 10.0,
+        "avgPrice": 5000.0,
+        "currentPrice": 5200.0,
+        "prevClose": 5100.0,
+    }]
+
+
+def test_normalize_broker_balance_uses_kr_holdings_and_recognition():
+    result = _normalize_broker_balance("KR", {
+        "acnt_evlt_remn_indv_tot": [{
+            "stk_cd": "005930",
+            "stk_nm": "삼성전자",
+            "rmnd_qty": "10",
+            "pur_pric": "5000",
+            "cur_prc": "5200",
+            "pred_close_pric": "5100",
+        }],
+    })
+
+    assert result.recognized is True
+    assert result.holdings == [{
+        "symbol": "005930",
+        "name": "삼성전자",
+        "qty": 10.0,
+        "avgPrice": 5000.0,
+        "currentPrice": 5200.0,
+        "prevClose": 5100.0,
+    }]
+
+
+def test_normalize_broker_balance_uses_us_adapter_and_recognition():
+    result = _normalize_broker_balance("US", {
+        "result_list": [{
+            "ovrs_pdno": "SOXL",
+            "ovrs_cblc_qty": "3",
+            "pchs_avg_pric": "30",
+            "ovrs_now_pric": "35",
+            "prev_close": "34",
+        }],
+    })
+
+    assert result.recognized is True
+    assert result.holdings
+    assert result.holdings[0]["symbol"] == "SOXL"
 
 
 def _clear_snapshot(**changes):
