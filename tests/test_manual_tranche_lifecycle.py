@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import src.core.engine as engine_module
 from src.core.account_manager import AccountContext
@@ -65,6 +66,47 @@ class _Logger:
 
 
 class ManualTrancheLifecycleTest(unittest.TestCase):
+    def test_zero_balance_interval_does_not_reuse_same_tick_cache(self):
+        async def scenario():
+            client = _Client()
+            account = "kr_zero_balance_interval_cache_test"
+            ctx = AccountContext(
+                account_id=account, display_name="zero balance interval cache", client=client,
+                strategy=InfiniteGridStrategy(_config()), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(
+                ctx, make_telegram_double(), None,
+                lambda _symbol: None, poll_interval_sec=60, control_symbol="000490",
+            )
+            engine.balance_min_interval_sec = 0
+            fixed_loop = SimpleNamespace(time=lambda: 123.0)
+            try:
+                first, _ = await engine._shared_broker_balance()
+                self.assertEqual(first["acnt_evlt_remn_indv_tot"][0]["rmnd_qty"], "1")
+                client.qty = 2
+                engine._balance_gate.received_at = 123.0
+                with patch.object(
+                    engine_module.asyncio,
+                    "get_running_loop",
+                    return_value=fixed_loop,
+                ):
+                    second, _ = await engine._shared_broker_balance()
+                self.assertEqual(second["acnt_evlt_remn_indv_tot"][0]["rmnd_qty"], "2")
+            finally:
+                engine.ledger.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
     def test_balance_notification_waits_for_dashboard_position_initialization(self):
         async def scenario():
             client = _Client()
