@@ -114,7 +114,6 @@ class OrphanStateCleaner:
         for symbol in canonical_candidates:
             owners.setdefault(legacy_symbol_key(symbol), set()).add(symbol)
         stores = (self.bases_path, self.lifecycle_path, self.state_path)
-        changed = False
         events: list[dict] = []
         for path in stores:
             data = self._read(path, {})
@@ -139,7 +138,6 @@ class OrphanStateCleaner:
                         events.append({"status": "manual_review", "key": key, "owners": sorted({key, replacement})})
                         continue
                     target[replacement] = target.pop(key)
-                    changed = True
                     events.append({"status": "migrated", "oldKey": key, "newKey": replacement, "store": path.name})
                 elif len(candidate_owners) > 1:
                     self._manual_review.update(candidate_owners | {key})

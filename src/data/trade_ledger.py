@@ -257,7 +257,8 @@ class TradeLedgerStore:
         )
         args: list = [self.account_id]
         if symbol:
-            sql += " AND symbol=?"; args.append(symbol)
+            sql += " AND symbol=?"
+            args.append(symbol)
         clause, lifecycle_args = self._lifecycle_clause()
         sql += clause
         args.extend(lifecycle_args)
@@ -279,7 +280,8 @@ class TradeLedgerStore:
         """
         args: list = [self.account_id]
         if symbol:
-            sql += " AND symbol=?"; args.append(symbol)
+            sql += " AND symbol=?"
+            args.append(symbol)
         clause, lifecycle_args = self._lifecycle_clause()
         sql += clause
         args.extend(lifecycle_args)
@@ -372,7 +374,8 @@ class TradeLedgerStore:
                  WHERE account_id=? AND type='sell' AND buy_id IS NOT NULL"""
         args: list[str] = [self.account_id]
         if symbol:
-            sql += " AND symbol=?"; args.append(symbol)
+            sql += " AND symbol=?"
+            args.append(symbol)
         sql += " GROUP BY ord_no"
         repaired = 0
         for row in self.db.execute(sql, args).fetchall():
@@ -380,7 +383,8 @@ class TradeLedgerStore:
                             WHERE account_id=? AND ord_no=? AND type='sell' AND buy_id IS NULL"""
             update_args: list = [row["buy_id"], self.account_id, row["ord_no"]]
             if symbol:
-                update_sql += " AND symbol=?"; update_args.append(symbol)
+                update_sql += " AND symbol=?"
+                update_args.append(symbol)
             repaired += int(self.db.execute(update_sql, update_args).rowcount or 0)
         self.db.commit()
         return repaired

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import socket
 import ssl
 import tempfile

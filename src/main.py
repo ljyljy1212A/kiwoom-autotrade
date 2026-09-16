@@ -21,12 +21,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.core.broker_http import _connect_with_reuseaddr
 from src.core.broker_http import get_fixed_port_degraded_state, restore_fixed_port_degraded_state
 from src.core.process_lock import AccountOrderAuthority, ProcessLock
 from src.core.symbol_keys import canonical_symbol_key
-from src.core.runtime_paths import DATA_DIR, LOG_DIR, PROJECT_ROOT
-from src.core.account_manager import load_accounts, run_all
+from src.core.runtime_paths import DATA_DIR, LOG_DIR
+from src.core.account_manager import load_accounts
 from src.core.engine import AccountEngine, DispatchClearanceService
 from src.core.realtime_feed import PriceFeed
 from src.calendar_utils.market_calendar import MarketCalendar, _FALLBACK_HOURS
