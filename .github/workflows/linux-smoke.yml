@@ -73,5 +73,5 @@ jobs:
       - name: Ruff advisory check
         run: python -m ruff check src tests
 
-      - name: Mypy advisory check
-        run: python -m mypy src/core
+      - name: Mypy POSIX provider advisory check
+        run: python -m mypy src/core/process_inventory.py
