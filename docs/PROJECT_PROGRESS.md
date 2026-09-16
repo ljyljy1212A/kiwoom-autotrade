@@ -517,6 +517,29 @@ publication succeeds and the final target identity is verified.
 - No real account, credential, order execution, runtime, Scheduler, or
   Canonical publication was performed for this delivery.
 
+## 2026-09-16 — Dashboard control atomic initialization and Phase C process inventory delivery
+
+- `src/main.py` now writes newly created
+  `dashboard_control_<account>_<symbol>.json` files through
+  `atomic_write_json` instead of `Path.write_text`, removing a non-atomic
+  control-file initialization path.
+- `src/core/process_inventory.py` gained POSIX process inventory support, and
+  the worker process provider uses the platform-appropriate inventory path.
+- Smaller changes included trade-ledger formatting, Ruff cleanup, and scoped
+  Mypy configuration across the affected source and test files.
+- Regression coverage was added for atomic dashboard control initialization
+  and POSIX worker process inventory behavior.
+- CI configuration was updated in `.github/workflows/linux-smoke.yml`,
+  `pyproject.toml`, `requirements-dev.txt`, and `requirements.txt`.
+- Local pytest results and CI (GitHub Actions) check-run outcomes for this
+  delivery were not independently verified and are not recorded here.
+- Pull request #13 was merged into `master` with merge commit
+  `8c73d082b6d6ccc89a21fe88ca181aa1e7ccdd0d`.
+- Canonical publication status for this delivery was not independently
+  verified and is not recorded here.
+- Operational validation status for this delivery was not independently
+  verified and is not recorded here.
+
 ## 2026-09-16 — Dashboard control persistence delivery
 
 - Dashboard settings and control persistence now use the shared atomic JSON
