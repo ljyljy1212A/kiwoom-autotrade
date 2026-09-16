@@ -480,16 +480,19 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 if not isinstance(remove_closed, bool):
                     raise ValueError("auto_remove_closed_positions must be a boolean")
-                (ROOT / "data").mkdir(exist_ok=True)
-                settings_path.write_text(
-                    json.dumps({
+                atomic_write_json(
+                    settings_path,
+                    {
                         "profiles": profiles,
                         "auto_remove_closed_positions": remove_closed,
-                    }, ensure_ascii=False), encoding="utf-8"
+                    },
+                    ensure_ascii=False,
                 )
                 self._json({"profiles": profiles, "auto_remove_closed_positions": remove_closed})
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid settings payload"}, 400)
+            except OSError as exc:
+                self._json({"error": f"Unable to save settings: {exc}"}, 503)
             return
         if path == "/api/control":
             try:
@@ -509,17 +512,22 @@ class Handler(BaseHTTPRequestHandler):
                     "auto_sell": bool(payload.get("auto_sell", False)),
                     "config": payload.get("config") if isinstance(payload.get("config"), dict) else None,
                 }
-                (ROOT / "data").mkdir(exist_ok=True)
-                (ROOT / "data" / f"dashboard_control_{account}.json").write_text(
-                    json.dumps(control), encoding="utf-8"
+                atomic_write_json(
+                    ROOT / "data" / f"dashboard_control_{account}.json",
+                    control,
+                    ensure_ascii=False,
                 )
                 if control["symbol"]:
-                    (ROOT / "data" / f"dashboard_control_{account}_{control['symbol']}.json").write_text(
-                        json.dumps(control), encoding="utf-8"
+                    atomic_write_json(
+                        ROOT / "data" / f"dashboard_control_{account}_{control['symbol']}.json",
+                        control,
+                        ensure_ascii=False,
                     )
                 self._json(control)
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid control payload"}, 400)
+            except OSError as exc:
+                self._json({"error": f"Unable to save control: {exc}"}, 503)
             return
         if path == "/api/start":
             try:
