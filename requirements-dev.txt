@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Test and advisory quality tooling. Version locking is a separate Phase C2 gate.
+pytest>=9.1.1
+pytest-cov>=6.0.0
+ruff>=0.8.0
+mypy>=1.13.0

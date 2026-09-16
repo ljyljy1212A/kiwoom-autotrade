@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import tools.worker_watchdog as watchdog
+from src.core import process_inventory
 
 
 def raw(name, pid, parent_pid, command_line):
@@ -108,3 +109,66 @@ def test_unsupported_account_is_rejected_before_query(monkeypatch):
     monkeypatch.setattr(watchdog, "query_win32_processes", fail_query)
 
     assert watchdog.enumerate_worker_processes("unsupported_account", "KR") == []
+
+
+def test_posix_provider_maps_python_worker(monkeypatch):
+    files = {
+        (101, "stat"): "101 (python3) S 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 123",
+        (101, "cmdline"): "/usr/bin/python3\x00-m\x00src.main\x00--market\x00KR\x00",
+        (101, "comm"): "python3\n",
+    }
+    monkeypatch.setattr(process_inventory, "_list_posix_pids", lambda: [101])
+    monkeypatch.setattr(process_inventory, "_read_proc_text", lambda pid, name: files[(pid, name)])
+    monkeypatch.setattr(process_inventory, "_read_posix_uptime", lambda: "100.0 0.0\n")
+    monkeypatch.setattr(process_inventory, "_read_posix_clk_tck", lambda: 100)
+    monkeypatch.setattr(process_inventory.time, "time", lambda: 1_700_000_100.0)
+
+    result = process_inventory.query_posix_processes()
+
+    assert result[0].Name == "python3"
+    assert result[0].ParentProcessId == 100
+    assert result[0].CommandLine == "/usr/bin/python3 -m src.main --market KR"
+    assert result[0].CreationDate == "2023-11-14T22:13:20Z"
+
+
+def test_watchdog_excludes_non_python_processes(monkeypatch):
+    monkeypatch.setattr(
+        watchdog,
+        "query_win32_processes",
+        lambda: [
+            raw("bash", 201, 1, supervisor_command("kr_mock", "KR")),
+            raw("bash", 202, 201, worker_command("KR")),
+        ],
+    )
+
+    assert watchdog.enumerate_worker_processes("kr_mock", "KR") == []
+
+
+def test_posix_provider_continues_after_disappearing_entry(monkeypatch):
+    files = {
+        (301, "stat"): "301 (python3) S 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 123",
+        (301, "cmdline"): "/usr/bin/python3\x00-m\x00src.main\x00",
+        (301, "comm"): "python3\n",
+    }
+    monkeypatch.setattr(process_inventory, "_list_posix_pids", lambda: [300, 301])
+
+    def read_proc_text(pid, name):
+        if pid == 300:
+            raise OSError("process disappeared")
+        return files[(pid, name)]
+
+    monkeypatch.setattr(process_inventory, "_read_proc_text", read_proc_text)
+    monkeypatch.setattr(process_inventory, "_read_posix_clk_tck", lambda: None)
+
+    result = process_inventory.query_posix_processes()
+
+    assert [record.ProcessId for record in result] == [301]
+    assert result[0].CreationDate is None
+
+
+def test_provider_uses_posix_without_subprocess(monkeypatch):
+    monkeypatch.setattr(process_inventory.os, "name", "posix")
+    monkeypatch.setattr(process_inventory, "query_posix_processes", lambda: ["posix"])
+    monkeypatch.setattr(process_inventory.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+
+    assert process_inventory.query_win32_processes() == ["posix"]

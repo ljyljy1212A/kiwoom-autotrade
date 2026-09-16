@@ -23,13 +23,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
 
       - name: Report support scope
         run: echo "Ubuntu pytest is non-blocking; POSIX watchdog integration is not verified."
 
       - name: Run tests
-        run: python -m pytest
+        run: python -m pytest --basetemp=.pytest-tmp-ci-${{ github.run_id }}-ubuntu --cov=src --cov-branch --cov-report=term-missing
 
   windows-validation:
     name: Windows validation (pending merge gate)
@@ -47,7 +47,31 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: python -m pytest
+        run: python -m pytest --basetemp=.pytest-tmp-ci-${{ github.run_id }}-windows --cov=src --cov-branch --cov-report=term-missing
+
+  quality:
+    name: Quality advisory
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      KIWOOM_DATA_DIR: ${{ github.workspace }}/.runtime/data
+      KIWOOM_LOG_DIR: ${{ github.workspace }}/.runtime/logs
+      KIWOOM_BACKUP_BASE_DIR: ${{ github.workspace }}/.runtime/backups
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
+
+      - name: Ruff advisory check
+        run: python -m ruff check src tests
+
+      - name: Mypy POSIX provider advisory check
+        run: python -m mypy src/core/process_inventory.py

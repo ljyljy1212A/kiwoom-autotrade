@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
 from src.core.reconciliation import (
-    ManualTrancheAllocation,
+    ManualTrancheAllocation,  # noqa: F401
     NormalizedBalanceHolding,
     ReconciliationIncompleteReason,
     _ReconciliationCoordinator,
-    _all_balance_holdings,
+    _all_balance_holdings,  # noqa: F401
     _balance_holding,
     _holding_summary,
-    _kr_balance_recognized,
+    _kr_balance_recognized,  # noqa: F401
     _manual_tranche_allocation,
     _normalize_broker_balance,
     _number,
@@ -2068,7 +2068,6 @@ class AccountEngine:
         broker/confirmed-lot reconstruction merely because the symbol matches.
         """
         symbol = self._symbol_key(symbol)
-        lot_qty = sum(float(qty) for _, qty, _ in confirmed_lots)
         lot_cost = sum(float(qty) * float(price) for _, qty, price in confirmed_lots)
         manual_qty = max(0.0, float(manual_qty))
         lifecycle = self._symbol_lifecycles.get(symbol, {})
@@ -2194,11 +2193,8 @@ class AccountEngine:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if self.ctx.client.market == "US":
             await self._refresh_fx_rate()
+
         balance_path = self.data_dir / f"balance_{self.ctx.account_id}.json"
-        try:
-            previous_balance = json.loads(balance_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            previous_balance = {}
         balance_snapshot = {
             "account": self.ctx.account_id, "symbol": self.ctx.strategy.symbol,
             "qty": qty, "avgPrice": avg_price, "updatedAt": datetime.now().isoformat(),

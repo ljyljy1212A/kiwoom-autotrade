@@ -21,12 +21,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.core.broker_http import _connect_with_reuseaddr
 from src.core.broker_http import get_fixed_port_degraded_state, restore_fixed_port_degraded_state
 from src.core.process_lock import AccountOrderAuthority, ProcessLock
 from src.core.symbol_keys import canonical_symbol_key
-from src.core.runtime_paths import DATA_DIR, LOG_DIR, PROJECT_ROOT
-from src.core.account_manager import load_accounts, run_all
+from src.core.runtime_paths import DATA_DIR, LOG_DIR
+from src.core.account_manager import load_accounts
 from src.core.engine import AccountEngine, DispatchClearanceService
 from src.core.realtime_feed import PriceFeed
 from src.calendar_utils.market_calendar import MarketCalendar, _FALLBACK_HOURS
@@ -582,14 +581,20 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                         f"Skipping unsafe dashboard symbol for account={ctx.account_id}: {symbol!r}"
                     )
                     continue
+
                 control_path = DATA_DIR / f"dashboard_control_{ctx.account_id}_{symbol}.json"
                 if not control_path.exists():
-                    control_path.write_text(json.dumps({
-                        "symbol": symbol,
-                        "auto_buy": bool((config.get("auto_buy") or {}).get("enabled")),
-                        "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
-                        "config": config,
-                    }, ensure_ascii=False), encoding="utf-8")
+                    atomic_write_json(
+                        control_path,
+                        {
+                            "symbol": symbol,
+                            "auto_buy": bool((config.get("auto_buy") or {}).get("enabled")),
+                            "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
+                            "config": config,
+                        },
+                        ensure_ascii=False,
+                    )
+
                 if not registry.claim(ctx.account_id, ctx.client.market, symbol):
                     # The normal configuration scan sees an already-running
                     # symbol every second. Ownership is unchanged; avoid

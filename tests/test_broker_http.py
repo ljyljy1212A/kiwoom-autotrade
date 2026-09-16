@@ -22,7 +22,6 @@ from src.core.broker_http import (
     record_fixed_port_ongoing_status,
     _CloseCompletionState,
     _FixedPortAnyIOBackend,
-    _FIXED_PORT_CLOSE_WAIT_TIMEOUT_SEC,
     _LingerOnCloseByteStream,
     _connect_with_reuseaddr,
     _install_close_completion_hook,

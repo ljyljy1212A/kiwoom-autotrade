@@ -66,10 +66,13 @@ def test_sell_link_is_symbol_scoped_and_invalid_legacy_link_is_repaired(tmp_path
     store = TradeLedgerStore(str(tmp_path / "trades.db"), "account-a")
     foreign_buy = PendingOrder("foreign-buy", "OTHER", "BUY", 5, 100, "BUY", 2, {})
     local_buy = PendingOrder("local-buy", "LOCAL", "BUY", 5, 90, "BUY", 2, {})
-    store.add_pending(foreign_buy); store.record_fill(foreign_buy, 5, 100, "2026-08-14")
-    store.add_pending(local_buy); store.record_fill(local_buy, 5, 90, "2026-08-14")
+    store.add_pending(foreign_buy)
+    store.record_fill(foreign_buy, 5, 100, "2026-08-14")
+    store.add_pending(local_buy)
+    store.record_fill(local_buy, 5, 90, "2026-08-14")
     sell = PendingOrder("local-sell", "LOCAL", "SELL", 5, 95, "SELL", 2, {"sell_only_step": True})
-    store.add_pending(sell); store.record_fill(sell, 5, 95, "2026-08-14")
+    store.add_pending(sell)
+    store.record_fill(sell, 5, 95, "2026-08-14")
     row = next(row for row in store.ledger_rows("LOCAL") if row["type"] == "sell")
     assert row["buyId"] == "B-local-buy-5"
 
