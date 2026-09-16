@@ -760,7 +760,7 @@ class AccountEngine:
         async with _diagnostic_lock(gate.lock, "balance_gate.lock", self.ctx.logger):
             now = asyncio.get_running_loop().time()
             maximum_age = self.balance_min_interval_sec if max_age_sec is None else max_age_sec
-            if gate.raw_balance is not None and now - gate.received_at <= maximum_age:
+            if maximum_age > 0 and gate.raw_balance is not None and now - gate.received_at <= maximum_age:
                 return gate.raw_balance, gate.received_at
             raw_balance = await self.ctx.client.get_balance()
             gate.raw_balance = raw_balance
