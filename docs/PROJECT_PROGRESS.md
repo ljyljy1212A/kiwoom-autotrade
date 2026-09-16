@@ -493,3 +493,43 @@ publication succeeds and the final target identity is verified.
   `Kiwoom Heartbeat Alert` was Enabled and Ready with last result `0`.
 - This operational validation was limited to KR/US mock workers. No real
   account, credential, or order execution was accessed or performed.
+
+## 2026-09-16 — Zero-age balance cache reuse fix delivery
+
+- `src/core/engine.py` now treats a non-positive balance cache interval as
+  fetch-always, preventing a same-tick stale zero-balance snapshot from being
+  reused during lifecycle re-entry.
+- Added a deterministic regression test in
+  `tests/test_manual_tranche_lifecycle.py`.
+- Focused regression test passed: `1 passed`.
+- Full lifecycle test file passed: `12 passed`.
+- Full local pytest passed: `459 passed, 4 skipped, 1 xfailed`,
+  with `13 warnings` and `13 subtests`.
+- Commit `4ef695cc60df069d0d49e6bc926fccf5072c6269`
+  (`Fix zero-age balance cache reuse`) was pushed to the feature branch.
+- GitHub Actions run `35041876183` passed for push validation:
+  Windows `444 passed, 5 skipped, 1 xfailed`; Ubuntu
+  `431 passed, 18 skipped, 1 xfailed`.
+- Pull request #12 passed its PR checks and was merged into `master` with merge
+  commit `400cce895d68c6a848eb58200716aefb65fc6b20`.
+- Local `master` and `origin/master` were synchronized to the same merge
+  revision without changing the dirty worktree.
+- No real account, credential, order execution, runtime, Scheduler, or
+  Canonical publication was performed for this delivery.
+
+## 2026-09-16 — Dashboard control persistence delivery
+
+- Dashboard settings and control persistence now use the shared atomic JSON
+  write boundary and return a fail-closed `503` response on persistence
+  failure.
+- Added focused regression coverage for control persistence, path traversal
+  rejection, and pause behavior in `tests/test_dashboard_profile_steps_save.py`.
+- Focused local pytest passed: `8 passed`.
+- Commit `0e45cede5a695cf643ba35c9c887991fbe57e7c8`
+  (`Harden dashboard control persistence`) was pushed to the feature branch.
+- Pull request #14 passed all 6 checks and was merged into `master` with merge
+  commit `040d311218136faae7bceadfb605a7faaeb25b38`.
+- Local `master` and `origin/master` were synchronized to the same merge
+  revision; the original dirty feature checkout was preserved.
+- Canonical publication and operational validation were not performed for
+  this delivery.
