@@ -476,3 +476,20 @@ publication succeeds and the final target identity is verified.
 - The existing Canonical `CURRENT_STATE.md` was read-only hash-verified at
   `1D0F9DCB2A79A9188EE95BEAF1112629617578E27E744A278F891154E2151143`.
   No Canonical Apply was performed in this milestone.
+
+## 2026-09-16 — Canonical publication and fresh mock-runtime verification
+
+- Pull request #10 recorded the worker-identity and mutex delivery milestones;
+  it was merged into `master` with merge commit
+  `940a606e78da4ff12b8c1e908d01f8f7b05d0826` after GitHub Actions runs
+  `35037289765` and `35037501996` completed successfully.
+- The approved append candidate was published to
+  `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` through the fixed-target
+  publisher. Strict UTF-8 readback verified `58,270` bytes and SHA-256
+  `372E455CFFA6FB06DB933E6DE0A5201138FD861A9E4A66271AF5FADBF67DEAF2`;
+  operation lock, backup, and temporary artifacts were absent afterward.
+- Fresh read-only validation confirmed KR mock PID `5708` and US mock PID
+  `18352` as `RUNNING`, mutex liveness `confirmed`, and `expected-idle`.
+  `Kiwoom Heartbeat Alert` was Enabled and Ready with last result `0`.
+- This operational validation was limited to KR/US mock workers. No real
+  account, credential, or order execution was accessed or performed.
