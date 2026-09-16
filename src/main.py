@@ -582,14 +582,20 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                         f"Skipping unsafe dashboard symbol for account={ctx.account_id}: {symbol!r}"
                     )
                     continue
+
                 control_path = DATA_DIR / f"dashboard_control_{ctx.account_id}_{symbol}.json"
                 if not control_path.exists():
-                    control_path.write_text(json.dumps({
-                        "symbol": symbol,
-                        "auto_buy": bool((config.get("auto_buy") or {}).get("enabled")),
-                        "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
-                        "config": config,
-                    }, ensure_ascii=False), encoding="utf-8")
+                    atomic_write_json(
+                        control_path,
+                        {
+                            "symbol": symbol,
+                            "auto_buy": bool((config.get("auto_buy") or {}).get("enabled")),
+                            "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
+                            "config": config,
+                        },
+                        ensure_ascii=False,
+                    )
+
                 if not registry.claim(ctx.account_id, ctx.client.market, symbol):
                     # The normal configuration scan sees an already-running
                     # symbol every second. Ownership is unchanged; avoid
