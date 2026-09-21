@@ -59,7 +59,6 @@ pytest_tmp/
 # Routine operational files intentionally retained outside normal source tracking
 /.env.example
 /dashboard/control.html
-/dashboard/index.html
 /dashboard/start_us_mock_worker.sh
 /diagnostics/port10000_capture_20260819_131453.log
 /diagnostics/port10000_capture_20260819_141602.log
