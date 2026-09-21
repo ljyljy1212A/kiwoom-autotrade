@@ -599,3 +599,27 @@ publication succeeds and the final target identity is verified.
   synchronized; no post-merge local full pytest, Canonical publication,
   mock runtime validation, Scheduler/process action, credential use, or
   order execution was performed.
+
+## 2026-09-22 — Snapshot milestone post-merge validation successor
+
+- PR #20 was merged into `master` at
+  `568273aaad8c149f592f452b9b74a557e044d18c`; Quality, Ubuntu
+  compatibility, and Windows validation CI checks completed successfully.
+- A clean isolated worktree at that merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings in 57.20s`. The prior
+  non-elevated run's `WinError 5` was a sandbox temp-directory boundary and
+  is not recorded as a product regression.
+- Canonical publication completed through the fixed append candidate under
+  operation ID `7f4b2e1a-9c65-4d0f-8e21-6ab3c5d7f901`. Canonical readback
+  matched candidate SHA-256
+  `4B0624FC16090D3FFB1F7051CFFB58D0ACDB3598CE6D66A71ADCBDACE030240A`.
+- Mock-only operational validation initialized explicit disabled/unbound
+  baselines for `kr_mock` and `us_mock`; confirmed stale-instance `409`,
+  an all-disabled `us_mock` control update with `200` and snapshot readback,
+  and lock-induced persistence failure `503` with an unchanged snapshot.
+  The observed `us_mock` order-attempt database hash did not change across
+  the controlled update.
+- Validation used temporary localhost dashboard processes only; they were
+  stopped afterward. Existing mock workers remained running. No real-account
+  access, credential activity, order execution, Scheduler change, or worker
+  restart was performed.
