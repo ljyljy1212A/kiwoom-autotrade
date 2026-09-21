@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
+from src.core import dashboard_control_snapshot as control_snapshot
 from src.core.reconciliation import (
     ManualTrancheAllocation,  # noqa: F401
     NormalizedBalanceHolding,
@@ -503,8 +504,10 @@ async def _diagnostic_lock(lock: asyncio.Lock, lock_name: str, logger):
 class AccountEngine:
     def __init__(self, ctx, telegram, report_store, price_feed, poll_interval_sec: int = 5,
                  control_symbol: str | None = None, balance_only: bool = False,
-                 dispatch_clearance_service: DispatchClearanceService | None = None):
+                 dispatch_clearance_service: DispatchClearanceService | None = None,
+                 control_authority: control_snapshot.ControlAuthority | None = None):
         self.ctx, self.telegram = ctx, telegram
+        self._control_authority = control_authority
         self.report_store, self.price_feed, self.poll_interval_sec = report_store, price_feed, poll_interval_sec
         self.data_dir = DATA_DIR
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1009,6 +1012,8 @@ class AccountEngine:
         return False
 
     def _dashboard_control_path(self) -> Path:
+        if self.ctx.account_id in control_snapshot.MOCK_ACCOUNTS:
+            return control_snapshot.path_for(self.data_dir, self.ctx.account_id)
         suffix = f"_{self._control_symbol}" if self._control_symbol else ""
         return self.data_dir / f"dashboard_control_{self.ctx.account_id}{suffix}.json"
 
@@ -1107,13 +1112,15 @@ class AccountEngine:
     async def _refresh_dashboard_controls(self) -> None:
         """Read the local dashboard's explicit per-side execution switches."""
         path = self._dashboard_control_path()
-        if not path.exists():
-            self._dashboard_auto_buy = self._dashboard_auto_sell = False
-            self._dashboard_profile_allowed = False
-            return
         try:
-            control = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            if self.ctx.account_id in control_snapshot.MOCK_ACCOUNTS:
+                control = control_snapshot.read_control(
+                    self.data_dir, self.ctx.account_id, self._control_symbol or None,
+                )
+                control_snapshot.require_authority(self._control_authority, self.ctx.account_id, control)
+            else:
+                control = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, control_snapshot.InvalidSnapshot):
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
             return
@@ -1249,6 +1256,10 @@ class AccountEngine:
             self.ctx.logger.info(f"Dashboard strategy activated for existing holding: {symbol}")
         self._dashboard_auto_buy = bool(control.get("auto_buy")) and saved_buy
         self._dashboard_auto_sell = bool(control.get("auto_sell")) and saved_sell
+        if self.ctx.account_id in control_snapshot.MOCK_ACCOUNTS and not (
+            self._dashboard_auto_buy or self._dashboard_auto_sell
+        ):
+            self._dashboard_profile_allowed = False
 
     def _refresh_runtime_control(self) -> None:
         """Refresh the account-wide auto-trading switch from the control file."""
@@ -1365,6 +1376,21 @@ class AccountEngine:
         if not self._dashboard_profile_allowed:
             self.ctx.logger.warning(f"Order blocked: {intent.symbol} is not allow-listed in Trade Settings")
             return
+        if self.ctx.account_id in control_snapshot.MOCK_ACCOUNTS:
+            try:
+                latest_control = control_snapshot.read_control(
+                    self.data_dir, self.ctx.account_id, self._symbol_key(intent.symbol),
+                )
+                control_snapshot.require_authority(self._control_authority, self.ctx.account_id, latest_control)
+            except (OSError, control_snapshot.InvalidSnapshot):
+                self._dashboard_auto_buy = self._dashboard_auto_sell = False
+                self._dashboard_profile_allowed = False
+                self.ctx.logger.warning(f"Order blocked: current snapshot authority unavailable for {intent.symbol}")
+                return
+            key = "auto_buy" if intent.action == Action.BUY else "auto_sell"
+            if not latest_control[key]:
+                self.ctx.logger.warning(f"Order blocked: {key} disabled for {intent.symbol}")
+                return
         # US mock accounts need a second, deliberate opt-in.  This prevents a
         # newly-added US profile from becoming order-capable merely because the
         # global dashboard controls were previously enabled for Korean trading.
@@ -2596,9 +2622,21 @@ class AccountEngine:
         if self._symbol_key_manual_review(symbol):
             return
         account = self.ctx.account_id
+        retirement_authority = None
         control_paths = [
             self.data_dir / f"dashboard_control_{account}_{symbol}.json",
         ]
+        if account in control_snapshot.MOCK_ACCOUNTS:
+            try:
+                retirement_authority = control_snapshot.validate_authority(self._control_authority, account)
+                retirement_authority.retirement_pending.add(symbol)
+                control_snapshot.remove(self.data_dir, account, symbol)
+            except (OSError, control_snapshot.InvalidSnapshot) as exc:
+                self._dashboard_auto_buy = self._dashboard_auto_sell = False
+                self._dashboard_profile_allowed = False
+                self.ctx.logger.warning(f"Could not retire snapshot control for {symbol}: {exc}")
+                return
+            control_paths = []
         for path in control_paths:
             try:
                 path.unlink()
@@ -2634,6 +2672,8 @@ class AccountEngine:
         self.ctx.logger.info(
             f"Fully closed symbol state cleaned: {symbol}; pending strategy orders retired={closed_orders}"
         )
+        if retirement_authority is not None:
+            retirement_authority.retirement_pending.discard(symbol)
 
     async def _refresh_fx_rate(self) -> None:
         """Refresh the dashboard-only USD/KRW reference rate at a safe cadence."""

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json
+from src.core import dashboard_control_snapshot as control_snapshot
 
 import asyncio
 import argparse
@@ -263,6 +264,9 @@ async def _watch_for_supervisor_stop(identity: WorkerIdentity, interval_sec: flo
 
 
 def _apply_worker_identity(ctx, identity: WorkerIdentity, symbol: str = "-"):
+    if ctx.account_id in control_snapshot.MOCK_ACCOUNTS:
+        authority = control_snapshot.ControlAuthority(ctx.account_id, identity.instance_id)
+        ctx.dashboard_control_authority = control_snapshot.validate_authority(authority, ctx.account_id)
     logger = ctx.logger.bind(worker_identity=identity.log_value, symbol=symbol)
     ctx.logger = logger
     ctx.client.logger = logger
@@ -321,7 +325,8 @@ async def make_price_feed(ctx):
 
 async def build_engine(ctx, telegram: TelegramController) -> AccountEngine:
     price_feed = await make_price_feed(ctx)
-    engine = AccountEngine(ctx, telegram, None, price_feed)
+    engine = AccountEngine(ctx, telegram, None, price_feed,
+                           control_authority=getattr(ctx, "dashboard_control_authority", None))
     return engine
 
 
@@ -338,7 +343,8 @@ async def run_account_balance_monitor(
     balance gate with symbol engines, so enabled profiles do not multiply REST
     balance requests.
     """
-    monitor = AccountEngine(ctx, telegram, None, None, balance_only=True)
+    monitor = AccountEngine(ctx, telegram, None, None, balance_only=True,
+                            control_authority=getattr(ctx, "dashboard_control_authority", None))
     while True:
         ctx.logger.debug(
             f"Account balance monitor iteration starting (interval={monitor.poll_interval_sec:g}s)"
@@ -521,6 +527,7 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                              position=PositionState(symbol=symbol), logger=ctx.logger.bind(symbol=symbol))
         engine = AccountEngine(symbol_ctx, telegram, None,
                                 price_feed, control_symbol=symbol,
+                                control_authority=getattr(ctx, "dashboard_control_authority", None),
                                 dispatch_clearance_service=dispatch_clearance_service)
         await engine.run()
 
@@ -583,7 +590,9 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                     continue
 
                 control_path = DATA_DIR / f"dashboard_control_{ctx.account_id}_{symbol}.json"
-                if not control_path.exists():
+                # Snapshot accounts require a separately validated baseline.
+                # Starting a worker must not mint dashboard execution authority.
+                if ctx.account_id not in {"kr_mock", "us_mock"} and not control_path.exists():
                     atomic_write_json(
                         control_path,
                         {

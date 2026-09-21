@@ -13,7 +13,10 @@ import pytest
 
 from dashboard import dashboard_server
 from src.core.engine import AccountEngine
+from src.core import dashboard_control_snapshot as control_snapshot
 from src.strategy.base import Action, OrderIntent
+
+SESSION = "1" * 32
 
 
 def _profile(*, enabled: bool, buy_steps: list[dict]) -> dict:
@@ -52,6 +55,8 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         return responses
 
     def _post_control(self, root: Path, payload: dict) -> list[tuple[dict, int]]:
+        payload = dict(payload)
+        payload.setdefault("expected_instance_id", SESSION)
         body = json.dumps(payload).encode()
         handler = object.__new__(dashboard_server.Handler)
         handler.headers = {"Content-Length": str(len(body))}
@@ -79,6 +84,7 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
             logger=Mock(),
         )
         engine.data_dir = data_dir
+        engine._control_authority = control_snapshot.ControlAuthority("us_mock", SESSION)
         engine._trading_paused = bool(pause_reason)
         engine._pause_reason = pause_reason
         engine._buying_paused = False
@@ -139,23 +145,26 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            responses = self._post_control(root, payload)
-            persisted = json.loads(
-                (root / "data" / "dashboard_control_us_mock.json").read_text(encoding="utf-8")
-            )
-            symbol_persisted = json.loads(
-                (root / "data" / "dashboard_control_us_mock_SOXL.json").read_text(encoding="utf-8")
-            )
+            data = root / "data"
+            data.mkdir()
+            control_snapshot.initialize(data, "us_mock", {}, None)
+            with patch.object(dashboard_server, "_control_worker_instance", return_value=SESSION):
+                responses = self._post_control(root, payload)
+            persisted = control_snapshot.load(data, "us_mock")
+            self.assertFalse((data / "dashboard_control_us_mock.json").exists())
+            self.assertFalse((data / "dashboard_control_us_mock_SOXL.json").exists())
 
         expected = {
             "symbol": "SOXL",
+            "instance_id": SESSION,
             "auto_buy": True,
             "auto_sell": False,
             "config": payload["config"],
         }
         self.assertEqual(responses, [(expected, 200)])
-        self.assertEqual(persisted, expected)
-        self.assertEqual(symbol_persisted, expected)
+        self.assertEqual(persisted["controls"], {"SOXL": expected})
+        self.assertEqual(persisted["selected_symbol"], "SOXL")
+        self.assertEqual(persisted["revision"], 1)
 
     def test_control_post_rejects_path_traversal_symbol_without_writing(self):
         payload = {
@@ -191,7 +200,9 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._post_settings(root, {"profiles": [profile]})
-            self._post_control(root, control)
+            control_snapshot.initialize(root / "data", "us_mock", {}, None)
+            with patch.object(dashboard_server, "_control_worker_instance", return_value=SESSION):
+                self.assertEqual(self._post_control(root, control)[0][1], 200)
 
             engine = self._dashboard_engine(root / "data", pause_reason="operator_pause")
             asyncio.run(engine._refresh_dashboard_controls())
@@ -227,12 +238,11 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
             (data / "dashboard_settings_us_mock.json").write_text(
                 json.dumps({"profiles": [profile]}), encoding="utf-8"
             )
-            (data / "dashboard_control_us_mock.json").write_text(
-                json.dumps({
-                    "symbol": "SOXL", "auto_buy": True, "auto_sell": True,
-                    "config": profile["config"],
-                }), encoding="utf-8"
-            )
+            control_snapshot.initialize(data, "us_mock", {}, None)
+            control_snapshot.update(data, "us_mock", {
+                "symbol": "SOXL", "auto_buy": True, "auto_sell": True,
+                "instance_id": SESSION, "config": profile["config"],
+            })
             engine = self._dashboard_engine(
                 data, pause_reason="broker_reconciliation_unavailable"
             )
@@ -255,6 +265,44 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         self.assertTrue(engine._buying_paused)
         self.assertTrue(engine._tranche_sell_paused)
         self.assertEqual(engine._pause_reason, "broker_reconciliation_unavailable")
+
+    def test_missing_snapshot_does_not_import_legacy_authority(self):
+        payload = {"symbol": "SOXL", "auto_buy": True, "auto_sell": False,
+                   "config": _profile(enabled=False, buy_steps=[])["config"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            legacy = data / "dashboard_control_us_mock.json"
+            legacy.write_bytes(b'{"auto_buy":true}\n')
+            with patch.object(dashboard_server, "_control_worker_instance", return_value=SESSION):
+                responses = self._post_control(root, payload)
+            self.assertEqual(responses[0][1], 503)
+            self.assertEqual(legacy.read_bytes(), b'{"auto_buy":true}\n')
+            self.assertFalse(control_snapshot.path_for(data, "us_mock").exists())
+
+    def test_stale_instance_and_atomic_write_failure_preserve_snapshot(self):
+        payload = {"symbol": "SOXL", "auto_buy": True, "auto_sell": False,
+                   "config": _profile(enabled=False, buy_steps=[])["config"]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            control_snapshot.initialize(data, "us_mock", {}, None)
+            path = control_snapshot.path_for(data, "us_mock")
+            before = path.read_bytes()
+            with patch.object(dashboard_server, "_control_worker_instance", return_value=SESSION):
+                stale = dict(payload, expected_instance_id="2" * 32)
+                self.assertEqual(self._post_control(root, stale)[0][1], 409)
+                self.assertEqual(path.read_bytes(), before)
+                with patch.object(control_snapshot, "atomic_write_json", side_effect=PermissionError("test")):
+                    self.assertEqual(self._post_control(root, payload)[0][1], 503)
+            self.assertEqual(path.read_bytes(), before)
+            engine = self._dashboard_engine(data)
+            asyncio.run(engine._refresh_dashboard_controls())
+            self.assertFalse(engine._dashboard_auto_buy)
+            self.assertFalse(engine._dashboard_auto_sell)
+            self.assertFalse(engine._dashboard_profile_allowed)
 
     def test_settings_post_does_not_touch_control_files(self):
         saved_profile = _profile(

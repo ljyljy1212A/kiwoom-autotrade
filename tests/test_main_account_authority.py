@@ -82,6 +82,9 @@ class MainAccountAuthorityTests(unittest.IsolatedAsyncioTestCase):
                 def bind_task(self, *args):
                     pass
 
+                def release_from_task(self, *args):
+                    pass
+
                 def running_symbols(self, account_id):
                     return ()
 
@@ -101,7 +104,8 @@ class MainAccountAuthorityTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertNotIn(traversal_symbol.upper(), claimed)
             self.assertIn(valid_symbol, claimed)
-            self.assertTrue((data_dir / "dashboard_control_us_mock_SOXL.json").exists())
+            self.assertFalse((data_dir / "dashboard_control_us_mock_SOXL.json").exists())
+            self.assertFalse((data_dir / "dashboard_control_snapshot_us_mock.json").exists())
             self.assertFalse(out_of_bounds.exists())
             logger.warning.assert_called_once()
             self.assertIn(repr(traversal_symbol.upper()), logger.warning.call_args.args[0])

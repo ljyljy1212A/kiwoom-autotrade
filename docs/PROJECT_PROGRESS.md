@@ -533,3 +533,25 @@ publication succeeds and the final target identity is verified.
   revision; the original dirty feature checkout was preserved.
 - Canonical publication and operational validation were not performed for
   this delivery.
+
+## 2026-09-17 — Mock dashboard control snapshot local implementation
+
+- Applied the reviewed mock-only per-account control snapshot candidate to
+  `dashboard/dashboard_server.py`, `src/main.py`, `src/core/engine.py`, and
+  the new `src/core/dashboard_control_snapshot.py`.
+- The local dashboard UI now confirms the current worker instance and sends
+  `expected_instance_id` with account-scoped control requests. Its existing
+  bytes outside the edited function block were preserved.
+- Mock startup does not import or create legacy control authority. Snapshot
+  initialization requires an explicitly disabled, unbound baseline; worker
+  instance and side permissions are checked at the final dispatch boundary.
+- Updated the two production regression test files for the snapshot contract,
+  including missing-baseline rejection, stale-instance rejection, persistence
+  failure preservation, and reconciliation pause behavior.
+- Focused production pytest: `11 passed, 1 subtests passed`; exit code `0`.
+  Raw evidence: `tools/production-snapshot-targeted-pytest-evidence-20260917-v3`.
+- Scratch UI contract test: `UI_CONTROL_CONTRACT_OK`; exit code `0`.
+  Raw evidence: `tools/snapshot-ui-rebase-node-evidence-20260917-v5`.
+- Local implementation and focused validation are complete. CI, Git delivery,
+  runtime baseline initialization, operational validation, and Canonical
+  publication have not been performed for this candidate.

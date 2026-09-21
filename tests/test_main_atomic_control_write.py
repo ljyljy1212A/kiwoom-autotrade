@@ -13,8 +13,8 @@ class _StopLoop(Exception):
 
 
 class MainAtomicControlWriteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_symbol_engines_writes_dashboard_control_atomically(self):
-        with self.subTest("atomic dashboard control publication"):
+    async def test_mock_startup_does_not_create_or_import_legacy_controls(self):
+        with self.subTest("mock startup grants no dashboard authority"):
             await self._run_atomic_control_test()
 
     async def _run_atomic_control_test(self):
@@ -38,6 +38,8 @@ class MainAtomicControlWriteTests(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8",
             )
             control_path = data_dir / f"dashboard_control_{account_id}_{symbol}.json"
+            legacy_bytes = b'{"legacy":"preserve"}\n'
+            control_path.write_bytes(legacy_bytes)
 
             ctx = SimpleNamespace(
                 account_id=account_id,
@@ -61,13 +63,6 @@ class MainAtomicControlWriteTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(_StopLoop):
                     await main_module.run_symbol_engines(ctx, Mock(), registry)
 
-            atomic_write_json.assert_called_once_with(
-                control_path,
-                {
-                    "symbol": symbol,
-                    "auto_buy": True,
-                    "auto_sell": False,
-                    "config": config,
-                },
-                ensure_ascii=False,
-            )
+            atomic_write_json.assert_not_called()
+            self.assertEqual(control_path.read_bytes(), legacy_bytes)
+            self.assertFalse((data_dir / f"dashboard_control_snapshot_{account_id}.json").exists())

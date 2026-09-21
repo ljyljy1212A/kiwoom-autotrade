@@ -12,6 +12,7 @@ from src.core.broker_http import (
     enter_fixed_port_degraded_state,
     get_fixed_port_degraded_state,
 )
+from src.core import dashboard_control_snapshot as control_snapshot
 from src.core.control_state import (
     FIXED_PORT_DEGRADED_PAUSE_REASON,
     read_control_state,
@@ -27,6 +28,9 @@ from src.core.engine import (
 from src.core.reconciliation import _ReconciliationCoordinator
 from src.strategy.infinite_grid import InfiniteGridStrategy
 from src.utils.exceptions import KiwoomAPIError, RetryableError
+
+
+SESSION = "1" * 32
 
 
 def _engine(account, symbol, data_dir, reason=""):
@@ -103,8 +107,10 @@ def _dashboard_config(symbol="033320"):
 def _dashboard_engine(account, symbol, data_dir, reason=""):
     engine = _engine(account, symbol, data_dir, reason=reason)
     config = _dashboard_config(symbol)
+    config["mode"] = "mock"
     engine.ctx.client = SimpleNamespace(market="KR")
     engine.ctx.strategy = InfiniteGridStrategy(config)
+    engine._control_authority = control_snapshot.ControlAuthority(account, SESSION)
     engine.ctx.position = SimpleNamespace()
     engine._control_symbol = None
     engine._closed_symbols_blocked = set()
@@ -122,9 +128,35 @@ def _dashboard_engine(account, symbol, data_dir, reason=""):
     engine._begin_manual_lifecycle_activation = Mock()
     engine._restore_from_ledger = Mock()
     settings = Path(data_dir) / f"dashboard_settings_{account}.json"
-    control = Path(data_dir) / f"dashboard_control_{account}.json"
-    settings.write_text(json.dumps({"profiles": [{"enabled": True, "config": config}]}), encoding="utf-8")
-    control.write_text(json.dumps({"symbol": symbol, "config": config, "auto_buy": True, "auto_sell": True}), encoding="utf-8")
+    profiles = []
+    if settings.exists():
+        try:
+            existing = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        if isinstance(existing, dict) and isinstance(existing.get("profiles"), list):
+            profiles = [
+                profile for profile in existing["profiles"]
+                if not (
+                    isinstance(profile, dict)
+                    and isinstance(profile.get("config"), dict)
+                    and profile["config"].get("symbol") == symbol
+                )
+            ]
+    profiles.append({"enabled": True, "config": config})
+    settings.write_text(json.dumps({"profiles": profiles}), encoding="utf-8")
+    engine._control_symbol = symbol
+    snapshot_path = control_snapshot.path_for(data_dir, account)
+    if not snapshot_path.exists():
+        control_snapshot.initialize(data_dir, account, {}, None)
+    control_snapshot.update(data_dir, account, {
+        "symbol": symbol,
+        "instance_id": SESSION,
+        "auto_buy": True,
+        "auto_sell": True,
+        "config": config,
+    })
+    assert not (Path(data_dir) / f"dashboard_control_{account}.json").exists()
     return engine
 
 
