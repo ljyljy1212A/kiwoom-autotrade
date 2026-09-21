@@ -578,3 +578,24 @@ publication succeeds and the final target identity is verified.
 - Local implementation and focused validation are complete. CI, Git delivery,
   runtime baseline initialization, operational validation, and Canonical
   publication have not been performed for this candidate.
+## 2026-09-22 — Snapshot/UI/LF delivery successor record
+
+- PR #17 snapshot-control delivery was merged into `master` at
+  `70cf9a6be61c10502bbbcbdddc63821f5fa7871a`; its post-resolution CI checks
+  passed Quality, Ubuntu compatibility, and Windows validation.
+- PR #18 added `dashboard/index.html` to Git tracking and was merged at
+  `c4106eec472342950730f954050d19485e324db7`; focused mock UI/control
+  validation reported `15 passed, 1 subtests passed`.
+- PR #19 added the narrow LF checkout policy
+  `dashboard/index.html text eol=lf` and was merged at
+  `8981ab2b0ca21e99ce192975dc1a655e528b4a3b`; its Quality, Ubuntu
+  compatibility, and Windows validation CI checks passed.
+- A new Windows fresh clone of current `master` with `core.autocrlf=true`
+  confirmed `dashboard/index.html` is tracked, has `eol=lf`, contains
+  `LF=2214`, `CRLF=0`, `BARE_CR=0`, and has no UTF-8 BOM. Clone HEAD and
+  `origin/master` were both `8981ab2b0ca21e99ce192975dc1a655e528b4a3b`.
+- These facts establish remote/Git and fresh-clone checkout evidence only.
+  The original dirty Windows checkout and local `master` were not
+  synchronized; no post-merge local full pytest, Canonical publication,
+  mock runtime validation, Scheduler/process action, credential use, or
+  order execution was performed.
