@@ -1,4 +1,5 @@
 /src/main.py text eol=lf
 /src/core/kiwoom_client.py text eol=lf
 *.py text eol=lf
+dashboard/index.html text eol=lf
 docs/PROJECT_PROGRESS.md text eol=lf
