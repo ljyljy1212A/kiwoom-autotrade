@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
+from src.core import dashboard_control_snapshot as control_snapshot
 from src.core.runtime_paths import DATA_DIR
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -302,6 +303,31 @@ def _validate_market_config(account_id: str, config: object) -> None:
         raise ValueError(f"Profile market {actual or 'missing'} does not match {expected} account")
 
 
+def _control_worker_instance(account: str) -> str:
+    """Use supervisor corroboration; a JSON status observation alone is insufficient."""
+    market = control_snapshot.MOCK_ACCOUNTS[account]
+    entry = next((item for item in _account_catalog() if item["id"] == account), {})
+    if entry.get("market") != market or entry.get("mode") != "mock":
+        raise control_snapshot.InvalidSnapshot("Mock account eligibility unavailable")
+    code, status = _supervisor("status", account, market)
+    if (code != 0 or not isinstance(status, dict) or status.get("account") != account
+            or status.get("market") != market or status.get("running") is not True
+            or status.get("liveness") != "confirmed" or status.get("state") != "RUNNING"
+            or not control_snapshot.valid_instance(status.get("instanceId"))
+            or type(status.get("pid")) is not int or status["pid"] <= 0):
+        raise control_snapshot.InvalidSnapshot("Worker identity unresolved")
+    try:
+        heartbeat = datetime.fromisoformat(status["processHeartbeatAt"].replace("Z", "+00:00"))
+        if heartbeat.tzinfo is None:
+            raise ValueError("Unqualified heartbeat")
+        age = (datetime.now(timezone.utc) - heartbeat).total_seconds()
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise control_snapshot.InvalidSnapshot("Worker heartbeat invalid") from exc
+    if not 0 <= age <= 15:
+        raise control_snapshot.InvalidSnapshot("Worker heartbeat stale/future")
+    return status["instanceId"]
+
+
 class Handler(BaseHTTPRequestHandler):
     def _path_and_query(self) -> tuple[str, dict[str, list[str]]]:
         parsed = urlparse(self.path)
@@ -502,31 +528,32 @@ class Handler(BaseHTTPRequestHandler):
                 if self._reject_real_account(account):
                     return
                 _validate_market_config(account, payload.get("config"))
+                requested_account = (query.get("account") or [account])[0]
+                if requested_account != account or account not in control_snapshot.MOCK_ACCOUNTS:
+                    raise ValueError("Unsupported control account")
                 symbol = str(payload.get("symbol", "")).upper()
                 if not _CONTROL_SYMBOL_RE.fullmatch(symbol):
                     self._json({"error": "Invalid symbol"}, 400)
                     return
+                expected_instance = payload.get("expected_instance_id")
+                if not control_snapshot.valid_instance(expected_instance):
+                    raise ValueError("Expected worker instance required")
+                current_instance = _control_worker_instance(account)
+                if expected_instance != current_instance:
+                    self._json({"error": "Worker instance changed; confirm control again"}, 409)
+                    return
                 control = {
                     "symbol": symbol,
-                    "auto_buy": bool(payload.get("auto_buy", False)),
-                    "auto_sell": bool(payload.get("auto_sell", False)),
+                    "instance_id": current_instance,
+                    "auto_buy": payload.get("auto_buy", False),
+                    "auto_sell": payload.get("auto_sell", False),
                     "config": payload.get("config") if isinstance(payload.get("config"), dict) else None,
                 }
-                atomic_write_json(
-                    ROOT / "data" / f"dashboard_control_{account}.json",
-                    control,
-                    ensure_ascii=False,
-                )
-                if control["symbol"]:
-                    atomic_write_json(
-                        ROOT / "data" / f"dashboard_control_{account}_{control['symbol']}.json",
-                        control,
-                        ensure_ascii=False,
-                    )
+                control_snapshot.update(ROOT / "data", account, control)
                 self._json(control)
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid control payload"}, 400)
-            except OSError as exc:
+            except (OSError, control_snapshot.InvalidSnapshot) as exc:
                 self._json({"error": f"Unable to save control: {exc}"}, 503)
             return
         if path == "/api/start":

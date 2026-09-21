@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from src.core.broker_http import clear_fixed_port_degraded_state, enter_fixed_port_degraded_state, get_fixed_port_degraded_state
+from src.core import dashboard_control_snapshot as control_snapshot
 from src.core.engine import (
     AccountEngine, DispatchClearanceService, NormalizedBalanceHolding,
     ReconciliationClearanceSnapshot,
@@ -14,6 +15,9 @@ from src.data.trade_ledger import TradeLedgerStore
 from src.utils.exceptions import OrderDispatchBlockedError
 from src.strategy.base import Action, OrderIntent
 from tests.support.telegram_double import make_telegram_double
+
+
+SESSION = "1" * 32
 
 
 def _snapshot(*, clear):
@@ -42,10 +46,19 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine._last_auto_buy_price = {}
     engine._dispatch_clearance_enabled = enabled
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=service)
+    engine._control_authority = control_snapshot.ControlAuthority("us_mock", SESSION)
     engine.telegram = make_telegram_double()
     engine.ledger = SimpleNamespace(add_pending=Mock())
     engine.sync_broker_state = AsyncMock()
     engine._build_reconciliation_clearance_snapshot = AsyncMock(return_value=snapshot)
+    control_snapshot.initialize(data_dir, "us_mock", {}, None)
+    control_snapshot.update(data_dir, "us_mock", {
+        "symbol": "SOXL",
+        "instance_id": SESSION,
+        "auto_buy": True,
+        "auto_sell": True,
+        "config": {"symbol": "SOXL", "market": "US", "mode": "mock"},
+    })
     return engine
 
 
