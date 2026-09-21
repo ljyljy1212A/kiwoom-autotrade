@@ -3,3 +3,4 @@
 *.py text eol=lf
 dashboard/index.html text eol=lf
 docs/PROJECT_PROGRESS.md text eol=lf
+dashboard/index.html text eol=lf
