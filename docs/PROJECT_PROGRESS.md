@@ -623,3 +623,18 @@ publication succeeds and the final target identity is verified.
   stopped afterward. Existing mock workers remained running. No real-account
   access, credential activity, order execution, Scheduler change, or worker
   restart was performed.
+
+## 2026-09-22 — PR #21 merge, checkout synchronization, and regression verification
+
+- PR #21 was merged into `master` at
+  `922c0430c448eb5c82a9e85e26ff1b83cf8ebc48`; its Quality, Ubuntu
+  compatibility, and Windows validation checks passed.
+- The original dirty checkout was synchronized to its remote feature branch at
+  `135bd0ae0e55d6dff651fd6e8763c2c10678c41e` with local/upstream
+  ahead-behind `0/0`. Existing tracked dirty and untracked files were
+  preserved; no cleanup or normalization was performed.
+- A clean synchronized clone completed the full Windows pytest suite with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings in 63.14s`.
+- The stale empty cherry-pick metadata was cleared without changing the
+  existing dirty file set. No runtime, Scheduler, credential, real-account,
+  or order activity was performed.
