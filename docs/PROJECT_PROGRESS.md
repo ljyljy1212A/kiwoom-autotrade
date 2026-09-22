@@ -718,3 +718,25 @@ publication succeeds and the final target identity is verified.
   access-denied visibility warnings; no cleanup or permission change was
   performed. No runtime, Scheduler, credential, real-account, or order
   activity was performed.
+
+## 2026-09-22 — KR/US mock read-only burn-in observation
+
+- A 30-minute read-only burn-in observation covered `kr_mock` and `us_mock`
+  from `13:02:13` to `13:32:36` KST at 60-second intervals, for 30 polls.
+- PID, instance ID, supervisor launch ID, mutex-backed supervisor liveness,
+  worker state, and activity state remained stable: KR PID `21192`, US PID
+  `19980`, both `liveness=confirmed`, `running=true`, `state=RUNNING`, and
+  `activityState=expected-idle`. Both process heartbeats advanced throughout
+  the observation.
+- KR and US control snapshots remained unchanged. Their observed SHA-256
+  values were respectively
+  `945B75B3AC48058B6B33C56030C93B38985C5B3EAB9B3EFB2413BB84C35FB8AF` and
+  `7699EF547DC730558CF609EFE379D81724D9D87B64708230C37388BEFCA37A4F`.
+- No fixed-port degraded marker appeared for either mock account. The US
+  order-attempt database SHA-256 remained
+  `644DC911CC9AD040A6198B7336FE9308B867C02F76CBF2CEBB5EF4BE91E5B69B`, with
+  `0` total and `0` unresolved order attempts at the final read.
+- The comparison reported `static_anomalies=0` and `heartbeat_issues=0`.
+  No worker, Scheduler, network, account, credential, order, file, or
+  permission state was changed. This is limited mock operational observation,
+  not real-account validation or a claim of indefinite runtime health.
