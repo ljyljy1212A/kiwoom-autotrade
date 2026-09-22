@@ -740,3 +740,17 @@ publication succeeds and the final target identity is verified.
   No worker, Scheduler, network, account, credential, order, file, or
   permission state was changed. This is limited mock operational observation,
   not real-account validation or a claim of indefinite runtime health.
+
+## 2026-09-22 — PR #30 mock burn-in Canonical publication
+
+- The approved KR/US mock read-only burn-in append was published to
+  `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` through the fixed-target
+  publisher under operation ID
+  `d5b3f6aa-2e5d-4a8f-9f0f-3a2c7e1b64d9`.
+- Post-Apply readback verified candidate SHA-256
+  `5F6DC4993FB1EFA3A354DC855F43DEA21A06067AC355059F06C2225D56C05788`,
+  strict UTF-8, `CRLF=3`, `BareCR=0`, EOF LF, no UTF-8 BOM, append suffix
+  equality, and absence of the operation-specific lock, backup, and temp
+  artifacts.
+- No Git, runtime, Scheduler, network, account, credential, or order activity
+  was performed for this publication record.
