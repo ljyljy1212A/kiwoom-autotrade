@@ -668,3 +668,14 @@ publication succeeds and the final target identity is verified.
   access-denied visibility warnings; no cleanup or permission change was
   performed. No runtime, Scheduler, credential, real-account, or order
   activity was performed.
+
+## 2026-09-22 — PR #25 Canonical publication
+
+- The PR #25 post-merge verification record was published to Canonical
+  `CURRENT_STATE.md` through operation ID
+  `a5c7e4d1-82b6-4f39-9a10-6d3e8c2f7b41`; the final target SHA-256 is
+  `0308054129D260070C7AC2709D97345F86FAA32FFA2CCFF272B52D67B8805832`.
+- Post-Apply verification confirmed append suffix equality, `BareCR=0`, EOF
+  LF, no UTF-8 BOM, and no operation-specific lock, backup, or temp artifact.
+- No runtime, Scheduler, credential, real-account, or order activity was
+  performed.
