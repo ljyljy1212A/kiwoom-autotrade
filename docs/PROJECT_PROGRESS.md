@@ -638,3 +638,20 @@ publication succeeds and the final target identity is verified.
 - The stale empty cherry-pick metadata was cleared without changing the
   existing dirty file set. No runtime, Scheduler, credential, real-account,
   or order activity was performed.
+
+## 2026-09-22 — Dashboard LF checkout policy and Canonical publication
+
+- Dashboard LF checkout policy was implemented in `.gitattributes` and
+  delivered in commit `d6c85d6baa2e2254f09147dce6e8354d0186731d`; focused
+  dashboard tests passed `14` tests, and PR #23 merged into `master` at
+  `42a62f4d6953d5f962e0456113c4a891cdc1e19c` with successful CI checks.
+- The clean post-merge worktree completed the full pytest suite with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`; the
+  checkout policy read back as `eol: lf`, with `CRLF=0`, `BareCR=0`, and a
+  trailing LF in `dashboard/index.html`.
+- Canonical publication completed through operation ID
+  `c1f4b1a6-7a7f-4ee5-9a3f-90f1a7b52c61`; the published
+  `CURRENT_STATE.md` candidate SHA-256 is
+  `281ED0ADB6F25222FA45CA667B6AA8882983B2BEB99EE8AE054D79F48FB403AD`.
+  No runtime, Scheduler, credential, real-account, or order activity was
+  performed.
