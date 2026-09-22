@@ -679,3 +679,16 @@ publication succeeds and the final target identity is verified.
   LF, no UTF-8 BOM, and no operation-specific lock, backup, or temp artifact.
 - No runtime, Scheduler, credential, real-account, or order activity was
   performed.
+
+## 2026-09-22 — PR #26 post-merge verification
+
+- PR #26 merged into `master` at
+  `12dc0704e28ddc4125d688b4a3aef6a36a486d45`; all recorded Quality,
+  Ubuntu compatibility, and Windows validation checks passed.
+- A clean detached worktree at the merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`.
+- The dashboard LF policy remained verified as `eol: lf` with `CRLF=0`,
+  `BareCR=0`, trailing LF, and no UTF-8 BOM. Test-created paths produced
+  access-denied visibility warnings; no cleanup or permission change was
+  performed. No runtime, Scheduler, credential, real-account, or order
+  activity was performed.
