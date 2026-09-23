@@ -18,6 +18,7 @@ from unittest.mock import patch
 import src.core.engine as engine_module
 from src.core.account_manager import AccountContext
 from src.core.engine import AccountEngine
+from src.core.kiwoom_client import KiwoomClient
 from src.data.trade_ledger import PendingOrder
 from src.strategy.base import Action, MarketSnapshot, OrderIntent, PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
@@ -47,9 +48,14 @@ class _Client:
 
     def __init__(self):
         self.symbol, self.qty, self.avg = "000490", 1, 10_000
+        self.balance_calls = 0
 
-    async def get_balance(self):
-        return {"acnt_evlt_remn_indv_tot": [{
+    async def get_balance(self, *, exchange=None):
+        if exchange is None:
+            self.balance_calls += 1
+        elif exchange != "KRX":
+            raise ValueError("mock KR supports only KRX")
+        return {"return_code": 0, "_balance_pages_complete": True, "acnt_evlt_remn_indv_tot": [{
             "stk_cd": self.symbol, "stk_nm": "TEST", "rmnd_qty": str(self.qty),
             "pur_pric": str(self.avg), "cur_prc": str(self.avg),
         }]}
@@ -66,6 +72,240 @@ class _Logger:
 
 
 class ManualTrancheLifecycleTest(unittest.TestCase):
+    def test_explicit_balance_exchange_preserves_default_request(self):
+        async def scenario():
+            client = KiwoomClient.__new__(KiwoomClient)
+            client.market = "KR"
+            requests = []
+
+            async def post(_path, _api_id, body, **kwargs):
+                requests.append(dict(body))
+                kwargs["response_headers"].update({"cont-yn": "N", "next-key": None})
+                return {"return_code": 0, "acnt_evlt_remn_indv_tot": []}
+
+            client._post = post
+            await client.get_balance()
+            await client.get_balance(exchange="NXT")
+            self.assertEqual(
+                [body["dmst_stex_tp"] for body in requests], ["KRX", "NXT"],
+            )
+            async def no_continuation_header(_path, _api_id, _body, **_kwargs):
+                return {"return_code": 0, "acnt_evlt_remn_indv_tot": []}
+
+            client._post = no_continuation_header
+            self.assertTrue((await client.get_balance(exchange="NXT"))["_balance_pages_complete"])
+
+            async def nonempty_without_continuation(_path, _api_id, _body, **_kwargs):
+                return {
+                    "return_code": 0,
+                    "acnt_evlt_remn_indv_tot": [{"stk_cd": "A000490", "rmnd_qty": "1"}],
+                }
+
+            client._post = nonempty_without_continuation
+            with self.assertRaises(ValueError):
+                await client.get_balance(exchange="NXT")
+
+            async def missing_page_status(_path, _api_id, _body, **kwargs):
+                kwargs["response_headers"]["cont-yn"] = "N"
+                return {"acnt_evlt_remn_indv_tot": []}
+
+            client._post = missing_page_status
+            with self.assertRaises(ValueError):
+                await client.get_balance(exchange="NXT")
+            with self.assertRaises(ValueError):
+                await client.get_balance(exchange="SOR")
+
+            client.market = "US"
+            requests.clear()
+
+            async def us_post(_path, _api_id, body, **kwargs):
+                requests.append(dict(body))
+                kwargs["response_headers"].update({"cont-yn": "N", "next-key": None})
+                return {"return_code": 0, "result_list": []}
+
+            client._post = us_post
+            await client.get_balance()
+            await client.get_balance(exchange="NY")
+            self.assertEqual([body["stex_tp"] for body in requests], ["", "NY"])
+
+        asyncio.run(scenario())
+
+    def test_orphan_observation_checks_every_real_exchange_without_summing_overlap(self):
+        class VenueClient:
+            market = "KR"
+            mode = "real"
+
+            def __init__(self):
+                self.calls = []
+                self.rows = {
+                    "KRX": [{"stk_cd": "A000490", "rmnd_qty": "2"}],
+                    "NXT": [{"stk_cd": "A000490", "rmnd_qty": "2"}],
+                }
+
+            async def get_balance(self, *, exchange=None):
+                self.calls.append(exchange)
+                return {
+                    "return_code": 0,
+                    "_balance_pages_complete": True,
+                    "acnt_evlt_remn_indv_tot": self.rows[exchange],
+                }
+
+        async def scenario():
+            client = VenueClient()
+            engine = AccountEngine.__new__(AccountEngine)
+            engine.ctx = SimpleNamespace(client=client, logger=_Logger())
+            engine._balance_gate = engine_module._AccountBalanceGate()
+            engine.balance_min_interval_sec = 3600
+
+            first, complete, first_generation, fresh, _ = await engine._shared_orphan_balance()
+            self.assertTrue(complete and fresh)
+            self.assertEqual(first, {"000490": 2.0})
+            self.assertEqual(client.calls, ["KRX", "NXT"])
+
+            cached, complete, cached_generation, fresh, _ = await engine._shared_orphan_balance()
+            self.assertTrue(complete)
+            self.assertFalse(fresh)
+            self.assertEqual(cached, first)
+            self.assertEqual(cached_generation, first_generation)
+            self.assertEqual(client.calls, ["KRX", "NXT"])
+
+            client.rows["KRX"] = []
+            client.rows["NXT"] = []
+            zero, complete, zero_generation, fresh, _ = await engine._shared_orphan_balance(force=True)
+            self.assertEqual(zero, {})
+            self.assertTrue(complete and fresh)
+            self.assertNotEqual(zero_generation, first_generation)
+
+            client.rows["NXT"] = [{"stk_cd": "A000490", "rmnd_qty": "bad"}]
+            blocked, complete, blocked_generation, fresh, _ = await engine._shared_orphan_balance(force=True)
+            self.assertEqual(blocked, {})
+            self.assertFalse(complete or fresh)
+            self.assertEqual(blocked_generation, "")
+            self.assertEqual(engine._balance_gate.balance_generation, 2)
+
+            for malformed_symbol in (["A000490"], {"code": "A000490"}, "A000490?"):
+                client.rows["NXT"] = [{"stk_cd": malformed_symbol, "rmnd_qty": "2"}]
+                blocked, complete, blocked_generation, fresh, _ = await engine._shared_orphan_balance(force=True)
+                self.assertEqual(blocked, {})
+                self.assertFalse(complete or fresh)
+                self.assertEqual(blocked_generation, "")
+                self.assertEqual(engine._balance_gate.balance_generation, 2)
+
+        asyncio.run(scenario())
+
+    def test_orphan_observation_checks_us_venues_and_mock_kr_scope(self):
+        class VenueClient:
+            def __init__(self, market, mode, rows):
+                self.market, self.mode, self.rows = market, mode, rows
+                self.calls = []
+
+            async def get_balance(self, *, exchange=None):
+                self.calls.append(exchange)
+                key = "result_list" if self.market == "US" else "acnt_evlt_remn_indv_tot"
+                return {"return_code": 0, "_balance_pages_complete": True, key: self.rows[exchange]}
+
+        async def observe(client):
+            engine = AccountEngine.__new__(AccountEngine)
+            engine.ctx = SimpleNamespace(client=client, logger=_Logger())
+            engine._balance_gate = engine_module._AccountBalanceGate()
+            engine.balance_min_interval_sec = 0
+            return await engine._shared_orphan_balance()
+
+        async def scenario():
+            us = VenueClient("US", "real", {
+                "ND": [], "NY": [{"stk_cd": "AAPL", "poss_qty": "1"}], "NA": [],
+            })
+            quantities, complete, _, fresh, _ = await observe(us)
+            self.assertTrue(complete and fresh)
+            self.assertEqual(quantities, {"AAPL": 1.0})
+            self.assertEqual(us.calls, ["ND", "NY", "NA"])
+
+            malformed_us = VenueClient("US", "real", {
+                "ND": [], "NY": [{"stk_cd": ["AAPL"], "poss_qty": "1"}], "NA": [],
+            })
+            _, complete, _, fresh, _ = await observe(malformed_us)
+            self.assertFalse(complete or fresh)
+
+            kr_mock = VenueClient("KR", "mock", {"KRX": []})
+            quantities, complete, _, fresh, _ = await observe(kr_mock)
+            self.assertTrue(complete and fresh)
+            self.assertEqual(quantities, {})
+            self.assertEqual(kr_mock.calls, ["KRX"])
+
+        asyncio.run(scenario())
+
+    def test_pending_cleanup_forces_new_broker_balance_in_passive_monitor(self):
+        async def scenario():
+            client = _Client()
+            account = "kr_pending_cleanup_fresh_balance_test"
+            ctx = AccountContext(
+                account_id=account, display_name="pending cleanup fresh balance", client=client,
+                strategy=InfiniteGridStrategy(_config()), risk_manager=None, dedup=None,
+                logger=_Logger(), position=PositionState(symbol="000490"),
+            )
+            engine = AccountEngine(
+                ctx, make_telegram_double(), None, lambda _symbol: None,
+                poll_interval_sec=60, control_symbol="000490", balance_only=True,
+            )
+            engine.balance_min_interval_sec = 3600
+            await engine._shared_broker_balance()
+            self.assertEqual(client.balance_calls, 1)
+            state = engine._orphan_cleaner._read_state()
+            state["pendingCleanup"]["000490"] = engine._orphan_cleaner._build_intent(
+                "000490", ["earlier:1", "earlier:2"],
+            )
+            engine._orphan_cleaner._write_state(state)
+            await engine._reconcile_balance()
+            self.assertEqual(client.balance_calls, 2)
+            retained = engine._orphan_cleaner._read_state()
+            self.assertIn("000490", retained["pendingCleanup"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            original_data_dir = engine_module.DATA_DIR
+            os.chdir(directory)
+            engine_module.DATA_DIR = Path(directory) / "data"
+            try:
+                asyncio.run(scenario())
+            finally:
+                engine_module.DATA_DIR = original_data_dir
+                os.chdir(previous)
+
+    def test_unrecognized_normal_balance_records_blocked_cleanup(self):
+        async def scenario():
+            engine = AccountEngine.__new__(AccountEngine)
+            engine.ctx = SimpleNamespace(
+                client=SimpleNamespace(market="KR"),
+                logger=_Logger(),
+                strategy=SimpleNamespace(symbol="000490"),
+            )
+            engine._balance_gate = engine_module._AccountBalanceGate()
+            engine._balance_only = False
+            engine.ledger = SimpleNamespace()
+            calls = []
+            engine._orphan_cleaner = SimpleNamespace(
+                has_pending_cleanup=lambda: True,
+                sweep=lambda quantities, complete, _unresolved, **kwargs:
+                    calls.append((quantities, complete, kwargs)),
+            )
+
+            async def normal_balance(*, max_age_sec=None):
+                self.assertEqual(max_age_sec, 0)
+                return {"unexpected": []}, 0.0, "run:1", True
+
+            async def orphan_balance(*, force=False):
+                self.assertTrue(force)
+                return {}, False, "", False, "2026-09-23T00:00:00+00:00"
+
+            engine._shared_broker_balance = normal_balance
+            engine._shared_orphan_balance = orphan_balance
+            await engine._reconcile_balance()
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], {})
+            self.assertFalse(calls[0][1])
+
+        asyncio.run(scenario())
+
     def test_zero_balance_interval_does_not_reuse_same_tick_cache(self):
         async def scenario():
             client = _Client()
@@ -82,8 +322,17 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
             engine.balance_min_interval_sec = 0
             fixed_loop = SimpleNamespace(time=lambda: 123.0)
             try:
-                first, _ = await engine._shared_broker_balance()
+                self.assertTrue(engine._orphan_balance_complete(await client.get_balance()))
+                self.assertFalse(engine._orphan_balance_complete({
+                    "acnt_evlt_remn_indv_tot": [],
+                }))
+                self.assertFalse(engine._orphan_balance_complete({
+                    "_balance_pages_complete": True,
+                    "acnt_evlt_remn_indv_tot": [{"stk_cd": "000490", "rmnd_qty": "bad"}],
+                }))
+                first, _, first_generation, first_fresh = await engine._shared_broker_balance()
                 self.assertEqual(first["acnt_evlt_remn_indv_tot"][0]["rmnd_qty"], "1")
+                self.assertTrue(first_fresh)
                 client.qty = 2
                 engine._balance_gate.received_at = 123.0
                 with patch.object(
@@ -91,8 +340,10 @@ class ManualTrancheLifecycleTest(unittest.TestCase):
                     "get_running_loop",
                     return_value=fixed_loop,
                 ):
-                    second, _ = await engine._shared_broker_balance()
+                    second, _, second_generation, second_fresh = await engine._shared_broker_balance()
                 self.assertEqual(second["acnt_evlt_remn_indv_tot"][0]["rmnd_qty"], "2")
+                self.assertTrue(second_fresh)
+                self.assertNotEqual(first_generation, second_generation)
             finally:
                 engine.ledger.close()
 

@@ -19,6 +19,7 @@ from src.core.reconciliation import (
 )
 
 import asyncio
+import copy
 import json
 import math
 import os
@@ -30,6 +31,7 @@ import weakref
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from src.calendar_utils.market_calendar import MarketCalendar
@@ -37,9 +39,10 @@ from src.data.trade_ledger import PendingOrder, TradeLedgerStore
 from src.data.order_attempts import unattributed_attempt_ids
 from src.core.us_market import (
     extract_us_fx_rate,
+    normalize_us_symbol,
     normalize_us_execution_rows,
 )
-from src.core.orphan_cleanup import OrphanStateCleaner
+from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
 from src.core.control_state import (
     FIXED_PORT_DEGRADED_PAUSE_REASON,
     read_auto_trading_enabled,
@@ -70,8 +73,16 @@ class _AccountBalanceGate:
 
     def __init__(self):
         self.lock = asyncio.Lock()
+        self.orphan_cleanup_lock = asyncio.Lock()
         self.raw_balance: dict | None = None
         self.received_at = 0.0
+        self.balance_run_id = uuid.uuid4().hex
+        self.balance_generation = 0
+        self.raw_balance_generation = ""
+        self.orphan_quantities: dict[str, float] | None = None
+        self.orphan_received_at = 0.0
+        self.orphan_balance_generation = ""
+        self.orphan_fetch_started_at = ""
         self.execution_lock = asyncio.Lock()
         # All symbol engines for one account share this gate.  A buy decision
         # must remain serial from its final duplicate check through pending
@@ -622,6 +633,9 @@ class AccountEngine:
             self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
         except (OSError, json.JSONDecodeError):
             self._symbol_lifecycles: dict[str, dict] = {}
+        lifecycle_symbol = self._symbol_key(ctx.strategy.symbol)
+        self._lifecycle_disk_present = lifecycle_symbol in self._symbol_lifecycles
+        self._lifecycle_disk_state = copy.deepcopy(self._symbol_lifecycles.get(lifecycle_symbol))
         self._lifecycle_pending_adoption = False
         self._lifecycle_activation_lock = threading.RLock()
         self._manual_lifecycle_adoptions = 0
@@ -687,6 +701,9 @@ class AccountEngine:
             self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
         except (OSError, json.JSONDecodeError):
             self._symbol_lifecycles = {}
+        lifecycle_symbol = self._symbol_key(self.ctx.strategy.symbol)
+        self._lifecycle_disk_present = lifecycle_symbol in self._symbol_lifecycles
+        self._lifecycle_disk_state = copy.deepcopy(self._symbol_lifecycles.get(lifecycle_symbol))
         self._symbol_key_migration_complete = True
         if manual_review:
             self.ctx.logger.error(
@@ -757,18 +774,143 @@ class AccountEngine:
             return
         self.ctx.logger.info(f"Startup ledger backup created: {backup_path}")
 
-    async def _shared_broker_balance(self, *, max_age_sec: float | None = None) -> tuple[dict, float]:
+    async def _shared_broker_balance(
+        self, *, max_age_sec: float | None = None,
+    ) -> tuple[dict, float, str, bool]:
         """Fetch at most one fresh account balance per shared interval."""
         gate = self._balance_gate
         async with _diagnostic_lock(gate.lock, "balance_gate.lock", self.ctx.logger):
             now = asyncio.get_running_loop().time()
             maximum_age = self.balance_min_interval_sec if max_age_sec is None else max_age_sec
             if maximum_age > 0 and gate.raw_balance is not None and now - gate.received_at <= maximum_age:
-                return gate.raw_balance, gate.received_at
-            raw_balance = await self.ctx.client.get_balance()
+                return gate.raw_balance, gate.received_at, gate.raw_balance_generation, False
+            try:
+                raw_balance = await self.ctx.client.get_balance()
+            except ValueError as exc:
+                raise RetryableError(f"invalid broker balance response: {exc}") from exc
+            gate.balance_generation += 1
+            gate.raw_balance_generation = f"{gate.balance_run_id}:{gate.balance_generation}"
             gate.raw_balance = raw_balance
             gate.received_at = asyncio.get_running_loop().time()
-            return raw_balance, gate.received_at
+            return raw_balance, gate.received_at, gate.raw_balance_generation, True
+
+    async def _shared_orphan_balance(
+        self, *, force: bool = False,
+    ) -> tuple[dict[str, float], bool, str, bool, str]:
+        """Observe every supported venue before certifying a cleanup zero.
+
+        Venue rows are never summed: a positive holding in any venue blocks
+        cleanup, including when two venue responses contain the same symbol.
+        The balance gate serializes broker reads; the cleanup lock is acquired
+        only after this method returns.
+        """
+        gate = self._balance_gate
+        async with _diagnostic_lock(gate.lock, "balance_gate.lock", self.ctx.logger):
+            now = asyncio.get_running_loop().time()
+            if (
+                not force and self.balance_min_interval_sec > 0
+                and gate.orphan_quantities is not None
+                and now - gate.orphan_received_at <= self.balance_min_interval_sec
+            ):
+                return (
+                    dict(gate.orphan_quantities), True,
+                    gate.orphan_balance_generation, False,
+                    gate.orphan_fetch_started_at,
+                )
+            fetch_started_at = datetime.now(timezone.utc).isoformat()
+            market = self.ctx.client.market
+            if market == "KR":
+                # Domestic mock accounts cannot hold NXT positions.
+                venues = ("KRX",) if getattr(self.ctx.client, "mode", None) == "mock" else ("KRX", "NXT")
+                rows_key = "acnt_evlt_remn_indv_tot"
+                symbol_fields = ("stk_cd",)
+                quantity_fields = ("rmnd_qty",)
+            elif market == "US":
+                venues = ("ND", "NY", "NA")
+                rows_key = "result_list"
+                symbol_fields = ("stk_cd", "ovrs_pdno", "ovrs_item_cd", "symbol", "code")
+                quantity_fields = ("rmnd_qty", "ovrs_cblc_qty", "poss_qty", "hold_qty", "qty", "cur_qty")
+            else:
+                return {}, False, "", False, fetch_started_at
+
+            quantities: dict[str, float] = {}
+            try:
+                for venue in venues:
+                    raw = await self.ctx.client.get_balance(exchange=venue)
+                    if (
+                        not isinstance(raw, dict)
+                        or raw.get("return_code") not in (0, "0")
+                        or not self._orphan_balance_complete(raw)
+                    ):
+                        raise ValueError(f"incomplete {market} {venue} holdings")
+                    for row in raw[rows_key]:
+                        raw_symbol = next(
+                            (row[key] for key in symbol_fields if row.get(key) not in (None, "")), None,
+                        )
+                        raw_quantity = next((row[key] for key in quantity_fields if key in row), None)
+                        symbol = self._orphan_balance_symbol(raw_symbol)
+                        quantity_decimal = Decimal(str(raw_quantity).replace(",", "").strip())
+                        if not quantity_decimal.is_finite() or quantity_decimal < 0:
+                            raise ValueError("invalid cleanup holding quantity")
+                        quantity = float(quantity_decimal)
+                        if quantity_decimal > 0 and quantity <= 1e-9:
+                            raise ValueError("positive holding is below cleanup quantity precision")
+                        quantities[symbol] = max(quantities.get(symbol, 0.0), quantity)
+            except Exception as exc:
+                self.ctx.logger.warning(f"Orphan balance coverage incomplete: {exc}")
+                return {}, False, "", False, fetch_started_at
+
+            gate.balance_generation += 1
+            generation = f"{gate.balance_run_id}:{gate.balance_generation}"
+            gate.orphan_quantities = dict(quantities)
+            gate.orphan_received_at = asyncio.get_running_loop().time()
+            gate.orphan_balance_generation = generation
+            gate.orphan_fetch_started_at = fetch_started_at
+            return quantities, True, generation, True, fetch_started_at
+
+    def _orphan_balance_symbol(self, raw_symbol: object) -> str:
+        """Reject malformed broker symbols before a missing holding implies zero."""
+        if not isinstance(raw_symbol, str):
+            raise ValueError("cleanup holding symbol is not a string")
+        if self.ctx.client.market == "US":
+            return normalize_us_symbol(raw_symbol)
+        if self.ctx.client.market == "KR":
+            symbol = self._symbol_key(raw_symbol)
+            if len(symbol) == 6 and symbol.isascii() and symbol.isdecimal():
+                return symbol
+        raise ValueError("invalid cleanup holding symbol")
+
+    def _orphan_balance_complete(self, raw_balance: object) -> bool:
+        """Validate the complete account holdings shape used by cleanup."""
+        if not isinstance(raw_balance, dict) or raw_balance.get("_balance_pages_complete") is not True:
+            return False
+        rows_key = "result_list" if self.ctx.client.market == "US" else "acnt_evlt_remn_indv_tot"
+        rows = raw_balance.get(rows_key)
+        if not isinstance(rows, list):
+            return False
+        symbol_fields = (
+            ("stk_cd", "ovrs_pdno", "ovrs_item_cd", "symbol", "code")
+            if self.ctx.client.market == "US" else ("stk_cd",)
+        )
+        quantity_fields = (
+            ("rmnd_qty", "ovrs_cblc_qty", "poss_qty", "hold_qty", "qty", "cur_qty")
+            if self.ctx.client.market == "US" else ("rmnd_qty",)
+        )
+        for row in rows:
+            if not isinstance(row, dict):
+                return False
+            raw_symbol = next((row.get(key) for key in symbol_fields if row.get(key) not in (None, "")), None)
+            qty_value = next((row.get(key) for key in quantity_fields if key in row), None)
+            if raw_symbol is None or qty_value is None:
+                return False
+            try:
+                self._orphan_balance_symbol(raw_symbol)
+                quantity = float(str(qty_value).replace(",", "").replace("+", "").strip())
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(quantity) or quantity < 0:
+                return False
+        return True
 
     def _reconciliation_incomplete_reasons(
         self, symbol: str, *, balance_recognized: bool, holding: NormalizedBalanceHolding | None,
@@ -975,7 +1117,7 @@ class AccountEngine:
             return self.ledger.has_unresolved_orders(symbol)
         path = self.data_dir / f"trades_{self.ctx.account_id}.db"
         if not path.exists():
-            return False
+            raise RuntimeError("unresolved-order inspection failed: ledger is unavailable")
         try:
             with sqlite3.connect(path, timeout=0.25) as db:
                 return db.execute(
@@ -983,8 +1125,8 @@ class AccountEngine:
                     "AND status IN ('open','awaiting_execution_history') LIMIT 1",
                     (self.ctx.account_id, symbol),
                 ).fetchone() is not None
-        except sqlite3.Error:
-            return True
+        except sqlite3.Error as exc:
+            raise RuntimeError("unresolved-order inspection failed") from exc
 
     async def _wait_for_next_tick_or_control_change(self) -> None:
         deadline = asyncio.get_running_loop().time() + self.poll_interval_sec
@@ -1903,12 +2045,29 @@ class AccountEngine:
             self.ctx.logger.warning(f"Dashboard {order.side}-fill refresh event deferred: {exc}")
 
     def _write_lifecycles(self) -> None:
-        """Persist lifecycle markers without allowing cache I/O to affect trading."""
-        try:
+        """Merge this symbol under the account lock; reject stale same-symbol state."""
+        symbol = self._symbol_key(self.ctx.strategy.symbol)
+        with account_cleanup_lock(self.data_dir, self.ctx.account_id):
+            try:
+                latest = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                latest = {}
+            if not isinstance(latest, dict):
+                raise RuntimeError("Symbol lifecycle file is not an object")
+            if (
+                (symbol in latest) != self._lifecycle_disk_present
+                or latest.get(symbol) != self._lifecycle_disk_state
+            ):
+                raise RuntimeError(f"Concurrent symbol lifecycle change for {symbol}")
+            if symbol in self._symbol_lifecycles:
+                latest[symbol] = copy.deepcopy(self._symbol_lifecycles[symbol])
+            else:
+                latest.pop(symbol, None)
             self._lifecycle_path.parent.mkdir(exist_ok=True)
-            atomic_write_json(self._lifecycle_path, self._symbol_lifecycles, ensure_ascii=False)
-        except Exception as exc:
-            self.ctx.logger.warning(f"Could not persist symbol lifecycle state: {exc}")
+            atomic_write_json(self._lifecycle_path, latest, ensure_ascii=False)
+            self._symbol_lifecycles = latest
+            self._lifecycle_disk_present = symbol in latest
+            self._lifecycle_disk_state = copy.deepcopy(latest.get(symbol))
 
     def _prepare_lifecycle_scope(self, symbol: str) -> None:
         """Select only the currently open lifecycle for ledger recovery.
@@ -2030,6 +2189,24 @@ class AccountEngine:
             self._update_position(intent, side)
             self.ctx.strategy.on_filled(action, row["step"], int(row["qty"]), row["price"])
 
+    def _assert_lifecycle_current_for_cache_write(self, symbol: str) -> None:
+        """Reject a stale same-symbol cache write after lifecycle cleanup."""
+        if not hasattr(self, "_lifecycle_path"):
+            return  # Lightweight cache-only test fixtures have no lifecycle.
+        if symbol != self._symbol_key(self.ctx.strategy.symbol):
+            raise RuntimeError(f"Unexpected tranche-base symbol {symbol}")
+        try:
+            latest = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            latest = {}
+        if not isinstance(latest, dict):
+            raise RuntimeError("Symbol lifecycle file is not an object")
+        if (
+            (symbol in latest) != self._lifecycle_disk_present
+            or latest.get(symbol) != self._lifecycle_disk_state
+        ):
+            raise RuntimeError(f"Concurrent symbol lifecycle change for {symbol}")
+
     def _store_tranche_base(
         self, symbol: str, price: float, *, only_if_absent: bool = False
     ) -> None:
@@ -2039,7 +2216,8 @@ class AccountEngine:
         if price <= 0:
             return
         try:
-            with _TRANCHE_BASES_WRITE_LOCK:
+            with account_cleanup_lock(self.data_dir, self.ctx.account_id), _TRANCHE_BASES_WRITE_LOCK:
+                self._assert_lifecycle_current_for_cache_write(symbol)
                 try:
                     latest = json.loads(
                         self._tranche_bases_path.read_text(encoding="utf-8")
@@ -2067,7 +2245,8 @@ class AccountEngine:
     def _remove_tranche_base(self, symbol: str) -> None:
         symbol = self._symbol_key(symbol)
         try:
-            with _TRANCHE_BASES_WRITE_LOCK:
+            with account_cleanup_lock(self.data_dir, self.ctx.account_id), _TRANCHE_BASES_WRITE_LOCK:
+                self._assert_lifecycle_current_for_cache_write(symbol)
                 try:
                     latest = json.loads(
                         self._tranche_bases_path.read_text(encoding="utf-8")
@@ -2158,24 +2337,44 @@ class AccountEngine:
 
     async def _reconcile_balance(self):
         balance_change_msg: str | None = None
-        balance_result = await self._shared_broker_balance()
-        raw_balance = balance_result[0] if isinstance(balance_result, tuple) else balance_result
+        async with _diagnostic_lock(
+            self._balance_gate.orphan_cleanup_lock, "orphan_cleanup_lock", self.ctx.logger,
+        ):
+            pending_cleanup = self._orphan_cleaner.has_pending_cleanup()
+        balance_result = await self._shared_broker_balance(
+            max_age_sec=0 if pending_cleanup else None,
+        )
+        raw_balance, _, _, _ = balance_result
         normalized_balance = _normalize_broker_balance(self.ctx.client.market, raw_balance)
         broker_holdings = normalized_balance.holdings
         balance_recognized = normalized_balance.recognized
+        (
+            cleanup_quantities, cleanup_balance_complete, cleanup_generation,
+            cleanup_fetched_fresh, cleanup_fetch_started_at,
+        ) = await self._shared_orphan_balance(force=pending_cleanup)
         if balance_recognized:
-            self._run_symbol_key_migration(broker_holdings)
+            async with _diagnostic_lock(
+                self._balance_gate.orphan_cleanup_lock, "orphan_cleanup_lock", self.ctx.logger,
+            ):
+                self._run_symbol_key_migration(broker_holdings)
             if self._symbol_key_manual_review(self.ctx.strategy.symbol):
                 self._trading_paused = True
                 self._pause_reason = "symbol_key_manual_review"
                 return
         if self._balance_only:
             self._publish_passive_balance_snapshot(broker_holdings, balance_recognized)
-            quantities = {self._symbol_key(item.get("symbol", "")): float(item.get("qty", 0) or 0)
-                          for item in broker_holdings}
-            self._orphan_cleaner.sweep(
-                quantities, balance_recognized, self._has_unresolved_order_for_cleanup, apply=True,
-            )
+            async with _diagnostic_lock(
+                self._balance_gate.orphan_cleanup_lock, "orphan_cleanup_lock", self.ctx.logger,
+            ):
+                self._orphan_cleaner.sweep(
+                    cleanup_quantities,
+                    cleanup_balance_complete,
+                    self._has_unresolved_order_for_cleanup,
+                    balance_generation=cleanup_generation,
+                    fresh_balance=cleanup_fetched_fresh,
+                    balance_fetch_started_at=cleanup_fetch_started_at,
+                    apply=True,
+                )
             return
         for broker_holding in broker_holdings:
             symbol = broker_holding["symbol"]
@@ -2209,6 +2408,18 @@ class AccountEngine:
                 f"(top-level fields: {sorted(raw_balance.keys())}; "
                 f"holding summary: {_holding_summary(raw_balance)})"
             )
+            async with _diagnostic_lock(
+                self._balance_gate.orphan_cleanup_lock, "orphan_cleanup_lock", self.ctx.logger,
+            ):
+                self._orphan_cleaner.sweep(
+                    {},
+                    False,
+                    self._has_unresolved_order_for_cleanup,
+                    balance_generation=cleanup_generation,
+                    fresh_balance=cleanup_fetched_fresh,
+                    balance_fetch_started_at=cleanup_fetch_started_at,
+                    apply=True,
+                )
             return
         qty, avg_price = holding
         # The normal workflow is manual HTS tranche 1, then immediate strategy
@@ -2254,11 +2465,18 @@ class AccountEngine:
         # One shared broker-authoritative orphan evaluator owns both startup
         # and live cleanup.  It requires two complete zero snapshots and never
         # touches unresolved orders or a nonzero holding.
-        quantities = {self._symbol_key(item.get("symbol", "")): float(item.get("qty", 0) or 0)
-                      for item in broker_holdings}
-        orphan_results = self._orphan_cleaner.sweep(
-            quantities, balance_recognized, self.ledger.has_unresolved_orders, apply=True,
-        )
+        async with _diagnostic_lock(
+            self._balance_gate.orphan_cleanup_lock, "orphan_cleanup_lock", self.ctx.logger,
+        ):
+            orphan_results = self._orphan_cleaner.sweep(
+                cleanup_quantities,
+                cleanup_balance_complete,
+                self.ledger.has_unresolved_orders,
+                balance_generation=cleanup_generation,
+                fresh_balance=cleanup_fetched_fresh,
+                balance_fetch_started_at=cleanup_fetch_started_at,
+                apply=True,
+            )
         orphan_by_symbol = {item["symbol"]: item for item in orphan_results}
         symbol_key = self._symbol_key(self.ctx.strategy.symbol)
         current_orphan = orphan_by_symbol.get(symbol_key, {})
@@ -2273,12 +2491,19 @@ class AccountEngine:
             # the lifecycle file. Refresh this engine's in-memory copy too;
             # otherwise re-enabling the same symbol can incorrectly reuse the
             # old open activation identity.
-            current = self._symbol_lifecycles.get(symbol_key, {})
-            self._symbol_lifecycles[symbol_key] = {
-                "status": "closed",
-                "started_at": current.get("started_at") if isinstance(current, dict) else None,
-                "closed_at": datetime.now(timezone.utc).isoformat(),
-            }
+            with account_cleanup_lock(self.data_dir, self.ctx.account_id):
+                latest = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
+                if (
+                    not isinstance(latest, dict)
+                    or not isinstance(latest.get(symbol_key), dict)
+                    or latest[symbol_key].get("status") != "closed"
+                ):
+                    raise RuntimeError(
+                        f"Orphan cleanup completed without a closed lifecycle marker for {symbol_key}"
+                    )
+                self._symbol_lifecycles = latest
+                self._lifecycle_disk_present = True
+                self._lifecycle_disk_state = copy.deepcopy(latest[symbol_key])
             await self.telegram.notify_symbol_closed(
                 symbol_key, self.ctx.account_id, qty, avg_price, "orphan_cleaned"
             )
@@ -2551,6 +2776,16 @@ class AccountEngine:
         """Remove opted-in profiles only after a complete broker-confirmed closure."""
         if not balance_recognized:
             return
+        with account_cleanup_lock(self.data_dir, self.ctx.account_id):
+            self._remove_settings_for_confirmed_closures_locked(
+                previous_balance, broker_holdings, balance_recognized
+            )
+
+    def _remove_settings_for_confirmed_closures_locked(
+        self, previous_balance: dict, broker_holdings: list[dict], balance_recognized: bool
+    ) -> None:
+        if not balance_recognized:
+            return
         current_symbols = {
             self._symbol_key(item.get("symbol", ""))
             for item in broker_holdings
@@ -2617,7 +2852,12 @@ class AccountEngine:
         )
 
     def _cleanup_fully_closed_symbol(self, symbol: str) -> None:
-        """Atomically retire all per-symbol automation state after full close."""
+        """Retire per-symbol automation state under the account cleanup lock."""
+        with account_cleanup_lock(self.data_dir, self.ctx.account_id):
+            self._cleanup_fully_closed_symbol_locked(symbol)
+
+    def _cleanup_fully_closed_symbol_locked(self, symbol: str) -> None:
+        """Retire per-symbol automation state after full close."""
         symbol = self._symbol_key(symbol)
         if self._symbol_key_manual_review(symbol):
             return

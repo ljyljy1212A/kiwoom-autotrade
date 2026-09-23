@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
+from src.core.orphan_cleanup import account_cleanup_lock
 from src.core import dashboard_control_snapshot as control_snapshot
 from src.core.runtime_paths import DATA_DIR
 
@@ -482,38 +483,39 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("profile must be an object")
                     _validate_market_config(account, profile.get("config"))
                 selected_id = str(payload.get("selected_profile_id", ""))
-                settings_path = ROOT / "data" / f"dashboard_settings_{account}.json"
-                try:
-                    existing = json.loads(settings_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    existing = {}
-                existing_profiles = {
-                    str(profile.get("id", "")): profile
-                    for profile in existing.get("profiles", [])
-                    if isinstance(profile, dict)
-                }
-                incoming_profiles = {
-                    str(profile.get("id", "")): profile
-                    for profile in profiles
-                }
-                for profile_id, existing_profile in existing_profiles.items():
-                    if (existing_profile.get("enabled", True) is not False
-                            and incoming_profiles.get(profile_id) != existing_profile):
-                        raise ValueError("Enabled profiles cannot be changed through /api/settings")
-                remove_closed = payload.get(
-                    "auto_remove_closed_positions",
-                    existing.get("auto_remove_closed_positions", True),
-                )
-                if not isinstance(remove_closed, bool):
-                    raise ValueError("auto_remove_closed_positions must be a boolean")
-                atomic_write_json(
-                    settings_path,
-                    {
-                        "profiles": profiles,
-                        "auto_remove_closed_positions": remove_closed,
-                    },
-                    ensure_ascii=False,
-                )
+                with account_cleanup_lock(ROOT / "data", account):
+                    settings_path = ROOT / "data" / f"dashboard_settings_{account}.json"
+                    try:
+                        existing = json.loads(settings_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        existing = {}
+                    existing_profiles = {
+                        str(profile.get("id", "")): profile
+                        for profile in existing.get("profiles", [])
+                        if isinstance(profile, dict)
+                    }
+                    incoming_profiles = {
+                        str(profile.get("id", "")): profile
+                        for profile in profiles
+                    }
+                    for profile_id, existing_profile in existing_profiles.items():
+                        if (existing_profile.get("enabled", True) is not False
+                                and incoming_profiles.get(profile_id) != existing_profile):
+                            raise ValueError("Enabled profiles cannot be changed through /api/settings")
+                    remove_closed = payload.get(
+                        "auto_remove_closed_positions",
+                        existing.get("auto_remove_closed_positions", True),
+                    )
+                    if not isinstance(remove_closed, bool):
+                        raise ValueError("auto_remove_closed_positions must be a boolean")
+                    atomic_write_json(
+                        settings_path,
+                        {
+                            "profiles": profiles,
+                            "auto_remove_closed_positions": remove_closed,
+                        },
+                        ensure_ascii=False,
+                    )
                 self._json({"profiles": profiles, "auto_remove_closed_positions": remove_closed})
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid settings payload"}, 400)

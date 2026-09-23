@@ -27,7 +27,7 @@ class RetryBoundaryReproductionTest(unittest.IsolatedAsyncioTestCase):
         client = object.__new__(KiwoomClient)
         client.domain = "https://example.invalid"
         client._http_gate = _FailingHTTPGate()
-        async def headers(_api_id):
+        async def headers(_api_id, *, cont_yn="N", next_key=""):
             return {}
 
         client._headers = headers
