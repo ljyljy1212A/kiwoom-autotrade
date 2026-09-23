@@ -1,6 +1,6 @@
 # Project Progress
 
-Last updated: 2026-09-13
+Last updated: 2026-09-23
 
 ## Purpose
 
@@ -775,3 +775,34 @@ publication succeeds and the final target identity is verified.
   No source or test files were changed, and no tests were run. No Git
   state-changing or delivery actions, CI, Canonical publication, runtime,
   Scheduler, network, account, credential, or order actions were performed.
+
+## 2026-09-23 — P0 backlog current-state review
+
+- Reassessed the P0 list above against the current source, tests, configuration,
+  and later repository and Canonical records. The original list is retained as
+  a historical checkpoint; these findings clarify its current status.
+- The unmanaged-process scan failure item is resolved in the current source:
+  stop/kill return `status_indeterminate` with code 8 and
+  `reason=unmanaged-scan-failed`. Existing tests cover both paths and verify
+  that termination and PID cleanup do not proceed after scan failure. Tests
+  were not run during this review.
+- Atomic persistence work is recorded for startup status, dashboard/control
+  state, pause-clear history, and selected engine state. No exhaustive inventory
+  of all shared-state writes was performed, so the broader item remains
+  incomplete pending a bounded inventory.
+- `src/core/engine.py` currently has 2,689 physical lines. Characterization
+  coverage and `_ReconciliationCoordinator` separation are recorded, including
+  a historical focused result of `27 passed`; further separation scope remains
+  to be defined.
+- Dependency and quality work remains incomplete. Development requirements
+  specify minimum versions, Ruff is advisory, Mypy is scoped to
+  `src/core/process_inventory.py`, and coverage has no configured threshold.
+  The tracked-path check found no lockfile under the checked conventional
+  names; this was not a broader packaging audit.
+- The old blanket statement that Canonical updates remain pending because of a
+  path-boundary error is stale as a current summary: later publication records
+  appear in the repository and Canonical files. This review did not publish or
+  independently revalidate those earlier operations.
+- This was a read-only review and documentation update. No tests were run; no
+  Git state-changing or delivery operations, CI, Canonical publication,
+  runtime, Scheduler, network, account, credential, or order actions occurred.
