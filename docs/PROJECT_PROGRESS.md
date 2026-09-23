@@ -754,3 +754,24 @@ publication succeeds and the final target identity is verified.
   artifacts.
 - No Git, runtime, Scheduler, network, account, credential, or order activity
   was performed for this publication record.
+
+## 2026-09-23 — Documentation routing and next-chat handoff review
+
+- Read the repository instructions, Canonical current-state record, repository
+  progress log, Canonical publication workflow, and project-analysis baseline
+  to classify their documentation roles.
+- Confirmed the documented routing: routine repository progress belongs in
+  `docs/PROJECT_PROGRESS.md`; `docs/PROJECT_ANALYSIS.md` is a static source
+  analysis baseline; Canonical updates are reserved for stable, meaningful
+  milestones and require separate authorization.
+- Recommended using the repository progress log for routine session handoffs,
+  preserving historical records, and creating or refreshing a Canonical
+  handoff only when a current handoff is specifically needed.
+- PR #32 merge and remote post-merge verification details were supplied by the
+  user in this conversation. They were not independently rechecked during this
+  update and are not recorded here as independently verified GitHub facts.
+- This entry records documentation-routing review only. Read-only
+  `git diff` and `git diff --check` inspected the target document.
+  No source or test files were changed, and no tests were run. No Git
+  state-changing or delivery actions, CI, Canonical publication, runtime,
+  Scheduler, network, account, credential, or order actions were performed.
