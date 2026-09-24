@@ -54,32 +54,38 @@ function Enter-CleanupTargetLock {
     )
 
     $lockPath = Join-Path $RepoRoot "data\orphan_cleanup_$Account.lock"
-    $stream = [System.IO.File]::Open(
-        $lockPath,
-        [System.IO.FileMode]::OpenOrCreate,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::ReadWrite
-    )
-    try {
-        if ($stream.Length -eq 0) {
-            $stream.WriteByte(48)
-            $stream.Flush()
-        }
-        $timer = [System.Diagnostics.Stopwatch]::StartNew()
-        while ($true) {
-            try {
-                $stream.Lock(0, 1)
-                return $stream
-            } catch [System.IO.IOException] {
-                if ($timer.ElapsedMilliseconds -ge 2000) {
-                    throw "Account cleanup lock unavailable for $Account after 2000 ms"
-                }
-                Start-Sleep -Milliseconds 50
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $stream = $null
+        try {
+            $stream = [System.IO.File]::Open(
+                $lockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::ReadWrite
+            )
+            if ($stream.Length -eq 0) {
+                $stream.WriteByte(48)
+                $stream.Flush()
             }
+            $stream.Lock(0, 1)
+            return $stream
+        } catch {
+            $failure = $_.Exception
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            while ($null -ne $failure.InnerException) {
+                $failure = $failure.InnerException
+            }
+            if ($failure -isnot [System.IO.IOException]) {
+                throw
+            }
+            if ($timer.ElapsedMilliseconds -ge 2000) {
+                throw "Account cleanup lock unavailable for $Account after 2000 ms"
+            }
+            Start-Sleep -Milliseconds 50
         }
-    } catch {
-        $stream.Dispose()
-        throw
     }
 }
 

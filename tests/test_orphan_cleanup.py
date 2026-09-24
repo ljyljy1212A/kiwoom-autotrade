@@ -5,7 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from multiprocessing import get_context
 from pathlib import Path
 from unittest.mock import patch
@@ -68,6 +68,12 @@ class OrphanCleanupTest(unittest.TestCase):
             balance_fetch_started_at=balance_fetch_started_at,
             apply=apply,
         )
+
+    @staticmethod
+    def _after_intent(intent: dict, microseconds: int = 1) -> str:
+        return (
+            datetime.fromisoformat(intent["createdAt"]) + timedelta(microseconds=microseconds)
+        ).isoformat()
 
     def test_two_complete_zero_snapshots_clean_runtime_state_but_keep_ledger_history(self):
         self._state()
@@ -226,7 +232,10 @@ class OrphanCleanupTest(unittest.TestCase):
         settings = self.data / f"dashboard_settings_{self.account}.json"
         changed = {"profiles": [{"enabled": False, "config": {"symbol": "LEGACY"}}]}
         settings.write_text(json.dumps(changed), encoding="utf-8")
-        result = self._sweep(generation="restart:1", fresh=True)[0]
+        result = self._sweep(
+            generation="restart:1", fresh=True,
+            balance_fetch_started_at=self._after_intent(intent),
+        )[0]
         self.assertEqual(result["classification"], "manual_review_cleanup_conflict")
         self.assertEqual(json.loads(settings.read_text()), changed)
         destination = Path(intent["controls"][0]["destination"])
@@ -255,7 +264,10 @@ class OrphanCleanupTest(unittest.TestCase):
             control,
         ]
         before = {path: path.read_bytes() for path in targets}
-        result = self._sweep(generation="restart:1", fresh=True)[0]
+        result = self._sweep(
+            generation="restart:1", fresh=True,
+            balance_fetch_started_at=self._after_intent(state["pendingCleanup"]["LEGACY"]),
+        )[0]
         self.assertEqual(result["classification"], "manual_review_cleanup_conflict")
         self.assertIn("unplanned control file", result["reason"])
         self.assertEqual(before, {path: path.read_bytes() for path in targets})
@@ -367,14 +379,14 @@ class OrphanCleanupTest(unittest.TestCase):
                     self._state()
                     self._sweep(generation="run:1", apply=False)
                     state = cleaner._read_state()
-                    state["pendingCleanup"]["LEGACY"] = cleaner._build_intent(
-                        "LEGACY", ["run:1", "run:2"],
-                    )
+                    intent = cleaner._build_intent("LEGACY", ["run:1", "run:2"])
+                    state["pendingCleanup"]["LEGACY"] = intent
                     state["zeroConfirmations"]["LEGACY"] = 2
                     cleaner._write_state(state)
                     result = self._sweep(
                         quantities, complete=complete, generation="restart:1",
                         fresh=name != "incomplete", unresolved=unresolved,
+                        balance_fetch_started_at=self._after_intent(intent),
                     )[0]
                     self.assertEqual(result["classification"], expected)
                     retained = json.loads(cleaner.state_path.read_text())
@@ -391,13 +403,19 @@ class OrphanCleanupTest(unittest.TestCase):
         state["pendingCleanup"]["LEGACY"] = intent
         self.cleaner._write_state(state)
         destination = Path(intent["controls"][0]["destination"])
-        first = self._sweep(generation="restart:1", fresh=True)[0]
+        first = self._sweep(
+            generation="restart:1", fresh=True,
+            balance_fetch_started_at=self._after_intent(intent),
+        )[0]
         self.assertEqual(first["classification"], "cleaned")
         self.assertTrue(destination.exists())
         state = self.cleaner._read_state()
         state["pendingCleanup"]["LEGACY"] = intent
         self.cleaner._write_state(state)
-        second = self._sweep(generation="restart:2", fresh=True)[0]
+        second = self._sweep(
+            generation="restart:2", fresh=True,
+            balance_fetch_started_at=self._after_intent(intent, microseconds=2),
+        )[0]
         self.assertEqual(second["classification"], "cleaned")
         self.assertEqual(list(destination.parent.glob(f"{destination.stem}*")), [destination])
 
@@ -447,13 +465,16 @@ class OrphanCleanupTest(unittest.TestCase):
                         patch.object(cleaner, "_apply_mapping_target", side_effect=interrupted_mapping),
                         patch.object(cleaner, "_apply_whole_file_target", side_effect=interrupted_whole),
                     ):
-                        blocked = self._sweep(generation="restart:1", fresh=True)[0]
+                        blocked = self._sweep(
+                            generation="restart:1", fresh=True,
+                            balance_fetch_started_at=self._after_intent(intent),
+                        )[0]
                     self.assertEqual(blocked["classification"], "manual_review_cleanup_conflict")
                     restarted = OrphanStateCleaner(self.account, data, market="US")
                     resumed = restarted.sweep(
                         {}, True, lambda _symbol: False,
                         balance_generation="restart:2", fresh_balance=True,
-                        balance_fetch_started_at=datetime.now(timezone.utc).isoformat(),
+                        balance_fetch_started_at=self._after_intent(intent, microseconds=2),
                     )[0]
                     self.assertEqual(resumed["classification"], "cleaned")
                     self.assertNotIn(
