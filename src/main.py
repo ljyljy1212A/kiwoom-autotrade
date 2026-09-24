@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json
+from src.core.orphan_cleanup import account_cleanup_lock
 from src.core import dashboard_control_snapshot as control_snapshot
 
 import asyncio
@@ -592,17 +593,19 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
                 control_path = DATA_DIR / f"dashboard_control_{ctx.account_id}_{symbol}.json"
                 # Snapshot accounts require a separately validated baseline.
                 # Starting a worker must not mint dashboard execution authority.
-                if ctx.account_id not in {"kr_mock", "us_mock"} and not control_path.exists():
-                    atomic_write_json(
-                        control_path,
-                        {
-                            "symbol": symbol,
-                            "auto_buy": bool((config.get("auto_buy") or {}).get("enabled")),
-                            "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
-                            "config": config,
-                        },
-                        ensure_ascii=False,
-                    )
+                if ctx.account_id not in {"kr_mock", "us_mock"}:
+                    with account_cleanup_lock(DATA_DIR, ctx.account_id):
+                        if not control_path.exists():
+                            atomic_write_json(
+                                control_path,
+                                {
+                                    "symbol": symbol,
+                                    "auto_buy": bool((config.get("auto_buy") or {}).get("enabled")),
+                                    "auto_sell": bool((config.get("auto_sell") or {}).get("enabled")),
+                                    "config": config,
+                                },
+                                ensure_ascii=False,
+                            )
 
                 if not registry.claim(ctx.account_id, ctx.client.market, symbol):
                     # The normal configuration scan sees an already-running

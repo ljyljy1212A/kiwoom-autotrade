@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from src.core.orphan_cleanup import account_cleanup_lock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +73,11 @@ def _targets(repo: Path, account: str, *, control: bool = True, settings: bool =
 
 
 def _run(script: Path, account: str) -> subprocess.CompletedProcess[str]:
+    temp_dir = script.parent.parent / ".tmp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["TEMP"] = str(temp_dir)
+    env["TMP"] = str(temp_dir)
     return subprocess.run(
         [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Account", account],
         text=True,
@@ -77,6 +85,7 @@ def _run(script: Path, account: str) -> subprocess.CompletedProcess[str]:
         errors="replace",
         capture_output=True,
         check=False,
+        env=env,
     )
 
 
@@ -187,3 +196,25 @@ def test_anchor_mismatch_is_rejected(tmp_path: Path):
     assert "anchor count is 0; expected exactly 1" in result.stderr
     assert json.loads(control_path.read_text(encoding="utf-8"))["auto_trading_enabled"] is False
     assert settings_path.read_text(encoding="utf-8") == '{"profiles": [{"enabled": true}]}'
+
+
+def test_cleanup_lock_contention_disables_control_and_preserves_settings(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+    original_settings = settings_path.read_bytes()
+
+    with account_cleanup_lock(repo / "data", account):
+        blocked = _run(script, account)
+
+    assert blocked.returncode != 0
+    assert "Account cleanup lock unavailable" in _normalize_stderr(blocked.stderr)
+    assert json.loads(control_path.read_text(encoding="utf-8"))["auto_trading_enabled"] is False
+    assert settings_path.read_bytes() == original_settings
+
+    after_release = _run(script, account)
+    assert after_release.returncode == 0, after_release.stderr
+    profile = json.loads(settings_path.read_text(encoding="utf-8"))["profiles"][0]
+    assert profile["enabled"] is False
+    assert profile["auto_buy"]["enabled"] is False
+    assert profile["auto_sell"]["enabled"] is False

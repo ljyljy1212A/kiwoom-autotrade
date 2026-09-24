@@ -15,9 +15,12 @@ class _Logger:
 
 def _engine(path: Path, bases=None):
     engine = AccountEngine.__new__(AccountEngine)
+    engine.data_dir = path.parent
     engine._tranche_bases_path = path
     engine._tranche_bases = dict(bases or {})
-    engine.ctx = SimpleNamespace(logger=_Logger(), client=SimpleNamespace(market="KR"))
+    engine.ctx = SimpleNamespace(
+        account_id="kr_mock", logger=_Logger(), client=SimpleNamespace(market="KR")
+    )
     return engine
 
 

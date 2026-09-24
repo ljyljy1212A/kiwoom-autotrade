@@ -576,6 +576,12 @@ def stop(account, timeout: float | None = None):
                 stderr=subprocess.DEVNULL,
             )
             logger.info(f"taskkill result for {account}: pid={pid} instance={instance_id} returncode={result.returncode}")
+            if _pid_alive(pid):
+                try:
+                    logger.info(f"taskkill did not fully terminate {account}, falling back to SIGTERM: pid={pid} instance={instance_id}")
+                    os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
         else:
             try:
                 os.kill(pid, signal.SIGKILL)

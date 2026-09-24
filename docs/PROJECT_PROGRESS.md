@@ -806,3 +806,96 @@ publication succeeds and the final target identity is verified.
 - This was a read-only review and documentation update. No tests were run; no
   Git state-changing or delivery operations, CI, Canonical publication,
   runtime, Scheduler, network, account, credential, or order actions occurred.
+
+## 2026-09-23 — Orphan-cleanup crash-recovery design review
+
+- Read `AGENTS.md`, Canonical `CURRENT_STATE.md`, `docs/PROJECT_PROGRESS.md`, and `docs/CANONICAL_PUBLICATION_WORKFLOW.md` before reviewing the cleanup path.
+- Read-only inspection covered `src/core/orphan_cleanup.py`, its relevant `src/core/engine.py` and `src/main.py` call paths, balance normalization in `src/core/reconciliation.py` and `src/core/us_market.py`, and `tests/test_orphan_cleanup.py`.
+- Confirmed the existing orphan-candidate rule: a complete recognized broker balance with zero quantity, no unresolved order, and at least one tranche base, symbol control file, or open/pending lifecycle. The sweep requires two confirmations. Dashboard settings profiles enumerate symbols but do not independently qualify a symbol for cleanup.
+- Static review found that `_reconcile_balance()` passes the normalization `recognized` flag as the cleanup completeness flag, while the inspected recognizers check for balance-list field presence. Malformed list contents may therefore require stricter completeness validation before cleanup can treat an absent symbol as zero. The default shared-balance path may also reuse a cached response.
+- The per-account balance gate is shared by symbol engines and the balance monitor. The inspected gate serializes balance fetches, while the cleanup state file is also account-scoped; account-wide serialization of cleanup state updates was not present in the inspected path. Concurrent sweeps may race on confirmation and intent state.
+- Proposed design only: preserve the existing candidate rule; count two distinct complete broker observations; serialize account-scoped confirmation and cleanup state; persist a versioned cleanup intent before the first destructive step; use deterministic archive destinations and idempotent replay; and require a new complete broker balance plus a fresh no-unresolved-orders check before replay. Settings-only profiles remain ineligible, and changed or conflicting state should stop for manual review.
+- Identified focused regression cases for settings-only preservation, duplicate observation suppression, intent-before-mutation, interrupted-step replay, fixed archive destinations, invalid or nonzero balance, unresolved-order/read failures, profile changes, and concurrent cleaners.
+- This was a proposed design and static review only. No source or test files were changed; no tests were run. No Git state-changing or delivery actions, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order actions were performed.
+
+## 2026-09-23 — Orphan-cleanup crash-recovery and exchange-scoped balance implementation successor
+
+- Implemented the reviewed orphan-cleanup crash-recovery design in `src/core/orphan_cleanup.py`, `src/core/engine.py`, and `src/core/kiwoom_client.py`. The candidate rule remains unchanged: dashboard settings profiles enumerate symbols but do not independently qualify them for cleanup.
+- Added account-scoped cleanup serialization, persisted balance-generation confirmation state, versioned pending cleanup intents, deterministic control-file archive destinations, replay final-state checks, and manual-review retention for conflicting or changed cleanup targets.
+- Cleanup balance observation now requests each supported broker venue separately: KRX and NXT for real KR accounts, KRX for KR mock accounts, and ND, NY, and NA for US accounts. A positive quantity in any venue blocks zero-balance cleanup; duplicated venue rows are not summed.
+- Added fail-closed validation for explicit venue responses, pagination completion, holding-list rows, quantities, and market-valid symbol strings. An incomplete cleanup observation, nonzero quantity, unresolved order, or unresolved-order inspection failure blocks replay and retains the pending intent.
+- Corrected the active reconciliation path so an unrecognized normal balance records a fail-closed cleanup sweep. Headerless empty holdings pages may complete; a nonempty page without an explicit continuation indicator is rejected.
+- Updated `tests/test_orphan_cleanup.py`, `tests/test_manual_tranche_lifecycle.py`, and `tests/test_tranche_rebuild_ambiguous.py` with focused crash-recovery, venue coverage, malformed response, and current shared-balance fixture coverage.
+- Statically reviewed the changed cleanup, engine, client, and test paths. A local pytest run over `tests/test_orphan_cleanup.py`, `tests/test_manual_tranche_lifecycle.py`, `tests/test_reconciliation_clearance.py`, `tests/test_reconciliation_fail_closed.py`, `tests/test_tranche_rebuild_ambiguous.py`, and `tests/test_us_market.py` completed with `109 passed, 13 warnings in 6.17s`. The warnings came from `pandas_market_calendars`.
+- CI-verified, committed, pushed, merged, canonically published, and operationally validated are `INCOMPLETE`. Git and PR state were not inspected in this implementation sequence. No CI, Canonical publication, runtime, Scheduler, account, credential, or order action was performed.
+
+## 2026-09-24 — Orphan-cleanup writer lock integration successor
+
+- Statically mapped cleanup-target writers in `src/core/orphan_cleanup.py`, `src/core/engine.py`, `src/main.py`, and `dashboard/dashboard_server.py`. The separate mock dashboard control snapshot remains outside this cleanup-target lock contract. A broader tools search encountered access-denied directories, so operator-tool coverage remains INCOMPLETE.
+- Added a shared account cleanup lock helper using the existing `orphan_cleanup_<account>.lock` path. Reentrant acquisition by one thread uses one OS lock handle; other threads and processes serialize on the same path.
+- Wrapped engine tranche-base read-modify-write operations, lifecycle writes, confirmed-closure settings removal, full-close state retirement, dashboard settings updates, and real-account symbol-control initialization in this lock. Account lock acquisition precedes the engine tranche in-process lock.
+- Lifecycle persistence now merges only the engine's symbol into the latest account file while holding the lock. A changed same-symbol disk state or malformed lifecycle object raises instead of overwriting it.
+- Updated the existing tranche-base test fixture with the account ID and data directory required by the shared lock.
+- The four source files and one fixture were changed. Exact preimage and postimage SHA-256 values were checked for each source write. Static Python syntax parsing succeeded for the four source files; they remain UTF-8 with LF and EOF LF. No local test suite was run for this successor.
+- Live Kiwoom venue completeness, independent operator writers, cross-process runtime behavior, CI, Git delivery, Canonical publication, and operational validation remain INCOMPLETE. No runtime, Scheduler, network, account, credential, or order action was performed.
+- Engine tranche-base writes also compare the current on-disk lifecycle with the engine's saved same-symbol baseline under the account lock; a conflicting cleanup or lifecycle change stops the cache write.
+
+## 2026-09-24 — Orphan-cleanup writer lock regression verification
+
+- The first seven-file pytest run exposed one regression: after the orphan cleaner persisted a closed lifecycle, the engine retained a stale lifecycle baseline and blocked a valid dashboard reactivation.
+- Updated the cleanup-completion path to reload and validate the persisted closed lifecycle under the account lock before refreshing the engine baseline.
+- Re-ran `tests/test_orphan_cleanup.py`, `tests/test_manual_tranche_lifecycle.py`, `tests/test_reconciliation_clearance.py`, `tests/test_reconciliation_fail_closed.py`, `tests/test_tranche_rebuild_ambiguous.py`, `tests/test_us_market.py`, and `tests/test_tranche_base_persistence.py`: 114 passed, 13 warnings in 5.28s. Warnings came from `pandas_market_calendars`.
+- This is local pytest evidence only. CI, Git delivery, live Kiwoom response coverage, independent operator-writer coverage, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Emergency-stop settings writer joins the cleanup lock
+
+- Read-only writer inventory identified `ops/emergency_stop.ps1` as a direct writer of `dashboard_settings_<account>.json` without the account cleanup lock. The script's control-state target is separate from the orphan-cleanup targets.
+- The emergency-stop script now locks byte zero of `orphan_cleanup_<account>.lock` before reading or writing settings. It rechecks target existence under the lock, keeps the control-disable operation first, and fails explicitly after a bounded two-second lock wait. The lock handle is released and disposed on every acquired path.
+- Added a temporary-repository regression case that holds the Python cleanup lock in one process while invoking the PowerShell script in another. It confirms that control is disabled, settings remain unchanged on lock timeout, and a subsequent invocation completes after release.
+- Focused local pytest over `tests/test_emergency_stop_allowlist.py` completed with 10 passed in 7.16s. This verifies local Python/PowerShell byte-range lock interoperability and the script's existing allowlist paths in isolated mock fixtures.
+- No live account, credential, order, Scheduler, service, or runtime operation was performed. CI, Git delivery, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Bounded operator-writer inventory follow-up
+
+- Read-only search covered operational scripts under `ops` and 15 top-level `tools` scripts for cleanup-target names and file-write calls. The only production cleanup-target writer found in this scope was `ops/emergency_stop.ps1`, now covered by the shared account lock.
+- `tools/dashboard_isolated_validation_20260917_v1.py` writes dashboard settings/control fixtures under its isolated validation root. Installer writes found under `ops/installer` target environment, task configuration, or a temporary probe, not orphan-cleanup targets.
+- Deeper `tools` content remains SEARCH_INCOMPLETE because access was denied for pytest/evidence directories. This search does not establish global absence of another writer.
+
+## 2026-09-24 — Combined cleanup-lock regression run
+
+- Ran the seven orphan-cleanup, lifecycle, reconciliation, tranche rebuild, market, and tranche-base persistence test files together with `tests/test_emergency_stop_allowlist.py`.
+- The combined local pytest run completed with 124 passed, 13 warnings in 12.07s. Warnings came from `pandas_market_calendars`.
+- This confirms the combined selected local regression scope only. CI, full-repository pytest, Git delivery, live Kiwoom responses, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Repository pytest coverage follow-up
+
+- Attempted the repository test suite with the default static coverage test enabled. Collection reached `tests/test_notify_interface_coverage.py`, whose recursive source scan did not produce further progress during the bounded observation window; the run was interrupted, so it has no completed suite result.
+- Re-ran the discovered suite excluding only `tests/test_notify_interface_coverage.py`: 480 tests were collected; result was `2 failed, 473 passed, 4 skipped, 1 xfailed, 14 warnings` in 69.80 seconds. This is partial local pytest evidence, not a full-suite pass.
+- `tests/test_retry_boundary_reproduction.py::RetryBoundaryReproductionTest::test_real_post_retry_exhaustion_exception_type` failed because the observed exception was `TypeError` while the test expected `RetryableError`; the stack showed the mocked `headers()` call receiving `cont_yn`. Cause and relation to the cleanup-lock changes are not established.
+- `tests/test_worker_killswitch.py::SupervisorKillTests::test_stop_stops_mock_lock_holder_and_releases_lock` failed because the stop operation returned 6 with a forced-stop payload reporting `stopped: false` and `running: true`. Cause and relation to the cleanup-lock changes are not established. No process inspection or termination follow-up was performed.
+- The two failures require separate diagnosis. The skipped recursive coverage test, CI status, Git delivery, live Kiwoom response coverage, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Retry fixture and Windows supervisor stop follow-up
+
+- The retry-exhaustion test fixture supplied a `_headers` replacement that accepted only the API ID, while `KiwoomClient._post_once()` now passes `cont_yn` and `next_key`. Updated only that replacement signature in `tests/test_retry_boundary_reproduction.py`; the retry test then passed.
+- A focused pre-change rerun reproduced the Windows supervisor stop failure: the retry test passed, while the mock lock-holder stop test returned 6 with `running: true` and `stopped: false`. The account-specific supervisor log recorded `taskkill` return code 1. A separate temporary Python child confirmed that `taskkill /PID <child> /T /F` returned `ERROR: Access denied` in this environment; the diagnostic child was then killed and waited for by its parent.
+- Added to `src/worker_supervisor.py::stop()` the same Windows `SIGTERM` fallback already present in `kill()`, used only when the target PID remains alive after `taskkill`. The existing PID and account-mutex exit confirmation still controls success; failure remains fail closed. The source preimage SHA-256 was `C27EE333FB94ABF2A749EC614C462894E63F8F071AF5704EFD39671FB37AA37F` and the exact postimage SHA-256 was `065F7DF32A222BBB942E558D6B8A27888E4C9E68BC2ED8DAC5E58636527A6BFA`.
+- The normal patch tool rejected the source path as containing a reparse point. An initial exact-byte writer received `Permission denied`; a subsequent explicitly scoped elevated write succeeded with the preimage and unique-anchor checks. The verified source postimage remains strict UTF-8, LF only, with EOF LF.
+- One test command used an incorrect supervisor test class name and collected no tests. The corrected focused run of the retry test, both Windows mock kill/stop tests, and the supervisor stop escalation unit test completed with `4 passed in 14.36s`. The new stop log recorded `taskkill` return code 1 followed by the `SIGTERM` fallback.
+- This is local isolated-mock evidence. The earlier 480-item suite result remains historical and was not rerun after this change. CI, Git delivery, live process behavior, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Full local suite after Windows stop and retry repairs
+
+- The previously excluded static notification coverage test recursively traversed generated evidence, caches, and virtual environments beneath `tools`. Restricted its `tools` search to top-level Python scripts while retaining recursive searches under `src` and `dashboard`. The two coverage tests then passed in 0.47s. The test source preimage SHA-256 was `AE894D949B03FEADFE1772BD00C3963CB30AB31B9177F2FF67A91652ABBE4B36`; exact postimage SHA-256 was `B8279653842A5B2CBCB67116A7F195987719D4653350111E3B1708B959482C3D`.
+- Re-ran the prior 480-item suite with only `tests/test_notify_interface_coverage.py` excluded after the retry and supervisor repairs: `475 passed, 4 skipped, 1 xfailed, 14 warnings in 60.07s`.
+- Ran the complete repository test suite with no excluded test files: `477 passed, 4 skipped, 1 xfailed, 14 warnings in 60.98s`. The warnings originated in `pandas_market_calendars`. This establishes a passing full local pytest run for the current checkout.
+- All test runs used an isolated writable basetemp and disabled pytest cache writes. The changed files in this follow-up are `src/worker_supervisor.py`, `tests/test_retry_boundary_reproduction.py`, `tests/test_notify_interface_coverage.py`, and this appended progress document.
+- This is local test evidence. Git/PR state, CI, live worker stop behavior, live Kiwoom response completeness, independent writer coverage, Canonical publication, and operational validation remain INCOMPLETE. No live account, credential, order, Scheduler, or production runtime operation was performed.
+
+## 2026-09-24 — PR #35 CI failure repair
+
+- PR #35 required Windows CI reported two failures in `test_replay_is_blocked_by_each_fail_closed_broker_condition`: replay was blocked as stale when intent creation and the simulated balance-fetch start received equal timestamps. The test now supplies a deterministic fetch-start time after the intent in its immediate replay scenarios. Production replay freshness rules were not changed.
+- PR #35 Ubuntu CI reported one failure in `test_cleanup_lock_contention_disables_control_and_preserves_settings`: on Linux, opening the held cleanup lock file itself raised an `IOException` before the prior retry loop. `Enter-CleanupTargetLock` now retries both file open and byte-range lock for up to 2000 ms, disposes failed streams, retries only the underlying `IOException`, and otherwise fails closed.
+- Changed files: `ops/emergency_stop.ps1` (SHA-256 `BD0FEBA902472244EA40FCC512A0C5AE92643EFEBF78D03B09A3FE5D8F009564`) and `tests/test_orphan_cleanup.py` (SHA-256 `00ACC21E7B315D17099C08276E3706D62E48BCB56D1021F80EE4CC71E894A5DA`). Both postimages are strict UTF-8 without BOM, LF only, and have EOF LF. `git diff --check` passed for both files.
+- The repository `.venv` could not collect tests because its `_ssl` extension could not load. With the verified system Python 3.14 interpreter, `tests/test_orphan_cleanup.py` and `tests/test_emergency_stop_allowlist.py` completed with 28 passed and 9 subtests passed in 9.92 seconds, using an isolated basetemp and disabled pytest cache writes.
+- This is a focused local test result. The PR CI result has not yet been refreshed after these changes. Full-suite retesting, Git delivery, Canonical publication, live Kiwoom responses, runtime, Scheduler, account, credential, and order validation remain INCOMPLETE at this point.

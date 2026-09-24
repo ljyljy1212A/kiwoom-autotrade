@@ -71,14 +71,21 @@ def _engine(tmp_path, *, raw_balance=None, balance_only=False, position_qty=3,
     engine._refresh_open_lifecycle_manual_basis = Mock()
     engine._validated_manual_tranche_base = Mock(return_value=101.0)
     engine._orphan_cleaner = Mock()
+    engine._orphan_cleaner.has_pending_cleanup.return_value = False
     engine._orphan_cleaner.sweep.return_value = []
     engine.telegram = make_telegram_double()
-    engine._shared_broker_balance = AsyncMock(return_value=(raw_balance if raw_balance is not None else {
+    broker_balance = raw_balance if raw_balance is not None else {
         "acnt_evlt_remn_indv_tot": [{
             "stk_cd": "000490", "rmnd_qty": "2", "pur_pric": "100",
             "cur_prc": "100",
         }],
-    }))
+    }
+    engine._shared_broker_balance = AsyncMock(
+        return_value=(broker_balance, 0.0, "fixture:1", True),
+    )
+    engine._shared_orphan_balance = AsyncMock(
+        return_value=({}, False, "", False, ""),
+    )
     return engine
 
 

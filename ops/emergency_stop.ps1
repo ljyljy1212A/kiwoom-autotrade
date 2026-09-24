@@ -47,6 +47,48 @@ function Replace-LiteralOnce {
     }
 }
 
+function Enter-CleanupTargetLock {
+    param(
+        [string]$RepoRoot,
+        [string]$Account
+    )
+
+    $lockPath = Join-Path $RepoRoot "data\orphan_cleanup_$Account.lock"
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $stream = $null
+        try {
+            $stream = [System.IO.File]::Open(
+                $lockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::ReadWrite
+            )
+            if ($stream.Length -eq 0) {
+                $stream.WriteByte(48)
+                $stream.Flush()
+            }
+            $stream.Lock(0, 1)
+            return $stream
+        } catch {
+            $failure = $_.Exception
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            while ($null -ne $failure.InnerException) {
+                $failure = $failure.InnerException
+            }
+            if ($failure -isnot [System.IO.IOException]) {
+                throw
+            }
+            if ($timer.ElapsedMilliseconds -ge 2000) {
+                throw "Account cleanup lock unavailable for $Account after 2000 ms"
+            }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+}
+
 $repoRoot = $PSScriptRoot | Split-Path -Parent
 $accountsPath = Join-Path $PSScriptRoot '..\config\accounts.yaml'
 $allowlistValidator = @'
@@ -126,35 +168,44 @@ if ($controlExists) {
 }
 
 if ($settingsExists) {
-    $before = [System.IO.File]::ReadAllText($settingsPath)
-    $emptyProfilesLiteral = '{"profiles": [], "auto_remove_closed_positions": true}'
+    $settingsLock = Enter-CleanupTargetLock -RepoRoot $repoRoot -Account $Account
+    try {
+        if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
+            throw "Settings target missing under account cleanup lock: $settingsPath"
+        }
+        $before = [System.IO.File]::ReadAllText($settingsPath)
+        $emptyProfilesLiteral = '{"profiles": [], "auto_remove_closed_positions": true}'
 
-    if ($before -ceq $emptyProfilesLiteral) {
-        Write-Output "No profile present for $Account; settings check complete."
-    } else {
-        $anchors = @(
-            [pscustomobject]@{ Label = "profile.enabled"; Text = '"config": {"max_cycles": null}, "enabled": true'; Replacement = '"config": {"max_cycles": null}, "enabled": false' },
-            [pscustomobject]@{ Label = "auto_buy.enabled"; Text = '"auto_buy": {"enabled": true'; Replacement = '"auto_buy": {"enabled": false' },
-            [pscustomobject]@{ Label = "auto_sell.enabled"; Text = '"auto_sell": {"enabled": true'; Replacement = '"auto_sell": {"enabled": false' }
-        )
-        foreach ($a in $anchors) {
-            $c = Get-LiteralCount -Text $before -Literal $a.Text
-            if ($c -ne 1) {
-                throw "$($a.Label) anchor count is $c; expected exactly 1."
+        if ($before -ceq $emptyProfilesLiteral) {
+            Write-Output "No profile present for $Account; settings check complete."
+        } else {
+            $anchors = @(
+                [pscustomobject]@{ Label = "profile.enabled"; Text = '"config": {"max_cycles": null}, "enabled": true'; Replacement = '"config": {"max_cycles": null}, "enabled": false' },
+                [pscustomobject]@{ Label = "auto_buy.enabled"; Text = '"auto_buy": {"enabled": true'; Replacement = '"auto_buy": {"enabled": false' },
+                [pscustomobject]@{ Label = "auto_sell.enabled"; Text = '"auto_sell": {"enabled": true'; Replacement = '"auto_sell": {"enabled": false' }
+            )
+            foreach ($a in $anchors) {
+                $c = Get-LiteralCount -Text $before -Literal $a.Text
+                if ($c -ne 1) {
+                    throw "$($a.Label) anchor count is $c; expected exactly 1."
+                }
             }
+            foreach ($a in $anchors) {
+                $res = Replace-LiteralOnce -Text $before -Literal $a.Text -Replacement $a.Replacement -Label $a.Label
+                $before = $res.After
+            }
+            if ([string]::IsNullOrWhiteSpace($before) -or
+                $before.IndexOf('"profiles"', [System.StringComparison]::Ordinal) -lt 0 -or
+                $before.IndexOf('"auto_buy": {"enabled": false}', [System.StringComparison]::Ordinal) -lt 0 -or
+                $before.IndexOf('"auto_sell": {"enabled": false}', [System.StringComparison]::Ordinal) -lt 0 -or
+                $before.IndexOf('"enabled": false', [System.StringComparison]::Ordinal) -lt 0) {
+                throw "Settings content validation failed before write for $Account; original file was left untouched."
+            }
+            [System.IO.File]::WriteAllText($settingsPath, $before, [System.Text.UTF8Encoding]::new($false))
         }
-        foreach ($a in $anchors) {
-            $res = Replace-LiteralOnce -Text $before -Literal $a.Text -Replacement $a.Replacement -Label $a.Label
-            $before = $res.After
-        }
-        if ([string]::IsNullOrWhiteSpace($before) -or
-            $before.IndexOf('"profiles"', [System.StringComparison]::Ordinal) -lt 0 -or
-            $before.IndexOf('"auto_buy": {"enabled": false}', [System.StringComparison]::Ordinal) -lt 0 -or
-            $before.IndexOf('"auto_sell": {"enabled": false}', [System.StringComparison]::Ordinal) -lt 0 -or
-            $before.IndexOf('"enabled": false', [System.StringComparison]::Ordinal) -lt 0) {
-            throw "Settings content validation failed before write for $Account; original file was left untouched."
-        }
-        [System.IO.File]::WriteAllText($settingsPath, $before, [System.Text.UTF8Encoding]::new($false))
+    } finally {
+        try { $settingsLock.Unlock(0, 1) }
+        finally { $settingsLock.Dispose() }
     }
 } else {
     $failures.Add("settings target missing: $settingsPath")

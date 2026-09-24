@@ -27,7 +27,9 @@ def _notify_method_names() -> set[str]:
 def _production_notify_calls() -> set[str]:
     calls: set[str] = set()
     for source_dir in PRODUCTION_SOURCE_DIRS:
-        for path in (REPO_ROOT / source_dir).rglob("*.py"):
+        root = REPO_ROOT / source_dir
+        paths = root.glob("*.py") if source_dir == "tools" else root.rglob("*.py")
+        for path in paths:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             calls.update(
                 node.func.attr

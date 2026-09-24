@@ -223,9 +223,12 @@ class KiwoomClient:
         body: dict,
         _reauth_attempt: bool = False,
         allow_reauth_retry: bool = True,
+        cont_yn: str = "N",
+        next_key: str = "",
+        response_headers: dict | None = None,
     ) -> dict:
         url = f"{self.domain}{path}"
-        headers = await self._headers(api_id)
+        headers = await self._headers(api_id, cont_yn=cont_yn, next_key=next_key)
         async with self._http_gate.client(timeout=15) as client:
             try:
                 with http_operation("rest"):
@@ -276,9 +279,15 @@ class KiwoomClient:
                     body,
                     _reauth_attempt=True,
                     allow_reauth_retry=allow_reauth_retry,
+                    cont_yn=cont_yn,
+                    next_key=next_key,
+                    response_headers=response_headers,
                 )
             raise KiwoomAPIError(api_id, return_code, data.get("return_msg", ""), data)
 
+        if response_headers is not None:
+            response_headers["cont-yn"] = resp.headers.get("cont-yn")
+            response_headers["next-key"] = resp.headers.get("next-key")
         return data
 
     @retry(
@@ -287,8 +296,14 @@ class KiwoomClient:
         retry=retry_if_exception_type(RetryableError),
         reraise=True,
     )
-    async def _post(self, path: str, api_id: str, body: dict, _reauth_attempt: bool = False) -> dict:
-        return await self._post_once(path, api_id, body, _reauth_attempt=_reauth_attempt)
+    async def _post(
+        self, path: str, api_id: str, body: dict, _reauth_attempt: bool = False,
+        *, cont_yn: str = "N", next_key: str = "", response_headers: dict | None = None,
+    ) -> dict:
+        return await self._post_once(
+            path, api_id, body, _reauth_attempt=_reauth_attempt,
+            cont_yn=cont_yn, next_key=next_key, response_headers=response_headers,
+        )
 
     # ------------------------------------------------------------------
     # 주문 (매수/매도/정정/취소)
@@ -380,15 +395,63 @@ class KiwoomClient:
     # ------------------------------------------------------------------
     # 잔고 / 예수금
     # ------------------------------------------------------------------
-    async def get_balance(self) -> dict:
-        """계좌평가잔고내역 (국내 kt00018) 또는 해외 예수금/평가 (ust21120)."""
+    async def get_balance(self, *, exchange: str | None = None) -> dict:
+        """Fetch every page of one domestic or overseas holdings scope.
+
+        The default scope preserves the existing reconciliation request. An
+        explicit exchange is used by orphan cleanup to inspect every supported
+        venue separately before treating an absent symbol as a zero holding.
+        """
         if self.market == "US":
+            if exchange is not None and exchange not in {"ND", "NY", "NA"}:
+                raise ValueError("unsupported US balance exchange")
             # ust21120 is only the currency/deposit summary. ust21070 is the
             # authoritative US ledger balance containing per-stock positions.
-            data = await self._post("/api/us/acnt", "ust21070", {"stex_tp": "", "stk_cd": ""})
+            path, api_id, body, rows_key = (
+                "/api/us/acnt", "ust21070", {"stex_tp": exchange or "", "stk_cd": ""}, "result_list"
+            )
         else:
-            data = await self._post("/api/dostk/acnt", "kt00018", {"qry_tp": "1", "dmst_stex_tp": "KRX"})
-        return data
+            if exchange is not None and exchange not in {"KRX", "NXT"}:
+                raise ValueError("unsupported domestic balance exchange")
+            path, api_id, body, rows_key = (
+                "/api/dostk/acnt", "kt00018", {"qry_tp": "1", "dmst_stex_tp": exchange or "KRX"},
+                "acnt_evlt_remn_indv_tot",
+            )
+        combined: dict | None = None
+        continuation = "N"
+        next_key = ""
+        seen_keys: set[str] = set()
+        for _ in range(100):
+            response_headers: dict = {}
+            page = await self._post(
+                path, api_id, body, cont_yn=continuation, next_key=next_key,
+                response_headers=response_headers,
+            )
+            if not isinstance(page, dict) or not isinstance(page.get(rows_key), list):
+                raise ValueError(f"{api_id} returned an invalid holdings list")
+            if exchange is not None and page.get("return_code") not in (0, "0"):
+                raise ValueError(f"{api_id} returned an unsuccessful holdings page")
+            if combined is None:
+                combined = dict(page)
+                combined[rows_key] = list(page[rows_key])
+            else:
+                combined[rows_key].extend(page[rows_key])
+            continuation = str(response_headers.get("cont-yn") or "").upper()
+            response_next_key = str(response_headers.get("next-key") or "")
+            # Accept a headerless terminal response only for an empty page.
+            # Nonempty pages require an explicit continuation indicator.
+            if continuation == "N" or (
+                not continuation and not response_next_key and not page[rows_key]
+            ):
+                combined["_balance_pages_complete"] = True
+                return combined
+            if continuation != "Y":
+                raise ValueError(f"{api_id} returned an invalid continuation indicator")
+            next_key = response_next_key
+            if not next_key or next_key in seen_keys:
+                raise ValueError(f"{api_id} returned an invalid continuation key")
+            seen_keys.add(next_key)
+        raise ValueError(f"{api_id} exceeded the balance page limit")
 
     async def get_cash(self) -> dict:
         if self.market == "US":
