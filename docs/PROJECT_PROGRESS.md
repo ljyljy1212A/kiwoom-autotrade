@@ -944,3 +944,12 @@ publication succeeds and the final target identity is verified.
 - PR pull_request CI run `36076817779` and automatic `master` push CI run `36077146320` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory passed in both runs.
 - This successor records repository delivery and CI evidence only. No local tests were run for this documentation update; live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified.
 - This is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No additional CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #40 merge and master CI successor
+
+- PR #40, `docs: record PR #39 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `928d804c8061ea6e3f1410f650e367d24357f8b1` against `master` at `0bea33c708fe227aa91bb8600195b4e9b17f33e5`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 7 additions.
+- A direct PR metadata query returned `open` and `mergeable: true`. The pull_request workflow run `36078489381` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #40 was merged with the `merge` method after its head SHA was rechecked as `928d804c8061ea6e3f1410f650e367d24357f8b1`. The merge commit is `c4275d3ef210828f579b5178b4fc2ae83159ffe0`.
+- The automatic `master` push workflow run `36078729943` for merge commit `c4275d3ef210828f579b5178b4fc2ae83159ffe0` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run in this conversation. This successor records GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update. No Git stage, commit, or push was performed for this entry. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed.
