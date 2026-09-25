@@ -930,3 +930,10 @@ publication succeeds and the final target identity is verified.
 - The merged change contains this progress record and the 26-line Canonical append candidate, for 33 additions across two files. The Canonical `CURRENT_STATE.md` publication was verified in the preceding successor; this delivery follow-up made no Canonical changes.
 - No local tests were run after the merge. Live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified. No cleanup or permission changes were made; access-denied directories still prevent a complete untracked-file inventory.
 - This successor is a repository-local progress update only. No further Git delivery, CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #38 merge and master CI successor
+
+- PR #38, `docs: record PR #37 merge and master CI`, merged into `master` at `5a0984bb291600bd6ce7638dbe0a9bb1b7c0070a`. Its head was `96a825539c98f70f6dfbd00e89d77f922feee8f5`; the base was `7c31f221cfcab7087534db4f0ca09aa3801ca9cc`.
+- PR pull_request CI run `36074989371` and automatic `master` push CI run `36075666741` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory passed in both runs.
+- This successor records repository delivery and CI evidence only. No local tests were run for this documentation update; live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified.
+- This is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No additional CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
