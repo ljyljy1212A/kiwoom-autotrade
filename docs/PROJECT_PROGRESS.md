@@ -937,3 +937,10 @@ publication succeeds and the final target identity is verified.
 - PR pull_request CI run `36074989371` and automatic `master` push CI run `36075666741` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory passed in both runs.
 - This successor records repository delivery and CI evidence only. No local tests were run for this documentation update; live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified.
 - This is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No additional CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #39 merge and master CI successor
+
+- PR #39, `docs: record PR #38 merge and master CI`, merged into `master` at `0bea33c708fe227aa91bb8600195b4e9b17f33e5`. Its head was `8da3a7fe9daa8d790b5884d62c291023fe29f13f`; the base was `5a0984bb291600bd6ce7638dbe0a9bb1b7c0070a`.
+- PR pull_request CI run `36076817779` and automatic `master` push CI run `36077146320` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory passed in both runs.
+- This successor records repository delivery and CI evidence only. No local tests were run for this documentation update; live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified.
+- This is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No additional CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
