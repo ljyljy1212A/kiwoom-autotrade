@@ -978,3 +978,11 @@ publication succeeds and the final target identity is verified.
 - The automatic `master` push workflow run `36092192061` for merge commit `0790ed812c9cf101fba09859b3c1a6d3626d2adb` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
 - No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
 - This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+## 2026-09-26 — PR #44 merge and master CI successor
+
+- PR #44, `docs: record PR #43 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `8f905c3cf7c5628344ba260957ad9b8d62758b4e` against `master` at `0790ed812c9cf101fba09859b3c1a6d3626d2adb`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 8 additions.
+- The PR pull_request workflow run `36180335168` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #44 was merged with the `merge` method after its head SHA was rechecked as `8f905c3cf7c5628344ba260957ad9b8d62758b4e`. The merge commit is `0999bad372d5cd2a71a647348da1a5a43432abbc`.
+- The automatic `master` push workflow run `36181181633` for merge commit `0999bad372d5cd2a71a647348da1a5a43432abbc` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
