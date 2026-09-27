@@ -157,7 +157,7 @@ def _write_startup_status(status_dir: Path) -> None:
         "account_scope": list(ACCOUNTS),
     }
     status_dir.mkdir(parents=True, exist_ok=True)
-    status_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(status_path, payload, ensure_ascii=False, indent=2)
 
 
 def main() -> int:
