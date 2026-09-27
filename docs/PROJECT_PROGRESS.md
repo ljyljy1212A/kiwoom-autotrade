@@ -962,6 +962,7 @@ publication succeeds and the final target identity is verified.
 - The automatic `master` push workflow run `36082068579` for merge commit `b630310e134d48baee05d51273c7f144a51a1ff4` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
 - No local tests were run for this documentation correction. This successor records GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
 - This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
 ## 2026-09-25 — PR #42 merge and master CI successor
 
 - PR #42, `docs: record PR #41 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `81e40bd9da99439502acae0aed263df1c24689ff` against `master` at `b630310e134d48baee05d51273c7f144a51a1ff4`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 9 additions.
@@ -1029,3 +1030,21 @@ publication succeeds and the final target identity is verified.
 - The automatic `master` push workflow run `36189007005` for merge commit `49b2ec708ce155ac55a9b3eb9da1e30d7d9d7517` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
 - No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
 - This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-27 — PR #50 feature merge and master CI successor
+
+- PR #50, `fix: write startup status atomically`, was created from `codex/startup-sync-failure-characterization` at head `1ada3b49741b6075f00eba7cea5f527699433992` against `master`. Its five-file change set included atomic startup-status writes for Telegram and the heartbeat watchdog, the scheduled health-check task path correction, the recovery-symbol test file newline/whitespace correction, and the PR #49 merge/master-CI progress record.
+- The PR pull_request workflow runs `36287425246` and `36287564012` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- Focused Windows tests for atomic writes, Telegram control bot, heartbeat watchdog, and recovery symbol configuration passed: 57 tests. An initial run using the checkout's `.pytest-tmp` failed during setup/cleanup with `WinError 5`; rerunning with an isolated basetemp outside the checkout passed all 57 tests.
+- The scheduled-task XML parsed successfully, and its configured project script and working directory existed. The Windows Scheduler task itself was not run.
+- PR #50 was merged with the `merge` method after its head SHA was rechecked as `1ada3b49741b6075f00eba7cea5f527699433992`. The merge commit is `d33c0bd1566be7592e2ef523ac26f458667b8aa1`.
+- The automatic `master` push workflow run `36288806019` for merge commit `d33c0bd1566be7592e2ef523ac26f458667b8aa1` completed successfully for `linux-smoke`.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-27 — PR #50 Canonical publication recovery
+
+- An elevated patch-engine Apply attempt for `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` returned `Invalid patch: The last line of the patch must be '*** End Patch'`. Publication was `CANONICAL_PENDING` at that point. A subsequent read confirmed the target still had its 70,929-byte preimage with SHA-256 `5D856539CDCB93CCC65719BF9F622B48D07D0F2BD0EBE15174D1591E72A8B1B5`.
+- The repository append source `tools/CURRENT_STATE_20260927_PR50_APPEND_CANDIDATE.md` was verified as 1,468 bytes with SHA-256 `A95DF0F2FF6354B36325F71951B9E8A400772682AF843642C10FF5C661A94F8A`. Its concatenation with the unchanged target produced candidate SHA-256 `B852DFD175626EDE69F06FE606E80F64DC31E233E59F82D9567ADF5897011C01`.
+- The fixed-target `tools/canonical_publisher.ps1` preflight passed with operation ID `256ce052-7afe-4c6f-9ab6-16e1bf11e9f3` and the same preimage, append, and candidate hashes. Its separately authorized Apply returned `Publish: PASS` for `CURRENT_STATE.md`.
+- Independent readback confirmed the published target was 72,397 bytes with SHA-256 `B852DFD175626EDE69F06FE606E80F64DC31E233E59F82D9567ADF5897011C01`, strict UTF-8, no BOM, the original three CRLF pairs, no bare CR, EOF LF, and an exact append-source suffix. The operation lock, backup, and temporary paths were absent.
+- The earlier `CANONICAL_PENDING` state is resolved by this verified publication. No runtime, Scheduler, account, credential, or order validation is claimed.
