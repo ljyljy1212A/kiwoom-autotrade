@@ -1100,3 +1100,9 @@ publication succeeds and the final target identity is verified.
 - PR #59, `docs: record PR #58 merge and master CI`, was merged into `master` with the `merge` method after its head SHA was rechecked as `f6cc0b0f3bf5754dfabbfee8314c6b10f4ae4b0c`. The merge commit is `91f77594e0f1d37092d2f94a73739442204da0df`.
 - The automatic `master` push workflow run `36302550816` for merge commit `91f77594e0f1d37092d2f94a73739442204da0df` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory all completed with conclusion `success`.
 - No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — Account control-state writer serialization
+
+- Added an account-scoped `control_state_{account}.lock` shared by Python control-state writers and `ops/emergency_stop.ps1`. The control switch and fixed-port/pause event writers now retain unrelated fields while serializing their read-modify-write operations.
+- `ops/emergency_stop.ps1` now acquires the same bounded control-state lock and atomically replaces the existing control file. It fails closed before either target is changed when that lock is unavailable.
+- Focused Windows validation passed: `60 passed in 12.74s` with Python 3.14.7 and pytest 9.1.1 across runtime-control, emergency-stop, fixed-port, and reconciliation tests. This is local test evidence only; it does not establish CI verification, Canonical publication, or operational validation. No runtime, Scheduler, network, account, credential, or order validation was performed.

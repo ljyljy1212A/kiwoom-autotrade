@@ -89,6 +89,59 @@ function Enter-CleanupTargetLock {
     }
 }
 
+function Enter-ControlStateLock {
+    param(
+        [string]$RepoRoot,
+        [string]$Account
+    )
+
+    $lockPath = Join-Path $RepoRoot "data\control_state_$Account.lock"
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $stream = $null
+        try {
+            $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            if ($stream.Length -eq 0) {
+                $stream.WriteByte(0)
+                $stream.Flush()
+            }
+            $stream.Lock(0, 1)
+            return $stream
+        } catch [System.IO.IOException] {
+            if ($null -ne $stream) { $stream.Dispose() }
+            if ($timer.Elapsed.TotalSeconds -ge 2) {
+                throw "Account control-state lock unavailable for $Account within 2 seconds."
+            }
+            Start-Sleep -Milliseconds 50
+        } catch {
+            if ($null -ne $stream) { $stream.Dispose() }
+            throw
+        }
+    }
+}
+
+function Write-AtomicUtf8 {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $directory = [System.IO.Path]::GetDirectoryName($Path)
+    $temporary = Join-Path $directory (".{0}.{1}.tmp" -f [System.IO.Path]::GetFileName($Path), [guid]::NewGuid().ToString("N"))
+    $backup = Join-Path $directory (".{0}.{1}.bak" -f [System.IO.Path]::GetFileName($Path), [guid]::NewGuid().ToString("N"))
+    try {
+        [System.IO.File]::WriteAllText($temporary, $Content, [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Replace($temporary, $Path, $backup)
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 $repoRoot = $PSScriptRoot | Split-Path -Parent
 $accountsPath = Join-Path $PSScriptRoot '..\config\accounts.yaml'
 $allowlistValidator = @'
@@ -158,11 +211,20 @@ if ($validationExitCode -ne 0) {
 
 $failures = [System.Collections.Generic.List[string]]::new()
 if ($controlExists) {
-    $ctrl = Get-Content $controlPath -Raw | ConvertFrom-Json
-    $ctrl.auto_trading_enabled = $false
-    $ctrlJson = $ctrl | ConvertTo-Json -Depth 10
-    [System.IO.File]::WriteAllText($controlPath, $ctrlJson, [System.Text.UTF8Encoding]::new($false))
-    Write-Output "Control file auto_trading_enabled set to false for $Account"
+    $controlLock = Enter-ControlStateLock -RepoRoot $repoRoot -Account $Account
+    try {
+        if (-not (Test-Path -LiteralPath $controlPath -PathType Leaf)) {
+            throw "Control target missing under account control-state lock: $controlPath"
+        }
+        $ctrl = Get-Content $controlPath -Raw | ConvertFrom-Json
+        $ctrl.auto_trading_enabled = $false
+        $ctrlJson = $ctrl | ConvertTo-Json -Depth 10
+        Write-AtomicUtf8 -Path $controlPath -Content $ctrlJson
+        Write-Output "Control file auto_trading_enabled set to false for $Account"
+    } finally {
+        try { $controlLock.Unlock(0, 1) }
+        finally { $controlLock.Dispose() }
+    }
 } else {
     $failures.Add("control target missing: $controlPath")
 }
