@@ -45,6 +45,7 @@ from src.core.us_market import (
 from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
 from src.core.lifecycle_persistence import (
     assert_symbol_lifecycle_current,
+    load_closed_symbol_lifecycles,
     load_symbol_lifecycles,
     merge_symbol_lifecycle_locked,
 )
@@ -2460,15 +2461,7 @@ class AccountEngine:
             # otherwise re-enabling the same symbol can incorrectly reuse the
             # old open activation identity.
             with account_cleanup_lock(self.data_dir, self.ctx.account_id):
-                latest = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
-                if (
-                    not isinstance(latest, dict)
-                    or not isinstance(latest.get(symbol_key), dict)
-                    or latest[symbol_key].get("status") != "closed"
-                ):
-                    raise RuntimeError(
-                        f"Orphan cleanup completed without a closed lifecycle marker for {symbol_key}"
-                    )
+                latest = load_closed_symbol_lifecycles(self._lifecycle_path, symbol_key)
                 self._symbol_lifecycles = latest
                 self._lifecycle_disk_present = True
                 self._lifecycle_disk_state = copy.deepcopy(latest[symbol_key])

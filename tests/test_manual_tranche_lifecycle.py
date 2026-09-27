@@ -7,13 +7,14 @@ automated tranche-2 fill.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import src.core.engine as engine_module
 from src.core.account_manager import AccountContext
@@ -71,7 +72,127 @@ class _Logger:
     def exception(self, *_args): pass
 
 
+def _orphan_cleanup_reconcile_engine(data_dir: Path) -> tuple[AccountEngine, Path]:
+    account = "lifecycle_verify_mock"
+    symbol = "000490"
+    lifecycle_path = data_dir / f"symbol_lifecycles_{account}.json"
+    lifecycle_path.write_text(
+        json.dumps({symbol: {"status": "closed", "closed_at": "2026-09-28T00:00:00+00:00"}}),
+        encoding="utf-8",
+    )
+    engine = AccountEngine.__new__(AccountEngine)
+    engine.ctx = SimpleNamespace(
+        account_id=account,
+        client=SimpleNamespace(market="KR"),
+        strategy=SimpleNamespace(symbol=symbol, step_qty={1: 1}, step_prices={1: 10.0}),
+        logger=_Logger(),
+        currency="KRW",
+        reporting_currency="KRW",
+    )
+    engine.data_dir = data_dir
+    engine._balance_gate = engine_module._AccountBalanceGate()
+    engine._orphan_cleaner = SimpleNamespace(
+        has_pending_cleanup=lambda: False,
+        sweep=Mock(return_value=[{"symbol": symbol, "classification": "cleaned", "removed": []}]),
+    )
+    engine._shared_broker_balance = AsyncMock(return_value=({}, 0.0, "run:1", True))
+    engine._shared_orphan_balance = AsyncMock(return_value=(
+        {}, True, "run:1", True, "2026-09-28T00:00:00+00:00",
+    ))
+    engine._symbol_key_migration_complete = True
+    engine._symbol_key_manual_review = Mock(return_value=False)
+    engine._balance_only = False
+    engine._lifecycle_pending_adoption = False
+    engine._reconciliation_incomplete_reasons = Mock(return_value=frozenset())
+    engine._lifecycle_path = lifecycle_path
+    engine._symbol_lifecycles = {symbol: {"status": "open", "started_at": "old"}}
+    engine._lifecycle_disk_present = True
+    engine._lifecycle_disk_state = copy.deepcopy(engine._symbol_lifecycles[symbol])
+    engine._tranche_bases = {}
+    engine._fx_rate_krw = None
+    engine._closed_symbols_blocked = set()
+    engine._dashboard_auto_buy = True
+    engine._dashboard_auto_sell = True
+    engine._dashboard_profile_allowed = True
+    engine.ctx.position = PositionState(symbol=symbol, qty=1, avg_price=10.0, step=1)
+    engine.telegram = SimpleNamespace(notify_symbol_closed=AsyncMock())
+    engine._prepare_lifecycle_scope = Mock()
+    engine.ledger = SimpleNamespace(has_unresolved_orders=Mock(return_value=False))
+    return engine, lifecycle_path
+
+
 class ManualTrancheLifecycleTest(unittest.TestCase):
+    def _run_orphan_cleanup_reconciliation(self, engine):
+        with patch.object(
+            engine_module,
+            "_normalize_broker_balance",
+            return_value=SimpleNamespace(holdings=[], recognized=True),
+        ), patch.object(engine_module, "_balance_holding", return_value=(0.0, 0.0)):
+            asyncio.run(engine._reconcile_balance())
+
+    def test_orphan_cleanup_refreshes_engine_lifecycle_from_closed_disk_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, lifecycle_path = _orphan_cleanup_reconcile_engine(Path(directory))
+
+            self._run_orphan_cleanup_reconciliation(engine)
+
+            closed = json.loads(lifecycle_path.read_text(encoding="utf-8"))["000490"]
+            self.assertEqual(engine._symbol_lifecycles["000490"], closed)
+            self.assertEqual(engine._lifecycle_disk_state, closed)
+            self.assertTrue(engine._lifecycle_disk_present)
+            engine.telegram.notify_symbol_closed.assert_awaited_once_with(
+                "000490", "lifecycle_verify_mock", 0.0, 0.0, "orphan_cleaned",
+            )
+            engine._prepare_lifecycle_scope.assert_called_once_with("000490")
+
+    def test_orphan_cleanup_rejects_missing_closed_lifecycle_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, lifecycle_path = _orphan_cleanup_reconcile_engine(Path(directory))
+            lifecycle_path.write_text("{}", encoding="utf-8")
+            previous_cache = copy.deepcopy(engine._symbol_lifecycles)
+            previous_anchor = copy.deepcopy(engine._lifecycle_disk_state)
+
+            with self.assertRaisesRegex(RuntimeError, "without a closed lifecycle marker"):
+                self._run_orphan_cleanup_reconciliation(engine)
+
+            self.assertEqual(engine._symbol_lifecycles, previous_cache)
+            self.assertEqual(engine._lifecycle_disk_state, previous_anchor)
+            self.assertTrue(engine._lifecycle_disk_present)
+
+    def test_orphan_cleanup_propagates_malformed_lifecycle_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, lifecycle_path = _orphan_cleanup_reconcile_engine(Path(directory))
+            lifecycle_path.write_text("{", encoding="utf-8")
+            previous_cache = copy.deepcopy(engine._symbol_lifecycles)
+            previous_anchor = copy.deepcopy(engine._lifecycle_disk_state)
+
+            with self.assertRaises(json.JSONDecodeError):
+                self._run_orphan_cleanup_reconciliation(engine)
+
+            self.assertEqual(engine._symbol_lifecycles, previous_cache)
+            self.assertEqual(engine._lifecycle_disk_state, previous_anchor)
+            self.assertTrue(engine._lifecycle_disk_present)
+
+    def test_orphan_cleanup_propagates_lifecycle_read_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine, lifecycle_path = _orphan_cleanup_reconcile_engine(Path(directory))
+            previous_cache = copy.deepcopy(engine._symbol_lifecycles)
+            previous_anchor = copy.deepcopy(engine._lifecycle_disk_state)
+            original_read_text = Path.read_text
+
+            def fail_lifecycle_read(path, *args, **kwargs):
+                if path == lifecycle_path:
+                    raise PermissionError("simulated lifecycle read failure")
+                return original_read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", fail_lifecycle_read):
+                with self.assertRaisesRegex(PermissionError, "simulated lifecycle read failure"):
+                    self._run_orphan_cleanup_reconciliation(engine)
+
+            self.assertEqual(engine._symbol_lifecycles, previous_cache)
+            self.assertEqual(engine._lifecycle_disk_state, previous_anchor)
+            self.assertTrue(engine._lifecycle_disk_present)
+
     def test_explicit_balance_exchange_preserves_default_request(self):
         async def scenario():
             client = KiwoomClient.__new__(KiwoomClient)
