@@ -73,14 +73,22 @@ def _targets(repo: Path, account: str, *, control: bool = True, settings: bool =
     return control_path, settings_path
 
 
-def _run(script: Path, account: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: Path,
+    account: str,
+    *,
+    runtime_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     temp_dir = script.parent.parent / ".tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["TEMP"] = str(temp_dir)
     env["TMP"] = str(temp_dir)
+    command = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Account", account]
+    if runtime_root is not None:
+        command.extend(["-RuntimeRoot", str(runtime_root)])
     return subprocess.run(
-        [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Account", account],
+        command,
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -88,6 +96,36 @@ def _run(script: Path, account: str) -> subprocess.CompletedProcess[str]:
         check=False,
         env=env,
     )
+
+
+def test_explicit_allowed_runtime_root_disables_control_and_profile(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+
+    result = _run(script, account, runtime_root=repo)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(control_path.read_text(encoding="utf-8"))["auto_trading_enabled"] is False
+    profile = json.loads(settings_path.read_text(encoding="utf-8"))["profiles"][0]
+    assert profile["enabled"] is False
+    assert profile["auto_buy"]["enabled"] is False
+    assert profile["auto_sell"]["enabled"] is False
+
+
+def test_runtime_root_outside_fixed_allowlist_is_rejected_before_writes(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+    original_control = control_path.read_bytes()
+    original_settings = settings_path.read_bytes()
+
+    result = _run(script, account, runtime_root=tmp_path / "unapproved-runtime-root")
+
+    assert result.returncode != 0
+    assert "fixed allowlist" in _normalize_stderr(result.stderr).lower()
+    assert control_path.read_bytes() == original_control
+    assert settings_path.read_bytes() == original_settings
 
 
 def test_eligible_mock_account_disables_control_and_profile(tmp_path: Path):
