@@ -1,6 +1,6 @@
 # Project Progress
 
-Last updated: 2026-09-23
+Last updated: 2026-09-27
 
 ## Purpose
 
@@ -1106,3 +1106,16 @@ publication succeeds and the final target identity is verified.
 - Added an account-scoped `control_state_{account}.lock` shared by Python control-state writers and `ops/emergency_stop.ps1`. The control switch and fixed-port/pause event writers now retain unrelated fields while serializing their read-modify-write operations.
 - `ops/emergency_stop.ps1` now acquires the same bounded control-state lock and atomically replaces the existing control file. It fails closed before either target is changed when that lock is unavailable.
 - Focused Windows validation passed: `60 passed in 12.74s` with Python 3.14.7 and pytest 9.1.1 across runtime-control, emergency-stop, fixed-port, and reconciliation tests. This is local test evidence only; it does not establish CI verification, Canonical publication, or operational validation. No runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — Emergency-stop settings atomic replacement implementation
+
+- In a managed worktree at master commit `2a033ccd2464f0fd62e47e3c639f6f690398cd44`, `ops/emergency_stop.ps1` now stages settings bytes in a unique same-directory temporary file under the existing account cleanup lock, verifies the staged bytes, and replaces the settings target with `File.Replace`. The temporary file is removed on failure; no fallback write is used.
+- Added a Windows mock-account regression test that holds the settings file without delete sharing to force replacement failure, then checks that the original settings bytes remain and the temporary file is removed.
+- The focused `tests/test_emergency_stop_allowlist.py` run was attempted twice. Both attempts exited with code 1 and showed 13 error markers; pytest's session cleanup raised `PermissionError: [WinError 5]` while enumerating the selected basetemp. Individual test outcomes were not available, so local test status is `INCOMPLETE` and no passing test result is claimed.
+- No source changes were made in the original checkout. No staging, commit, push, PR, CI, Canonical, runtime, Scheduler, network beyond the master fetch, account, credential, or order operation was performed.
+
+## 2026-09-27 — Emergency-stop settings atomic replacement focused validation
+
+- An elevated focused run exposed three failures: Windows PowerShell's `File.Replace` rejected a null backup path. The implementation now supplies a unique same-directory backup path and removes it after replacement; failure cleanup also removes any remaining temporary or backup file.
+- The focused Windows mock-account suite then passed: `13 passed in 11.67s` for `tests/test_emergency_stop_allowlist.py`. This is local focused test evidence only; CI and operational validation were not performed.
+- The two earlier sandboxed attempts ended with basetemp `WinError 5`; they produced no test summaries. The later elevated run returned individual results and resolved that evidence gap.
