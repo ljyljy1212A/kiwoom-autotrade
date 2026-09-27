@@ -66,9 +66,9 @@
 
       <Command>C:\Users\jhkhjk\AppData\Local\Python\pythoncore-3.14-64\pythonw.exe</Command>
 
-      <Arguments>"C:\auto\작업7차\kiwoom-autotrade\tools\scheduled_task_healthcheck.py"</Arguments>
+      <Arguments>"C:\auto\kiwoom-autotrade\tools\scheduled_task_healthcheck.py"</Arguments>
 
-      <WorkingDirectory>C:\auto\작업7차\kiwoom-autotrade</WorkingDirectory>
+      <WorkingDirectory>C:\auto\kiwoom-autotrade</WorkingDirectory>
 
     </Exec>
 

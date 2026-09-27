@@ -31,6 +31,7 @@ class RecoverySymbolConfigTests(unittest.TestCase):
             finally:
                 main_module.DATA_DIR = original_data_dir
 
+
     def test_disabled_profile_without_unresolved_order_is_excluded(self):
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory) / "data"
@@ -50,4 +51,4 @@ class RecoverySymbolConfigTests(unittest.TestCase):
                 # disabled profile with nothing left to reconcile.
                 self.assertEqual(main_module._enabled_symbol_configs("kr_mock", "KR"), [])
             finally:
-                main_module.DATA_DIR = original_data_dir             
+                main_module.DATA_DIR = original_data_dir

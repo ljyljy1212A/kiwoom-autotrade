@@ -13,6 +13,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from src.core import account_catalog
+from src.core.atomic_write import atomic_write_json
 from src.core.control_state import (
     PAUSE_CLEAR_REASONS,
     read_auto_trading_enabled,
@@ -221,6 +222,10 @@ class TelegramControlBot:
             return None
         return info
 
+    # Deliberately separate from _validate_mutating_account(): attestation is a
+    # mock-only, authenticated resolution of an unattributed-order clearance
+    # block (reconciliation-clearance condition 5). Gating attestation behind
+    # the same eligibility check it exists to help clear would be circular.
     async def _validate_attestation_account(self, query, account_id: str) -> bool:
         if account_id not in self.accounts:
             await self._safe_edit_text(query, "Unknown account.", reply_markup=self._root_markup())
@@ -553,7 +558,7 @@ def _write_startup_status(accounts: list[AccountInfo]) -> None:
         "account_scope": [account.account_id for account in accounts],
     }
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    status_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(status_path, payload, ensure_ascii=False, indent=2)
 
 
 def main() -> int:
