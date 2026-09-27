@@ -18,6 +18,20 @@ def load_symbol_lifecycles(path: Path) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def load_closed_symbol_lifecycles(path: Path, symbol: str) -> dict:
+    """Load and validate the closed lifecycle persisted by orphan cleanup."""
+    latest = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(latest, dict)
+        or not isinstance(latest.get(symbol), dict)
+        or latest[symbol].get("status") != "closed"
+    ):
+        raise RuntimeError(
+            f"Orphan cleanup completed without a closed lifecycle marker for {symbol}"
+        )
+    return latest
+
+
 def assert_symbol_lifecycle_current(
     path: Path,
     symbol: str,
