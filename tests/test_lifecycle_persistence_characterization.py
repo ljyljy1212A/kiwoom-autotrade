@@ -171,3 +171,79 @@ def test_stale_lifecycle_blocks_tranche_cache_write(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="Concurrent symbol lifecycle change"):
         engine._assert_lifecycle_current_for_cache_write(SYMBOL)
+
+
+def test_missing_lifecycle_file_is_current_when_no_disk_anchor_was_observed(tmp_path: Path):
+    engine, path = _engine_with_lifecycle(tmp_path, disk=None, pending={})
+
+    engine._assert_lifecycle_current_for_cache_write(SYMBOL)
+
+    assert not path.exists()
+    assert engine._lifecycle_disk_present is False
+    assert engine._lifecycle_disk_state is None
+
+
+def test_missing_lifecycle_file_rejects_a_previously_observed_anchor(tmp_path: Path):
+    old = {"status": "open", "activation_id": "old"}
+    engine, path = _engine_with_lifecycle(
+        tmp_path, disk={SYMBOL: old}, pending={SYMBOL: old}
+    )
+    path.unlink()
+
+    with pytest.raises(RuntimeError, match="Concurrent symbol lifecycle change"):
+        engine._assert_lifecycle_current_for_cache_write(SYMBOL)
+
+    assert not path.exists()
+    assert engine._lifecycle_disk_present is True
+    assert engine._lifecycle_disk_state == old
+
+
+def test_malformed_lifecycle_file_rejects_tranche_cache_guard(tmp_path: Path):
+    old = {"status": "open", "activation_id": "old"}
+    engine, path = _engine_with_lifecycle(
+        tmp_path, disk={SYMBOL: old}, pending={SYMBOL: old}
+    )
+    path.write_text("{", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        engine._assert_lifecycle_current_for_cache_write(SYMBOL)
+
+    assert path.read_bytes() == b"{"
+    assert engine._lifecycle_disk_state == old
+
+
+def test_non_object_lifecycle_file_rejects_tranche_cache_guard(tmp_path: Path):
+    old = {"status": "open", "activation_id": "old"}
+    engine, path = _engine_with_lifecycle(
+        tmp_path, disk={SYMBOL: old}, pending={SYMBOL: old}
+    )
+    path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Symbol lifecycle file is not an object"):
+        engine._assert_lifecycle_current_for_cache_write(SYMBOL)
+
+    assert path.read_bytes() == b"[]"
+    assert engine._lifecycle_disk_state == old
+
+
+def test_lifecycle_read_permission_error_propagates_from_cache_guard(
+    tmp_path: Path, monkeypatch
+):
+    old = {"status": "open", "activation_id": "old"}
+    engine, path = _engine_with_lifecycle(
+        tmp_path, disk={SYMBOL: old}, pending={SYMBOL: old}
+    )
+    original_read_text = Path.read_text
+
+    def fail_lifecycle_read(target: Path, *args, **kwargs):
+        if target == path:
+            raise PermissionError("simulated lifecycle read denial")
+        return original_read_text(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_lifecycle_read)
+
+    with pytest.raises(PermissionError, match="simulated lifecycle read denial"):
+        engine._assert_lifecycle_current_for_cache_write(SYMBOL)
+
+    assert engine._lifecycle_disk_present is True
+    assert engine._lifecycle_disk_state == old

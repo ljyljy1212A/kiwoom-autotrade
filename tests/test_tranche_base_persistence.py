@@ -171,6 +171,39 @@ class TrancheBasePersistenceTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original)
             self.assertEqual(engine._tranche_bases, initial_bases)
 
+    def test_lifecycle_read_failure_preserves_tranche_base_file_and_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tranche_bases.json"
+            initial_bases = {"000490": 10_000.0}
+            path.write_text(json.dumps(initial_bases), encoding="utf-8")
+            lifecycle_path = Path(directory) / "symbol_lifecycles.json"
+            lifecycle_path.write_text(
+                json.dumps({"000490": {"status": "open", "started_at": "current"}}),
+                encoding="utf-8",
+            )
+            engine = _engine(path, initial_bases)
+            engine.ctx.strategy = SimpleNamespace(symbol="000490")
+            engine._lifecycle_path = lifecycle_path
+            engine._lifecycle_disk_present = True
+            engine._lifecycle_disk_state = {"status": "open", "started_at": "stale"}
+            original_bases = path.read_bytes()
+            original_lifecycle = lifecycle_path.read_bytes()
+            original_read_text = Path.read_text
+
+            def fail_lifecycle_read(target: Path, *args, **kwargs):
+                if target == lifecycle_path:
+                    raise PermissionError("simulated lifecycle read denial")
+                return original_read_text(target, *args, **kwargs)
+
+            with patch.object(Path, "read_text", new=fail_lifecycle_read):
+                with patch("src.core.engine.atomic_write_json") as write_json:
+                    engine._store_tranche_base("000490", 11_000.0)
+
+            self.assertEqual(path.read_bytes(), original_bases)
+            self.assertEqual(lifecycle_path.read_bytes(), original_lifecycle)
+            self.assertEqual(engine._tranche_bases, initial_bases)
+            write_json.assert_not_called()
+
     def test_store_failure_preserves_file_and_memory_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "tranche_bases.json"

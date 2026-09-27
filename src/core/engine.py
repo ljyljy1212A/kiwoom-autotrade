@@ -43,7 +43,10 @@ from src.core.us_market import (
     normalize_us_execution_rows,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
-from src.core.lifecycle_persistence import merge_symbol_lifecycle_locked
+from src.core.lifecycle_persistence import (
+    assert_symbol_lifecycle_current,
+    merge_symbol_lifecycle_locked,
+)
 from src.core.tranche_base_persistence import (
     remove_tranche_base_locked,
     store_tranche_base_locked,
@@ -2190,17 +2193,12 @@ class AccountEngine:
             return  # Lightweight cache-only test fixtures have no lifecycle.
         if symbol != self._symbol_key(self.ctx.strategy.symbol):
             raise RuntimeError(f"Unexpected tranche-base symbol {symbol}")
-        try:
-            latest = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            latest = {}
-        if not isinstance(latest, dict):
-            raise RuntimeError("Symbol lifecycle file is not an object")
-        if (
-            (symbol in latest) != self._lifecycle_disk_present
-            or latest.get(symbol) != self._lifecycle_disk_state
-        ):
-            raise RuntimeError(f"Concurrent symbol lifecycle change for {symbol}")
+        assert_symbol_lifecycle_current(
+            self._lifecycle_path,
+            symbol,
+            expected_present=self._lifecycle_disk_present,
+            expected_state=self._lifecycle_disk_state,
+        )
 
     def _store_tranche_base(
         self, symbol: str, price: float, *, only_if_absent: bool = False
