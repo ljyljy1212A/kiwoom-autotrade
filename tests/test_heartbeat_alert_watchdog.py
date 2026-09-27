@@ -24,6 +24,17 @@ class HeartbeatAlertWatchdogTests(unittest.TestCase):
         self.assertEqual(payload["account_scope"], ["kr_mock", "us_mock"])
         self.assertTrue(payload["started_at"].endswith("+00:00"))
 
+    def test_main_does_not_check_workers_when_startup_status_write_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(heartbeat_alert_watchdog.sys, "argv", ["watchdog", "--status-dir", tmpdir]), \
+                 patch.object(heartbeat_alert_watchdog, "atomic_write_json", side_effect=PermissionError("status write failed")), \
+                 patch.object(heartbeat_alert_watchdog, "_logger") as logger, \
+                 patch.object(heartbeat_alert_watchdog, "_problem") as problem:
+                with self.assertRaisesRegex(PermissionError, "status write failed"):
+                    heartbeat_alert_watchdog.main()
+        logger.assert_not_called()
+        problem.assert_not_called()
+
     def _degraded_payload(self, *, entered_at="2026-09-05T00:00:00+00:00"):
         return {
             "account": "us_mock",

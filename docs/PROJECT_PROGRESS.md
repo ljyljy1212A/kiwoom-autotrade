@@ -962,6 +962,7 @@ publication succeeds and the final target identity is verified.
 - The automatic `master` push workflow run `36082068579` for merge commit `b630310e134d48baee05d51273c7f144a51a1ff4` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
 - No local tests were run for this documentation correction. This successor records GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
 - This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
 ## 2026-09-25 — PR #42 merge and master CI successor
 
 - PR #42, `docs: record PR #41 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `81e40bd9da99439502acae0aed263df1c24689ff` against `master` at `b630310e134d48baee05d51273c7f144a51a1ff4`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 9 additions.
@@ -1029,3 +1030,11 @@ publication succeeds and the final target identity is verified.
 - The automatic `master` push workflow run `36189007005` for merge commit `49b2ec708ce155ac55a9b3eb9da1e30d7d9d7517` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
 - No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
 - This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-27 — Startup-status failure-path test coverage
+
+- Added focused tests in `tests/test_telegram_control_bot.py` and `tests/test_heartbeat_alert_watchdog.py` for a mocked `PermissionError` from startup-status atomic publication. They verify that Telegram polling and watchdog worker checks do not begin after the write fails.
+- The two new Windows tests passed locally with an isolated pytest basetemp outside the checkout: `2 passed in 0.25s` (Python 3.14.7, pytest 9.1.1). This is a focused local result, not CI or operational validation.
+- After transfer to a clean branch based on PR #50's merge commit, the related focused Windows suite passed with an isolated external basetemp: `59 passed in 3.28s`.
+- The patch tool twice reported `path contains a reparse point` for the Telegram test file. Read-only file-attribute and `fsutil` checks did not identify a reparse point. A separately authorized exact-byte write applied the test-only changes after preimage checks; both test files retain LF-only endings and EOF LF.
+- No production source, Git index or refs, CI, Canonical record, runtime, Scheduler, network, account, credential, or order action was changed for this checkpoint.
