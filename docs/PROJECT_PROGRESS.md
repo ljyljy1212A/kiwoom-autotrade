@@ -1048,3 +1048,10 @@ publication succeeds and the final target identity is verified.
 - The fixed-target `tools/canonical_publisher.ps1` preflight passed with operation ID `256ce052-7afe-4c6f-9ab6-16e1bf11e9f3` and the same preimage, append, and candidate hashes. Its separately authorized Apply returned `Publish: PASS` for `CURRENT_STATE.md`.
 - Independent readback confirmed the published target was 72,397 bytes with SHA-256 `B852DFD175626EDE69F06FE606E80F64DC31E233E59F82D9567ADF5897011C01`, strict UTF-8, no BOM, the original three CRLF pairs, no bare CR, EOF LF, and an exact append-source suffix. The operation lock, backup, and temporary paths were absent.
 - The earlier `CANONICAL_PENDING` state is resolved by this verified publication. No runtime, Scheduler, account, credential, or order validation is claimed.
+
+## 2026-09-27 — Startup-status failure-path test coverage
+
+- Added focused tests in `tests/test_telegram_control_bot.py` and `tests/test_heartbeat_alert_watchdog.py` for a mocked `PermissionError` from startup-status atomic publication. They verify that Telegram polling and watchdog worker checks do not begin after the write fails.
+- The two new Windows tests passed locally with an isolated pytest basetemp outside the checkout: `2 passed in 0.25s` (Python 3.14.7, pytest 9.1.1). This is a focused local result, not CI or operational validation.
+- The patch tool twice reported `path contains a reparse point` for the Telegram test file. Read-only file-attribute and `fsutil` checks did not identify a reparse point. A separately authorized exact-byte write applied the test-only changes after preimage checks; both test files retain LF-only endings and EOF LF.
+- No production source, Git index or refs, CI, Canonical record, runtime, Scheduler, network, account, credential, or order action was changed for this checkpoint.
