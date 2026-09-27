@@ -44,6 +44,10 @@ from src.core.us_market import (
 )
 from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
 from src.core.lifecycle_persistence import merge_symbol_lifecycle_locked
+from src.core.tranche_base_persistence import (
+    remove_tranche_base_locked,
+    store_tranche_base_locked,
+)
 from src.core.control_state import (
     FIXED_PORT_DEGRADED_PAUSE_REASON,
     read_auto_trading_enabled,
@@ -2209,24 +2213,13 @@ class AccountEngine:
         try:
             with account_cleanup_lock(self.data_dir, self.ctx.account_id), _TRANCHE_BASES_WRITE_LOCK:
                 self._assert_lifecycle_current_for_cache_write(symbol)
-                try:
-                    latest = json.loads(
-                        self._tranche_bases_path.read_text(encoding="utf-8")
-                    )
-                except (OSError, json.JSONDecodeError):
-                    latest = {}
-                if not isinstance(latest, dict):
-                    latest = {}
-                if only_if_absent and symbol in latest:
-                    self._tranche_bases = latest
-                    return
-                if not only_if_absent and latest.get(symbol) == price:
-                    self._tranche_bases = latest
-                    return
-                latest[symbol] = price
-                self._tranche_bases_path.parent.mkdir(exist_ok=True)
-                atomic_write_json(self._tranche_bases_path, latest, ensure_ascii=False)
-                self._tranche_bases = latest
+                self._tranche_bases = store_tranche_base_locked(
+                    self._tranche_bases_path,
+                    symbol,
+                    price,
+                    only_if_absent=only_if_absent,
+                    write_json=atomic_write_json,
+                )
         except OSError as exc:
             # The in-memory recovery result remains safe even if persistence is
             # temporarily unavailable; never let a cache-write issue affect the
@@ -2238,18 +2231,11 @@ class AccountEngine:
         try:
             with account_cleanup_lock(self.data_dir, self.ctx.account_id), _TRANCHE_BASES_WRITE_LOCK:
                 self._assert_lifecycle_current_for_cache_write(symbol)
-                try:
-                    latest = json.loads(
-                        self._tranche_bases_path.read_text(encoding="utf-8")
-                    )
-                except (OSError, json.JSONDecodeError):
-                    latest = {}
-                if not isinstance(latest, dict):
-                    latest = {}
-                latest.pop(symbol, None)
-                self._tranche_bases_path.parent.mkdir(exist_ok=True)
-                atomic_write_json(self._tranche_bases_path, latest, ensure_ascii=False)
-                self._tranche_bases = latest
+                self._tranche_bases = remove_tranche_base_locked(
+                    self._tranche_bases_path,
+                    symbol,
+                    write_json=atomic_write_json,
+                )
         except OSError as exc:
             self.ctx.logger.warning(f"Could not remove tranche base for {symbol}: {exc}")
 
