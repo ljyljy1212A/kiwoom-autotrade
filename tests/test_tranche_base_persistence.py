@@ -4,6 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.core.engine import AccountEngine
 
@@ -146,3 +147,54 @@ class TrancheBasePersistenceTest(unittest.TestCase):
                 json.loads(path.read_text(encoding="utf-8")),
                 {"000490": 10_000.0},
             )
+
+    def test_stale_lifecycle_anchor_rejects_tranche_base_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tranche_bases.json"
+            initial_bases = {"000490": 10_000.0}
+            path.write_text(json.dumps(initial_bases), encoding="utf-8")
+            lifecycle_path = Path(directory) / "symbol_lifecycles.json"
+            lifecycle_path.write_text(
+                json.dumps({"000490": {"status": "open", "started_at": "new"}}),
+                encoding="utf-8",
+            )
+            engine = _engine(path, initial_bases)
+            engine.ctx.strategy = SimpleNamespace(symbol="000490")
+            engine._lifecycle_path = lifecycle_path
+            engine._lifecycle_disk_present = True
+            engine._lifecycle_disk_state = {"status": "open", "started_at": "old"}
+            original = path.read_bytes()
+
+            with self.assertRaisesRegex(RuntimeError, "Concurrent symbol lifecycle change"):
+                engine._store_tranche_base("000490", 11_000.0)
+
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(engine._tranche_bases, initial_bases)
+
+    def test_store_failure_preserves_file_and_memory_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tranche_bases.json"
+            initial_bases = {"000490": 10_000.0}
+            path.write_text(json.dumps(initial_bases), encoding="utf-8")
+            engine = _engine(path, initial_bases)
+            original = path.read_bytes()
+
+            with patch("src.core.engine.atomic_write_json", side_effect=OSError("disk full")):
+                engine._store_tranche_base("000490", 11_000.0)
+
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(engine._tranche_bases, initial_bases)
+
+    def test_remove_failure_preserves_file_and_memory_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tranche_bases.json"
+            initial_bases = {"000490": 10_000.0}
+            path.write_text(json.dumps(initial_bases), encoding="utf-8")
+            engine = _engine(path, initial_bases)
+            original = path.read_bytes()
+
+            with patch("src.core.engine.atomic_write_json", side_effect=OSError("disk full")):
+                engine._remove_tranche_base("000490")
+
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(engine._tranche_bases, initial_bases)
