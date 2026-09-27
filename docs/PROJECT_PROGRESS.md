@@ -1124,3 +1124,9 @@ publication succeeds and the final target identity is verified.
 
 - Windows PowerShell treats variable names case-insensitively. The local `$runtimeRoot` assignment overwrote the optional `$RuntimeRoot` argument before validation, so an explicitly supplied root was ignored. Renamed the internal selection variable to `$selectedRuntimeRoot` while retaining the fixed root allowlist and the existing account and file safety checks.
 - Added mock-only tests for an explicitly allowed script root and for rejecting an unapproved root before writes. The focused `tests/test_emergency_stop_allowlist.py` suite passed in an isolated Windows Temp directory: `15 passed in 13.00s`. PowerShell parsing reported zero errors. This is local test evidence only; CI, Canonical publication, and operational validation were not performed.
+
+## 2026-09-28 — Lifecycle persistence seam extraction implementation
+
+- Added `src/core/lifecycle_persistence.py` to validate, compare, merge, and atomically write one symbol lifecycle while the caller holds the existing account cleanup lock. `AccountEngine` still updates its in-memory lifecycle map and disk markers only after persistence succeeds and before releasing that lock.
+- Updated the lifecycle persistence characterization tests to inject atomic-write failures at the new module boundary. The suite contains eight cases, including removal of only the current symbol while preserving other symbols.
+- The eight-test characterization suite passed after extraction: `8 passed in 0.96s`. This is local focused test evidence only and does not establish CI verification, Canonical publication, or operational validation. No Git, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
