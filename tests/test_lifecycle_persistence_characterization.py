@@ -247,3 +247,146 @@ def test_lifecycle_read_permission_error_propagates_from_cache_guard(
 
     assert engine._lifecycle_disk_present is True
     assert engine._lifecycle_disk_state == old
+
+
+def _startup_engine(tmp_path: Path, monkeypatch) -> engine_module.AccountEngine:
+    monkeypatch.setattr(engine_module, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        engine_module,
+        "_balance_gate",
+        lambda _account: SimpleNamespace(
+            configure_reconciliation=lambda _config: None,
+            engines=set(),
+        ),
+    )
+    monkeypatch.setattr(
+        engine_module, "OrphanStateCleaner", lambda *_args, **_kwargs: SimpleNamespace()
+    )
+    ctx = SimpleNamespace(
+        account_id="characterization_mock",
+        client=SimpleNamespace(market="KR", mode="mock"),
+        strategy=SimpleNamespace(symbol=SYMBOL),
+        logger=SimpleNamespace(),
+    )
+    return engine_module.AccountEngine(
+        ctx, None, None, None, balance_only=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, {}),
+        ("{", {}),
+        ("[]", {}),
+        (json.dumps({SYMBOL: {"status": "open"}, OTHER_SYMBOL: {"status": "pending"}}),
+         {SYMBOL: {"status": "open"}, OTHER_SYMBOL: {"status": "pending"}}),
+    ],
+    ids=["missing", "malformed", "non-object", "valid-object"],
+)
+def test_startup_lifecycle_read_sets_cache_and_disk_anchor(
+    tmp_path: Path, monkeypatch, raw: str | None, expected: dict
+):
+    path = tmp_path / "symbol_lifecycles_characterization_mock.json"
+    if raw is not None:
+        path.write_text(raw, encoding="utf-8")
+
+    engine = _startup_engine(tmp_path, monkeypatch)
+
+    assert engine._symbol_lifecycles == expected
+    assert engine._lifecycle_disk_present is (SYMBOL in expected)
+    assert engine._lifecycle_disk_state == expected.get(SYMBOL)
+    if SYMBOL in expected:
+        engine._symbol_lifecycles[SYMBOL]["status"] = "changed in memory"
+        assert engine._lifecycle_disk_state == {"status": "open"}
+
+
+def test_startup_lifecycle_read_oserror_uses_empty_cache_and_anchor(
+    tmp_path: Path, monkeypatch
+):
+    path = tmp_path / "symbol_lifecycles_characterization_mock.json"
+    original = b'{"005930": {"status": "open"}}'
+    path.write_bytes(original)
+    original_read_text = Path.read_text
+
+    def deny_lifecycle_read(target: Path, *args, **kwargs):
+        if target == path:
+            raise PermissionError("simulated lifecycle read denial")
+        return original_read_text(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_lifecycle_read)
+
+    engine = _startup_engine(tmp_path, monkeypatch)
+
+    assert engine._symbol_lifecycles == {}
+    assert engine._lifecycle_disk_present is False
+    assert engine._lifecycle_disk_state is None
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        (None, {}),
+        ("{", {}),
+        ("[]", {}),
+        (json.dumps({SYMBOL: {"status": "closed"}, OTHER_SYMBOL: {"status": "pending"}}),
+         {SYMBOL: {"status": "closed"}, OTHER_SYMBOL: {"status": "pending"}}),
+    ],
+    ids=["missing", "malformed", "non-object", "valid-object"],
+)
+def test_migration_rereads_lifecycle_and_refreshes_disk_anchor(
+    tmp_path: Path, replacement: str | None, expected: dict
+):
+    old = {"status": "open"}
+    engine, path = _engine_with_lifecycle(
+        tmp_path, disk={SYMBOL: old}, pending={SYMBOL: old}
+    )
+    engine._symbol_key_migration_complete = False
+
+    def migrate(_candidates):
+        if replacement is None:
+            path.unlink()
+        else:
+            path.write_text(replacement, encoding="utf-8")
+        return set()
+
+    engine._orphan_cleaner = SimpleNamespace(migrate_legacy_keys=migrate)
+
+    engine._run_symbol_key_migration([])
+
+    assert engine._symbol_key_migration_complete is True
+    assert engine._symbol_lifecycles == expected
+    assert engine._lifecycle_disk_present is (SYMBOL in expected)
+    assert engine._lifecycle_disk_state == expected.get(SYMBOL)
+    if SYMBOL in expected:
+        engine._symbol_lifecycles[SYMBOL]["status"] = "changed in memory"
+        assert engine._lifecycle_disk_state == {"status": "closed"}
+
+
+def test_migration_lifecycle_read_oserror_uses_empty_cache_and_anchor(
+    tmp_path: Path, monkeypatch
+):
+    old = {"status": "open"}
+    engine, path = _engine_with_lifecycle(
+        tmp_path, disk={SYMBOL: old}, pending={SYMBOL: old}
+    )
+    engine._symbol_key_migration_complete = False
+    engine._orphan_cleaner = SimpleNamespace(migrate_legacy_keys=lambda _candidates: set())
+    original = path.read_bytes()
+    original_read_text = Path.read_text
+
+    def deny_lifecycle_read(target: Path, *args, **kwargs):
+        if target == path:
+            raise PermissionError("simulated lifecycle read denial")
+        return original_read_text(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_lifecycle_read)
+
+    engine._run_symbol_key_migration([])
+
+    assert engine._symbol_key_migration_complete is True
+    assert engine._symbol_lifecycles == {}
+    assert engine._lifecycle_disk_present is False
+    assert engine._lifecycle_disk_state is None
+    assert path.read_bytes() == original

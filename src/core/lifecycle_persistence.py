@@ -9,6 +9,15 @@ from pathlib import Path
 from src.core.atomic_write import atomic_write_json
 
 
+def load_symbol_lifecycles(path: Path) -> dict:
+    """Load lifecycle state, preserving the engine's empty-cache fallback."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def assert_symbol_lifecycle_current(
     path: Path,
     symbol: str,

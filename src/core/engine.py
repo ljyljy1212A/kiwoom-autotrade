@@ -45,6 +45,7 @@ from src.core.us_market import (
 from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
 from src.core.lifecycle_persistence import (
     assert_symbol_lifecycle_current,
+    load_symbol_lifecycles,
     merge_symbol_lifecycle_locked,
 )
 from src.core.tranche_base_persistence import (
@@ -636,11 +637,7 @@ class AccountEngine:
         except (OSError, json.JSONDecodeError):
             self._tranche_bases = {}
         self._lifecycle_path = self.data_dir / f"symbol_lifecycles_{ctx.account_id}.json"
-        try:
-            raw_lifecycles = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
-            self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            self._symbol_lifecycles: dict[str, dict] = {}
+        self._symbol_lifecycles: dict[str, dict] = load_symbol_lifecycles(self._lifecycle_path)
         lifecycle_symbol = self._symbol_key(ctx.strategy.symbol)
         self._lifecycle_disk_present = lifecycle_symbol in self._symbol_lifecycles
         self._lifecycle_disk_state = copy.deepcopy(self._symbol_lifecycles.get(lifecycle_symbol))
@@ -704,11 +701,7 @@ class AccountEngine:
             and str((profile.get("config") or {}).get("market", "")).upper() == self.ctx.client.market
         )
         manual_review = self._orphan_cleaner.migrate_legacy_keys(candidates)
-        try:
-            raw_lifecycles = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
-            self._symbol_lifecycles = raw_lifecycles if isinstance(raw_lifecycles, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            self._symbol_lifecycles = {}
+        self._symbol_lifecycles = load_symbol_lifecycles(self._lifecycle_path)
         lifecycle_symbol = self._symbol_key(self.ctx.strategy.symbol)
         self._lifecycle_disk_present = lifecycle_symbol in self._symbol_lifecycles
         self._lifecycle_disk_state = copy.deepcopy(self._symbol_lifecycles.get(lifecycle_symbol))
