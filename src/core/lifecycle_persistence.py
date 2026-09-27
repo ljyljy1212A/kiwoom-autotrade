@@ -9,6 +9,24 @@ from pathlib import Path
 from src.core.atomic_write import atomic_write_json
 
 
+def assert_symbol_lifecycle_current(
+    path: Path,
+    symbol: str,
+    *,
+    expected_present: bool,
+    expected_state: object,
+) -> None:
+    """Reject a cache write when this symbol's lifecycle anchor has changed."""
+    try:
+        latest = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        latest = {}
+    if not isinstance(latest, dict):
+        raise RuntimeError("Symbol lifecycle file is not an object")
+    if (symbol in latest) != expected_present or latest.get(symbol) != expected_state:
+        raise RuntimeError(f"Concurrent symbol lifecycle change for {symbol}")
+
+
 def merge_symbol_lifecycle_locked(
     path: Path,
     symbol: str,
