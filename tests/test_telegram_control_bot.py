@@ -108,6 +108,22 @@ class TelegramControlBotTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["account_scope"], ["kr_mock", "us_mock"])
             self.assertTrue(payload["started_at"].endswith("+00:00"))
 
+    def test_main_does_not_poll_when_startup_status_write_fails(self):
+        accounts = [AccountInfo("kr_mock", "KR Mock", "KR")]
+        fake_bot = Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(bot_module, "DATA_DIR", Path(tmpdir)), \
+                 patch.object(bot_module, "load_dotenv"), \
+                 patch.object(bot_module, "get_logger", return_value=Mock()), \
+                 patch.object(bot_module, "load_account_info", return_value=accounts), \
+                 patch.object(bot_module, "_allowed_chat_ids_from_env", return_value={"111"}), \
+                 patch.object(bot_module, "TelegramControlBot", return_value=fake_bot), \
+                 patch.object(bot_module, "atomic_write_json", side_effect=PermissionError("status write failed")), \
+                 patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "test-token"}, clear=False):
+                with self.assertRaisesRegex(PermissionError, "status write failed"):
+                    bot_module.main()
+        fake_bot.run.assert_not_called()
+
     def test_main_writes_startup_status_before_polling(self):
         accounts = [
             AccountInfo("kr_mock", "KR Mock", "KR"),
