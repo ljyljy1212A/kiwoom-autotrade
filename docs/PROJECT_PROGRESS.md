@@ -1069,3 +1069,9 @@ publication succeeds and the final target identity is verified.
 - The automatic `master` push workflow run `36294048676` for merge commit `cf4f31080ce6ba931733a0b0a782a4060f3bcc24` completed with conclusion `success` (`push`, branch `master`). The run was created at `2026-09-27T04:21:03Z` and last updated at `2026-09-27T04:23:27Z`.
 - The workflow run's overall conclusion was verified, but its individual job results could not be fetched because the job-detail query returned `HTTP 401: Bad credentials`. Per-job CI results therefore remain unverified.
 - No local tests were run for this progress update. This record captures the run-level GitHub Actions result only and does not establish individual job results or operational validation. No Canonical Apply, runtime, Scheduler, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #52 merge and master CI successor
+
+- PR #52, `docs: record PR #51 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `c01739d84f579ec638f7427d844dbc00b8e0ea84`. The merge commit is `7d984cb9c5a5eb93d0daf288c3b5f06b245a2c77`.
+- The automatic `master` push workflow run `36296649680` for merge commit `7d984cb9c5a5eb93d0daf288c3b5f06b245a2c77` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
