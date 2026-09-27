@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.core.atomic_write import atomic_write_json, atomic_write_text
+from src.core.orphan_cleanup import account_control_state_lock
 
 import json
 import logging
@@ -44,14 +45,19 @@ def write_control_state(
     data_dir: Path | None = None,
 ) -> dict:
     path = control_path(account_id, data_dir)
-    payload = {
-        "account": account_id,
-        "auto_trading_enabled": bool(auto_trading_enabled),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "updated_by": updated_by,
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, payload, ensure_ascii=False)
+    root = data_dir or DATA_DIR
+    with account_control_state_lock(root, account_id):
+        payload = read_control_state(account_id, root) or {}
+        payload.update(
+            {
+                "account": account_id,
+                "auto_trading_enabled": bool(auto_trading_enabled),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_by": updated_by,
+            }
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, payload, ensure_ascii=False)
     return payload
 
 
@@ -81,7 +87,6 @@ def write_fixed_port_degraded_event(
     if kind not in {"entered", "ongoing", "recovered", "operator_resolved"}:
         raise ValueError(f"Unsupported fixed-port event kind: {kind}")
     path = control_path(account_id, data_dir)
-    current = read_control_state(account_id, data_dir) or {"account": account_id}
     event = {
         "event_id": uuid.uuid4().hex,
         "kind": kind,
@@ -92,9 +97,12 @@ def write_fixed_port_degraded_event(
         "occurred_at": (occurred_at or datetime.now(timezone.utc)).isoformat(),
         "updated_by": updated_by,
     }
-    current["fixed_port_event"] = event
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, current, ensure_ascii=False)
+    root = data_dir or DATA_DIR
+    with account_control_state_lock(root, account_id):
+        current = read_control_state(account_id, root) or {"account": account_id}
+        current["fixed_port_event"] = event
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, current, ensure_ascii=False)
     return event
 
 
@@ -110,7 +118,6 @@ def write_pause_clear_event(
     if reason not in PAUSE_CLEAR_REASONS:
         raise ValueError(f"Unsupported pause-clear reason: {reason}")
     path = control_path(account_id, data_dir)
-    current = read_control_state(account_id, data_dir) or {"account": account_id}
     event = {
         "event_id": uuid.uuid4().hex,
         "reason": reason,
@@ -118,9 +125,12 @@ def write_pause_clear_event(
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": updated_by,
     }
-    current["pause_clear_event"] = event
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, current, ensure_ascii=False)
+    root = data_dir or DATA_DIR
+    with account_control_state_lock(root, account_id):
+        current = read_control_state(account_id, root) or {"account": account_id}
+        current["pause_clear_event"] = event
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, current, ensure_ascii=False)
     try:
         history_path = DIAGNOSTICS_DIR / "pause_clear_history" / account_id / f"{event['event_id']}.json"
         atomic_write_text(history_path, json.dumps(event, ensure_ascii=False))

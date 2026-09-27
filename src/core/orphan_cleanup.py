@@ -80,6 +80,11 @@ def account_cleanup_lock(data_dir: Path, account_id: str):
     return _account_file_lock(Path(data_dir) / f"orphan_cleanup_{account_id}.lock")
 
 
+def account_control_state_lock(data_dir: Path, account_id: str):
+    """Serialize account-wide control-state updates across processes."""
+    return _account_file_lock(Path(data_dir) / f"control_state_{account_id}.lock")
+
+
 class OrphanStateCleaner:
     """Evaluate and safely retire stale per-symbol runtime state.
 
