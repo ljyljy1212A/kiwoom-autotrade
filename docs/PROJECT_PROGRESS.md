@@ -1055,3 +1055,17 @@ publication succeeds and the final target identity is verified.
 - The two new Windows tests passed locally with an isolated pytest basetemp outside the checkout: `2 passed in 0.25s` (Python 3.14.7, pytest 9.1.1). This is a focused local result, not CI or operational validation.
 - The patch tool twice reported `path contains a reparse point` for the Telegram test file. Read-only file-attribute and `fsutil` checks did not identify a reparse point. A separately authorized exact-byte write applied the test-only changes after preimage checks; both test files retain LF-only endings and EOF LF.
 - No production source, Git index or refs, CI, Canonical record, runtime, Scheduler, network, account, credential, or order action was changed for this checkpoint.
+
+## 2026-09-27 — PR #51 startup-status failure-path test delivery successor
+
+- In a clean managed worktree based on PR #50's merge commit, the focused Windows suite for atomic writes, Telegram control bot, heartbeat watchdog, and recovery symbol configuration passed: `59 passed in 3.28s` (Python 3.14.7, pytest 9.1.1). This is focused local test evidence only.
+- The test-coverage and repository-progress changes were committed as `86861d3588602e7a63071a1e155af4f65be24995` (`test: cover startup status write failures`) and pushed to `codex/startup-status-failure-test-coverage`.
+- PR #51, `test: cover startup status write failures`, was created from that branch. Its pull-request run `36293875729` and push run `36293823439` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #51 was merged with the `merge` method after its head SHA was rechecked as `86861d3588602e7a63071a1e155af4f65be24995`. The merge commit is `cf4f31080ce6ba931733a0b0a782a4060f3bcc24`.
+- No post-merge `master` CI query, Canonical action, runtime, Scheduler, network, account, credential, or order action was performed in this checkpoint. CI success does not establish operational validation.
+
+## 2026-09-27 — PR #51 merge and master CI successor
+
+- The automatic `master` push workflow run `36294048676` for merge commit `cf4f31080ce6ba931733a0b0a782a4060f3bcc24` completed with conclusion `success` (`push`, branch `master`). The run was created at `2026-09-27T04:21:03Z` and last updated at `2026-09-27T04:23:27Z`.
+- The workflow run's overall conclusion was verified, but its individual job results could not be fetched because the job-detail query returned `HTTP 401: Bad credentials`. Per-job CI results therefore remain unverified.
+- No local tests were run for this progress update. This record captures the run-level GitHub Actions result only and does not establish individual job results or operational validation. No Canonical Apply, runtime, Scheduler, account, credential, or order validation was performed.
