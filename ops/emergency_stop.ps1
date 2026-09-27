@@ -263,7 +263,47 @@ if ($settingsExists) {
                 $before.IndexOf('"enabled": false', [System.StringComparison]::Ordinal) -lt 0) {
                 throw "Settings content validation failed before write for $Account; original file was left untouched."
             }
-            [System.IO.File]::WriteAllText($settingsPath, $before, [System.Text.UTF8Encoding]::new($false))
+            $artifactId = [guid]::NewGuid().ToString("N")
+            $settingsFileName = [System.IO.Path]::GetFileName($settingsPath)
+            $tempName = "{0}.emergency_stop_{1}.tmp" -f $settingsFileName, $artifactId
+            $backupName = "{0}.emergency_stop_{1}.bak" -f $settingsFileName, $artifactId
+            $settingsTempPath = Join-Path (Split-Path -Parent $settingsPath) $tempName
+            $settingsBackupPath = Join-Path (Split-Path -Parent $settingsPath) $backupName
+            $settingsStream = $null
+            try {
+                $candidateBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($before)
+                $settingsStream = [System.IO.File]::Open(
+                    $settingsTempPath,
+                    [System.IO.FileMode]::CreateNew,
+                    [System.IO.FileAccess]::Write,
+                    [System.IO.FileShare]::None
+                )
+                $settingsStream.Write($candidateBytes, 0, $candidateBytes.Length)
+                $settingsStream.Flush($true)
+                $settingsStream.Dispose()
+                $settingsStream = $null
+
+                $stagedBytes = [System.IO.File]::ReadAllBytes($settingsTempPath)
+                if ([System.Convert]::ToBase64String($stagedBytes) -cne [System.Convert]::ToBase64String($candidateBytes)) {
+                    throw "Settings temporary file byte validation failed for $Account."
+                }
+                [System.IO.File]::Replace($settingsTempPath, $settingsPath, $settingsBackupPath)
+                [System.IO.File]::Delete($settingsBackupPath)
+            } finally {
+                try {
+                    if ($null -ne $settingsStream) { $settingsStream.Dispose() }
+                } finally {
+                    try {
+                        if ($null -ne $settingsTempPath -and [System.IO.File]::Exists($settingsTempPath)) {
+                            [System.IO.File]::Delete($settingsTempPath)
+                        }
+                    } finally {
+                        if ($null -ne $settingsBackupPath -and [System.IO.File]::Exists($settingsBackupPath)) {
+                            [System.IO.File]::Delete($settingsBackupPath)
+                        }
+                    }
+                }
+            }
         }
     } finally {
         try { $settingsLock.Unlock(0, 1) }
