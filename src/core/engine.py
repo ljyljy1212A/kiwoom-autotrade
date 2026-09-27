@@ -43,6 +43,7 @@ from src.core.us_market import (
     normalize_us_execution_rows,
 )
 from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
+from src.core.lifecycle_persistence import merge_symbol_lifecycle_locked
 from src.core.control_state import (
     FIXED_PORT_DEGRADED_PAUSE_REASON,
     read_auto_trading_enabled,
@@ -2048,23 +2049,13 @@ class AccountEngine:
         """Merge this symbol under the account lock; reject stale same-symbol state."""
         symbol = self._symbol_key(self.ctx.strategy.symbol)
         with account_cleanup_lock(self.data_dir, self.ctx.account_id):
-            try:
-                latest = json.loads(self._lifecycle_path.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                latest = {}
-            if not isinstance(latest, dict):
-                raise RuntimeError("Symbol lifecycle file is not an object")
-            if (
-                (symbol in latest) != self._lifecycle_disk_present
-                or latest.get(symbol) != self._lifecycle_disk_state
-            ):
-                raise RuntimeError(f"Concurrent symbol lifecycle change for {symbol}")
-            if symbol in self._symbol_lifecycles:
-                latest[symbol] = copy.deepcopy(self._symbol_lifecycles[symbol])
-            else:
-                latest.pop(symbol, None)
-            self._lifecycle_path.parent.mkdir(exist_ok=True)
-            atomic_write_json(self._lifecycle_path, latest, ensure_ascii=False)
+            latest = merge_symbol_lifecycle_locked(
+                self._lifecycle_path,
+                symbol,
+                self._symbol_lifecycles,
+                expected_present=self._lifecycle_disk_present,
+                expected_state=self._lifecycle_disk_state,
+            )
             self._symbol_lifecycles = latest
             self._lifecycle_disk_present = symbol in latest
             self._lifecycle_disk_state = copy.deepcopy(latest.get(symbol))
