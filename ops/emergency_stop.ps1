@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Account
+    [string]$Account,
+    [Parameter(Mandatory = $false)]
+    [string]$RuntimeRoot
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -142,8 +144,33 @@ function Write-AtomicUtf8 {
     }
 }
 
-$repoRoot = $PSScriptRoot | Split-Path -Parent
-$accountsPath = Join-Path $PSScriptRoot '..\config\accounts.yaml'
+$scriptRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$selectedRuntimeRoot = $scriptRepoRoot
+if (-not [string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+    if (-not [System.IO.Path]::IsPathRooted($RuntimeRoot)) {
+        throw "RuntimeRoot must be an absolute path."
+    }
+
+    $requestedRuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
+    $allowedRuntimeRoots = @(
+        $scriptRepoRoot,
+        [System.IO.Path]::GetFullPath('C:\auto\kiwoom-autotrade')
+    )
+    $runtimeRootAllowed = $false
+    foreach ($allowedRoot in $allowedRuntimeRoots) {
+        if ([System.StringComparer]::OrdinalIgnoreCase.Equals($requestedRuntimeRoot, $allowedRoot)) {
+            $runtimeRootAllowed = $true
+            break
+        }
+    }
+    if (-not $runtimeRootAllowed) {
+        throw "RuntimeRoot is outside the fixed allowlist."
+    }
+    $selectedRuntimeRoot = $requestedRuntimeRoot
+}
+
+$repoRoot = $selectedRuntimeRoot
+$accountsPath = Join-Path $repoRoot 'config\accounts.yaml'
 $allowlistValidator = @'
 from pathlib import Path
 import sys

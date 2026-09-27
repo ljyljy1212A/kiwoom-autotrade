@@ -1119,3 +1119,8 @@ publication succeeds and the final target identity is verified.
 - An elevated focused run exposed three failures: Windows PowerShell's `File.Replace` rejected a null backup path. The implementation now supplies a unique same-directory backup path and removes it after replacement; failure cleanup also removes any remaining temporary or backup file.
 - The focused Windows mock-account suite then passed: `13 passed in 11.67s` for `tests/test_emergency_stop_allowlist.py`. This is local focused test evidence only; CI and operational validation were not performed.
 - The two earlier sandboxed attempts ended with basetemp `WinError 5`; they produced no test summaries. The later elevated run returned individual results and resolved that evidence gap.
+
+## 2026-09-27 — Emergency-stop RuntimeRoot argument collision fix
+
+- Windows PowerShell treats variable names case-insensitively. The local `$runtimeRoot` assignment overwrote the optional `$RuntimeRoot` argument before validation, so an explicitly supplied root was ignored. Renamed the internal selection variable to `$selectedRuntimeRoot` while retaining the fixed root allowlist and the existing account and file safety checks.
+- Added mock-only tests for an explicitly allowed script root and for rejecting an unapproved root before writes. The focused `tests/test_emergency_stop_allowlist.py` suite passed in an isolated Windows Temp directory: `15 passed in 13.00s`. PowerShell parsing reported zero errors. This is local test evidence only; CI, Canonical publication, and operational validation were not performed.
