@@ -1269,3 +1269,37 @@ publication succeeds and the final target identity is verified.
 - Both processes completed with exit code 0. The final balance JSON parsed successfully, reflected the later publisher's complete holding snapshot, and retained the pre-existing currency, reporting-currency, and FX metadata. No live account files or credentials were read or changed.
 - An earlier timing attempt reported the second writer's marker during the first writer's delay, but its observation began only after process startup and could overlap the end of that delay. It is treated as inconclusive. The longer, readiness-gated probe above provides the result recorded here.
 - Synthetic files were created only under `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-balance-publisher-process-retry2-20260928-b54g94yd`. No source or test code changed in this probe. No Git delivery, CI, Canonical publication, account, credential, or order action occurred.
+
+## 2026-09-28 — Canonical publication pending after rejected patch input
+
+- An explicitly approved Canonical Apply targeted `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` with candidate append SHA-256 `BCF2187DD6FDEC772A1CBC478F8FDF4605DFB5E445D1D9DB3F7DF2506F777363` and expected preimage SHA-256 `8EF77B22CE3A3387AF55E370D91601B46A3C5FD836EFC3DFE24E6C0D8AC1AE09`.
+- The single elevated patch invocation rejected its input with `Invalid patch: The last line of the patch must be '*** End Patch'`. Read-only verification afterward found the Canonical target unchanged at 76,031 bytes with SHA-256 `8EF77B22CE3A3387AF55E370D91601B46A3C5FD836EFC3DFE24E6C0D8AC1AE09`; no publication occurred.
+- Per the publication workflow, no retry, alternate writer, or fallback was used. Canonical status remains `CANONICAL_PENDING`. This repository-local record does not change the Canonical target.
+
+## 2026-09-29 — New-chat handoff checkpoint
+
+- This conversation read `AGENTS.md`, `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md`, `docs/PROJECT_PROGRESS.md`, and `docs/CANONICAL_PUBLICATION_WORKFLOW.md` before this repository-local successor edit. The Canonical index was also read only to route the requested handoff; `C:\auto\kiwoom-autotrade\PROJECT_HANDOFF_CURRENT.md` was absent at the requested repository path.
+- Before this append, `docs/PROJECT_PROGRESS.md` was 130,100 bytes with SHA-256 `98E18A24290C1877BA9147C0CC96910631CE894200F04AB122FD25B84521E4EE`; it was strict UTF-8 without BOM, had `CRLF=0`, `BareCR=0`, and ended in LF. This edit is limited to this successor section.
+- No Git status, staging, commit, push, PR, remote, test, CI, runtime, Scheduler, network, account, credential, or order action was performed in this record-update step. Current Git/PR status and dirty/untracked inventory are `INCOMPLETE`.
+- The preceding repository-local record retains Canonical status `CANONICAL_PENDING` after a rejected patch input. This successor does not retry publication, modify any Canonical file, or claim Canonical publication.
+
+## 2026-09-29 — Canonical Apply attempt blocked after invalid patch input
+
+- The approved elevated `apply_patch` invocation supplied the patch through stdin. The wrapper rejected it with `--codex-run-as-apply-patch requires a UTF-8 PATCH argument.` Read-only verification afterward found the Canonical target unchanged at 76,031 bytes with SHA-256 `8EF77B22CE3A3387AF55E370D91601B46A3C5FD836EFC3DFE24E6C0D8AC1AE09`.
+- A corrected invocation passing the patch as a UTF-8 argument was submitted after explicit approval but rejected by automatic approval review before execution. The stated reason was that project instructions prohibit retrying or switching write methods after a Canonical publication failure.
+- No Canonical content was published. Canonical status remains `CANONICAL_PENDING`; no alternate writer or fallback was used.
+- This repository-local successor records the failed publication attempts and review outcome. It does not change the Canonical target or authorize another Apply.
+
+## 2026-09-29 — PR #73 merge and CI verification
+
+- PR #73, `docs: remove records relocated to canonical package`, merged into `master` at 2026-09-28T23:13:22Z with squash merge commit `bc293286a8a2919bd9aaa4318ff582263614a478`. The PR head was `990e2b5d34f2d395b27991f1694ac49ce8ae21e9`; its base was `45edf269ed742c375b61bce300ef99d8c63bafc8`.
+- GitHub Actions `linux-smoke` run `36496436550` completed successfully. Windows validation, including its test step, Ubuntu compatibility signal, and Quality advisory all succeeded. The PR diff contained only `DEV_PC_BOOTSTRAP_CHECKLIST.md`, `KNOWN_PITFALLS.md`, and `PROJECT_HANDOFF_CURRENT.md` deletions.
+- No local tests were run. No Canonical publication was performed. Per the user instruction, no follow-up PR was created to publish this merge/CI record.
+
+## 2026-09-29 — New-chat handoff record update
+
+- This conversation re-read `AGENTS.md`, `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md`, `docs/PROJECT_PROGRESS.md`, and `docs/CANONICAL_PUBLICATION_WORKFLOW.md` before this successor edit.
+- A read-only `git status --short --branch --untracked-files=normal` returned exit code 0 and identified branch `codex/startup-sync-failure-characterization` tracking its origin, an unstaged `docs/PROJECT_PROGRESS.md`, and visible untracked paths. The command also reported `Permission denied` warnings for multiple pytest temporary directories; the complete untracked inventory is `INCOMPLETE`.
+- A read-only `git diff -- docs/PROJECT_PROGRESS.md` showed only additions after tracked `HEAD`, with no deletion lines. It included the existing repository-local successors for Canonical publication failure, new-chat handoff, blocked Canonical Apply, and PR #73 merge/CI verification.
+- Immediately before this append, `docs/PROJECT_PROGRESS.md` was 133,064 bytes with SHA-256 `EBE3838B6C90FF001876E36BA0C5379D257C8E00B6179FDE381F27FFD3F6E243`; it was strict UTF-8 without BOM, had `CRLF=0`, `BareCR=0`, and ended in LF. This edit adds only this successor section.
+- No test, CI, Canonical Apply, runtime, Scheduler, network, account, credential, order, Git stage, commit, push, PR, or merge action was performed for this record-update step. Existing repository-local Canonical status is `CANONICAL_PENDING`; the Canonical target was not queried in this step.
