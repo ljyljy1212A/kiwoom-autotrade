@@ -112,6 +112,16 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         engine._last_execution_unavailable_symbol = ""
         return engine
 
+    def _write_dashboard_control(self, data_dir: Path, config: dict) -> None:
+        control_snapshot.initialize(data_dir, "us_mock", {}, None)
+        control_snapshot.update(data_dir, "us_mock", {
+            "symbol": "SOXL",
+            "auto_buy": True,
+            "auto_sell": True,
+            "instance_id": SESSION,
+            "config": config,
+        })
+
     def test_disabled_profile_step_save_persists_steps_without_changing_flags(self):
         old_profile = _profile(enabled=False, buy_steps=[])
         saved_profile = _profile(
@@ -355,6 +365,78 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
             persisted = json.loads(settings_path.read_text(encoding="utf-8"))
         self.assertEqual(responses, [({"error": "Invalid settings payload"}, 400)])
         self.assertEqual(persisted, {"profiles": [existing_profile]})
+
+    def test_settings_profile_read_blocks_missing_invalid_unlisted_and_disabled_profiles(self):
+        malformed_buy = _profile(enabled=True, buy_steps=[])
+        malformed_buy["config"]["auto_buy"] = "enabled"
+        malformed_sell = _profile(enabled=True, buy_steps=[])
+        malformed_sell["config"]["auto_sell"] = "enabled"
+        malformed_buy_none = _profile(enabled=True, buy_steps=[])
+        malformed_buy_none["config"]["auto_buy"] = None
+        malformed_buy_empty_list = _profile(enabled=True, buy_steps=[])
+        malformed_buy_empty_list["config"]["auto_buy"] = []
+        malformed_sell_empty_string = _profile(enabled=True, buy_steps=[])
+        malformed_sell_empty_string["config"]["auto_sell"] = ""
+        malformed_enabled = _profile(enabled=True, buy_steps=[])
+        malformed_enabled["enabled"] = "true"
+        malformed_side_flag = _profile(enabled=True, buy_steps=[])
+        malformed_side_flag["config"]["auto_buy"]["enabled"] = "true"
+        wrong_market = _profile(enabled=True, buy_steps=[])
+        wrong_market["config"]["market"] = "KR"
+        cases = (
+            ("missing", None),
+            ("invalid_json", b"{"),
+            ("non_list_profiles", {"profiles": None}),
+            ("non_object_config", {"profiles": [{"enabled": True, "config": "SOXL"}]}),
+            ("non_object_auto_buy", {"profiles": [malformed_buy]}),
+            ("non_object_auto_sell", {"profiles": [malformed_sell]}),
+            ("falsey_non_object_auto_buy_none", {"profiles": [malformed_buy_none]}),
+            ("falsey_non_object_auto_buy_list", {"profiles": [malformed_buy_empty_list]}),
+            ("falsey_non_object_auto_sell_string", {"profiles": [malformed_sell_empty_string]}),
+            ("non_boolean_enabled", {"profiles": [malformed_enabled]}),
+            ("non_boolean_side_flag", {"profiles": [malformed_side_flag]}),
+            ("wrong_profile_market", {"profiles": [wrong_market]}),
+            ("incomplete_config", {"profiles": [{"enabled": True, "config": {"symbol": "SOXL"}}]}),
+            ("unlisted", {"profiles": []}),
+            ("disabled", {"profiles": [_profile(enabled=False, buy_steps=[])]}),
+        )
+        for name, settings_value in cases:
+            with self.subTest(settings=name), tempfile.TemporaryDirectory() as directory:
+                data = Path(directory)
+                engine = self._dashboard_engine(data)
+                config = _profile(
+                    enabled=True,
+                    buy_steps=[{"step": 2, "drop_pct": -1, "amount": 100}],
+                )["config"]
+                config["auto_buy"]["enabled"] = True
+                config["auto_sell"]["enabled"] = True
+                self._write_dashboard_control(data, config)
+                settings_path = data / "dashboard_settings_us_mock.json"
+                if settings_value is not None:
+                    if isinstance(settings_value, bytes):
+                        settings_path.write_bytes(settings_value)
+                    else:
+                        settings_path.write_text(json.dumps(settings_value), encoding="utf-8")
+                engine._dashboard_auto_buy = True
+                engine._dashboard_auto_sell = True
+                engine._dashboard_profile_allowed = True
+                if name.startswith("falsey_non_object_"):
+                    config_from_settings = settings_value["profiles"][0]["config"]
+                    engine._dashboard_config_fingerprint = json.dumps(
+                        config_from_settings, sort_keys=True, separators=(",", ":")
+                    )
+                    engine._symbol_lifecycles["SOXL"] = {"status": "open"}
+                if name in {"incomplete_config", "wrong_profile_market"}:
+                    engine._closed_symbols_blocked.add("SOXL")
+                    engine._symbol_lifecycles["SOXL"] = {"status": "closed"}
+
+                asyncio.run(engine._refresh_dashboard_controls())
+
+                self.assertFalse(engine._dashboard_auto_buy)
+                self.assertFalse(engine._dashboard_auto_sell)
+                self.assertFalse(engine._dashboard_profile_allowed)
+                if name in {"incomplete_config", "wrong_profile_market"}:
+                    self.assertIn("SOXL", engine._closed_symbols_blocked)
 
     @pytest.mark.skipif(
         not (Path(__file__).parents[1] / "dashboard" / "index.html").exists(),
