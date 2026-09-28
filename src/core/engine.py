@@ -42,7 +42,12 @@ from src.core.us_market import (
     normalize_us_symbol,
     normalize_us_execution_rows,
 )
-from src.core.orphan_cleanup import OrphanStateCleaner, account_cleanup_lock
+from src.core.orphan_cleanup import (
+    OrphanStateCleaner,
+    account_balance_snapshot_lock,
+    account_cleanup_lock,
+    account_quote_snapshot_lock,
+)
 from src.core.lifecycle_persistence import (
     assert_symbol_lifecycle_current,
     load_closed_symbol_lifecycles,
@@ -89,6 +94,7 @@ class _AccountBalanceGate:
         self.balance_run_id = uuid.uuid4().hex
         self.balance_generation = 0
         self.raw_balance_generation = ""
+        self.published_balance_received_at = 0.0
         self.orphan_quantities: dict[str, float] | None = None
         self.orphan_received_at = 0.0
         self.orphan_balance_generation = ""
@@ -1051,11 +1057,22 @@ class AccountEngine:
             )
         return with_unattributed_collision_order_ids(snapshot, data_dir=self.data_dir)
 
-    def _publish_passive_balance_snapshot(self, broker_holdings: list[dict], balance_recognized: bool) -> None:
+    def _publish_passive_balance_snapshot(
+        self, broker_holdings: list[dict], balance_recognized: bool, received_at: float,
+    ) -> None:
         """Publish all broker holdings without changing any strategy state."""
         if not balance_recognized:
             self.ctx.logger.warning("Passive balance monitor received an unrecognized balance response")
             return
+        with account_balance_snapshot_lock(self.data_dir, self.ctx.account_id):
+            if received_at < self._balance_gate.published_balance_received_at:
+                return
+            self._publish_passive_balance_snapshot_locked(broker_holdings, received_at)
+
+    def _publish_passive_balance_snapshot_locked(
+        self, broker_holdings: list[dict], received_at: float,
+    ) -> None:
+        """Read metadata and replace the balance under the publication lock."""
         balance_path = self.data_dir / f"balance_{self.ctx.account_id}.json"
         try:
             previous = json.loads(balance_path.read_text(encoding="utf-8"))
@@ -1107,7 +1124,17 @@ class AccountEngine:
             "fxRateKrw": previous.get("fxRateKrw"),
         }
         balance_path.parent.mkdir(exist_ok=True)
-        atomic_write_json(balance_path, snapshot, ensure_ascii=True)
+        self._publish_balance_snapshot(snapshot, received_at)
+
+    def _publish_balance_snapshot(self, snapshot: dict, received_at: float) -> bool:
+        """Keep account publications ordered by their broker observation."""
+        with account_balance_snapshot_lock(self.data_dir, self.ctx.account_id):
+            if received_at < self._balance_gate.published_balance_received_at:
+                return False
+            path = self.data_dir / f"balance_{self.ctx.account_id}.json"
+            atomic_write_json(path, snapshot, ensure_ascii=True)
+            self._balance_gate.published_balance_received_at = received_at
+            return True
 
     def _has_unresolved_order_for_cleanup(self, symbol: str) -> bool:
         """Read pending attribution state even from a passive account monitor.
@@ -2330,7 +2357,7 @@ class AccountEngine:
         balance_result = await self._shared_broker_balance(
             max_age_sec=0 if pending_cleanup else None,
         )
-        raw_balance, _, _, _ = balance_result
+        raw_balance, balance_received_at, _, _ = balance_result
         normalized_balance = _normalize_broker_balance(self.ctx.client.market, raw_balance)
         broker_holdings = normalized_balance.holdings
         balance_recognized = normalized_balance.recognized
@@ -2348,7 +2375,9 @@ class AccountEngine:
                 self._pause_reason = "symbol_key_manual_review"
                 return
         if self._balance_only:
-            self._publish_passive_balance_snapshot(broker_holdings, balance_recognized)
+            self._publish_passive_balance_snapshot(
+                broker_holdings, balance_recognized, balance_received_at,
+            )
             async with _diagnostic_lock(
                 self._balance_gate.orphan_cleanup_lock, "orphan_cleanup_lock", self.ctx.logger,
             ):
@@ -2417,7 +2446,6 @@ class AccountEngine:
         if self.ctx.client.market == "US":
             await self._refresh_fx_rate()
 
-        balance_path = self.data_dir / f"balance_{self.ctx.account_id}.json"
         balance_snapshot = {
             "account": self.ctx.account_id, "symbol": self.ctx.strategy.symbol,
             "qty": qty, "avgPrice": avg_price, "updatedAt": datetime.now().isoformat(),
@@ -2445,7 +2473,7 @@ class AccountEngine:
         # Dashboard readers run in a different process. Replace the snapshot
         # atomically so they either see the previous complete balance or this
         # complete balance, never a partly-written JSON document.
-        atomic_write_json(balance_path, balance_snapshot, ensure_ascii=True)
+        self._publish_balance_snapshot(balance_snapshot, balance_received_at)
         if self._balance_only:
             return
         # One shared broker-authoritative orphan evaluator owns both startup
@@ -2980,17 +3008,18 @@ class AccountEngine:
         """Publish the exact quote used for a strategy decision, per symbol."""
         path = self.data_dir / f"worker_{self.ctx.account_id}.quotes.json"
         try:
-            existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            if not isinstance(existing, dict):
-                existing = {}
-            trigger = self._next_buy_trigger()
-            existing[self._symbol_key(self.ctx.strategy.symbol)] = {
-                "price": float(price), "source": source,
-                "observedAt": datetime.fromtimestamp(observed_at, timezone.utc).isoformat(),
-                "evaluatedAt": datetime.now(timezone.utc).isoformat(),
-                "currentStep": int(self.ctx.position.step), "nextBuyTrigger": trigger,
-            }
-            atomic_write_json(path, existing, ensure_ascii=False)
+            with account_quote_snapshot_lock(self.data_dir, self.ctx.account_id):
+                existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                if not isinstance(existing, dict):
+                    existing = {}
+                trigger = self._next_buy_trigger()
+                existing[self._symbol_key(self.ctx.strategy.symbol)] = {
+                    "price": float(price), "source": source,
+                    "observedAt": datetime.fromtimestamp(observed_at, timezone.utc).isoformat(),
+                    "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                    "currentStep": int(self.ctx.position.step), "nextBuyTrigger": trigger,
+                }
+                atomic_write_json(path, existing, ensure_ascii=False)
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self.ctx.logger.warning(f"Quote diagnostic publication deferred: {exc}")
 
