@@ -1075,3 +1075,107 @@ publication succeeds and the final target identity is verified.
 - PR #52, `docs: record PR #51 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `c01739d84f579ec638f7427d844dbc00b8e0ea84`. The merge commit is `7d984cb9c5a5eb93d0daf288c3b5f06b245a2c77`.
 - The automatic `master` push workflow run `36296649680` for merge commit `7d984cb9c5a5eb93d0daf288c3b5f06b245a2c77` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
 - No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #61 Canonical publication and status resolution
+
+- After the first sandboxed Apply failed during atomic replacement with `Access to the path is denied`, publication was recorded as `CANONICAL_PENDING`. Read-only verification found the target unchanged at 72,397 bytes with SHA-256 `B852DFD175626EDE69F06FE606E80F64DC31E233E59F82D9567ADF5897011C01`.
+- Following a separate explicit approval, the same fixed-target publisher completed its elevated Apply with `Publish: PASS`, operation ID `65ab6840-c634-4f9f-ab5c-e91277aab500`. The append SHA-256 was `041B93A78B37B337A72E3B5FBA1B49B08E43019A9038484EFA1D28B42189343D` and the published candidate SHA-256 was `897B76AAA8C02FE1EA9A88D7B3DB757F99565FE6D13D40643C3FF5DA720E0975`.
+- Independent readback confirmed 73,718 bytes, strict UTF-8, no BOM, the original three CRLF pairs, no bare CR, EOF LF, and an exact append-source suffix. The successful operation's lock, backup, and temporary paths are absent. The lock and temporary file from the earlier failed operation remained at publication time; they were later removed after their exact paths, expected lengths and SHA-256 values, and non-reparse status were verified.
+- PR #61 merge and its push, pull-request, and post-merge `master` CI runs are recorded in Canonical. No follow-up PR was created for this record. No runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-27 — Successor handoff checkpoint
+
+- This documentation-only checkpoint read `AGENTS.md`, Canonical `CURRENT_STATE.md`, this progress record, and the Canonical publication workflow. No Canonical file was modified.
+- Before this append, `docs/PROJECT_PROGRESS.md` was 93,853 bytes with SHA-256 `89A1FA2FA019BD2D17621EF7082D2CA98E4FC76E1FB05D5A16EB9EFF53FCAF4D`. It was strict UTF-8 without BOM, LF-only (CRLF 0, bare CR 0), and ended in LF.
+- No source-code change, test, CI, Git staging, commit, push, PR, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order activity was performed for this checkpoint.
+- Current Git and PR state, and the complete dirty and untracked inventory, were not rechecked in this checkpoint and remain INCOMPLETE.
+
+## 2026-09-28 — Tranche-base persistence extraction successor
+
+- In the managed worktree `C:\Users\jhkhjk\.codex\worktrees\account-engine-tranche-base\kiwoom-autotrade`, three characterization tests were added to `tests/test_tranche_base_persistence.py`: stale lifecycle-anchor rejection and source-file/cache preservation on store and remove write failures. Before the source extraction, the focused file passed `8 passed in 1.05s` with Python 3.14.7 and pytest 9.1.1 using an isolated basetemp. An earlier run failed during pytest temporary-directory cleanup with `WinError 5`; it did not establish a product result.
+- Locked tranche-base JSON read/merge/write operations were extracted from `AccountEngine` into `src/core/tranche_base_persistence.py`. Static inspection confirmed that the engine retains symbol and price validation, account-cleanup and tranche-base write lock order, the lifecycle-anchor check, `atomic_write_json` injection, OSError warnings, and cache assignment after helper success.
+- Post-edit readback observed `src/core/engine.py` at 160,941 bytes, SHA-256 `1DDC76041E1A41513DADFACDA292EBA7247F06DE86B326A1B194A14023201C5C`, and the new module at 1,340 bytes, SHA-256 `DBF04B68EE0B7BB6566C83BB129B5F9FC69329A2CF19FB13468E56B95848F2A9`. Both were BOM-free, LF-only, and ended in LF. The extraction is implemented and statically reviewed. The focused tests were not rerun after extraction, so that source change is not locally tested.
+- Git status and diff for the managed worktree, and current PR and CI state, were not checked after the source edit and remain `INCOMPLETE`. No stage, commit, push, PR, CI, or merge step was performed for this extraction. The original checkout's preexisting tracked and untracked changes were not fully inventoried or cleaned.
+- This extraction was not canonically published or operationally validated. No Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed for this checkpoint.
+
+## 2026-09-28 — Tranche-base persistence focused test and review successor
+
+- After the source extraction, the focused `tests/test_tranche_base_persistence.py` suite was executed in the managed worktree with Python 3.14.7 and pytest 9.1.1. The elevated isolated run completed with `8 passed in 1.00s` and exit code 0. Two unelevated attempts in separate temporary directories ended during pytest cleanup with `WinError 5` access denied; those attempts did not establish a product result.
+- Read-only review of the managed worktree found exactly three changes: `src/core/engine.py`, new `src/core/tranche_base_persistence.py`, and `tests/test_tranche_base_persistence.py`. The review confirmed the existing account-cleanup then tranche-base lock order, lifecycle-anchor guard, injected `atomic_write_json` path, OSError warning handling, and cache assignment only after helper success. The characterization tests cover stale lifecycle-anchor rejection and preservation of the source file and in-memory cache for store and remove write failures.
+- Managed-worktree `git diff --check` passed. No source or test edits were made during this review. No stage, commit, push, PR, CI, merge, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed for this successor.
+- This successor records implementation, static review, and focused local test evidence only. The change is not canonically published or operationally validated.
+
+## 2026-09-28 — PR #65 merge and master CI successor
+
+- PR #65, `refactor: extract tranche base persistence`, was merged with the `merge` method after its head SHA `650deddb9c143bd544e54c86fb2f2d987664049b` was rechecked. The merge commit is `a7a09e0cd3a4a002e877ffc0db526878fb743232`.
+- The PR workflow run `36354449219` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory. The post-merge `master` push workflow run `36354667749` for merge commit `a7a09e0cd3a4a002e877ffc0db526878fb743232` also completed successfully for all three jobs.
+- This successor records GitHub PR and CI evidence only. No follow-up PR was created for this record. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-28 — Lifecycle cache guard extraction successor
+
+- Added `assert_symbol_lifecycle_current()` to `src/core/lifecycle_persistence.py` and delegated the lifecycle file read and same-symbol anchor comparison from `AccountEngine._assert_lifecycle_current_for_cache_write()`. The engine retains the no-lifecycle test-fixture boundary and current strategy-symbol validation.
+- Added lifecycle guard characterization for an expected missing anchor, disappearance of a previously observed anchor, malformed JSON, a non-object JSON value, and a lifecycle read permission error. Added a tranche-base integration case proving a lifecycle read error does not call the atomic tranche-base writer and preserves the lifecycle file, tranche-base file, and in-memory tranche cache.
+- The focused `tests/test_lifecycle_persistence_characterization.py` and `tests/test_tranche_base_persistence.py` suites passed: `22 passed in 1.27s` (Python 3.14.7, pytest 9.1.1). Read-only review confirmed the existing engine symbol guard and error behavior remain in place; `git diff --check` passed.
+- This change is implemented, statically reviewed, and locally tested. No stage, commit, push, PR, CI, merge, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed for this successor. It is not canonically published or operationally validated.
+
+## 2026-09-28 — PR #66 merge and master CI successor
+
+- PR #66, `https://github.com/ljyljy1212A/kiwoom-autotrade/pull/66`, merged at `2026-09-27T22:40:35Z`. Its head was `d08065390cf5acb6fc9dab1b99c15353459652f2`; merge commit: `57f9ab912c4a1a266408e462125efb2025ac5bd4`.
+- PR CI run `36355816977` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory. Post-merge `master` push run `36356105273` for the merge commit completed successfully: Windows validation, Ubuntu compatibility signal, and Quality advisory all passed.
+- This successor records verified PR and CI evidence. No follow-up PR was created for this record. No Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed; operational validation is not established.
+
+## 2026-09-28 — Lifecycle startup read characterization successor
+
+- In the managed worktree, added characterization cases to `tests/test_lifecycle_persistence_characterization.py` for lifecycle loading during `AccountEngine` initialization and after symbol-key migration. The cases cover a valid object, a missing file, malformed JSON, a non-object JSON value, an `OSError`, current-symbol disk-anchor state, and an independent copy of the observed anchor. No production source was changed in this step.
+- The first elevated focused run exposed a missing `ctx.logger` in the new startup-test fixture: `18 passed, 5 failed`. After adding the logger stub, the focused file passed with `23 passed, 5 warnings in 1.04s`. The warnings were `pandas_market_calendars` notices about discontinued market times. Unelevated attempts ended with pytest `WinError 5` while enumerating the basetemp during session cleanup and were not used as product results.
+- Read-only review compared the added cases with the initialization and post-migration lifecycle-read behavior in `src/core/engine.py`; no findings were identified. The test file passed strict UTF-8, BOM-free, LF-only, EOF-LF, and Python AST syntax checks. No Git diff/status review, staging, commit, push, PR, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed for this successor.
+- This work is implemented as characterization tests, reviewed, and locally tested. The lifecycle read extraction itself remains proposed; no production change or operational validation is recorded here.
+
+## 2026-09-28 — Lifecycle startup read extraction successor
+
+- Added `load_symbol_lifecycles()` to `src/core/lifecycle_persistence.py` and routed the `AccountEngine` initialization and post-symbol-key-migration lifecycle reads through it. The helper preserves the prior behavior: `OSError` and JSON decode errors produce an empty mapping, and valid JSON values that are not objects also produce an empty mapping. Per-symbol disk-anchor calculation and deep-copy timing remain in the engine. The strict orphan-cleanup lifecycle read was left unchanged.
+- The focused `tests/test_lifecycle_persistence_characterization.py` suite passed after extraction: `23 passed, 5 warnings in 1.19s`. The warnings were `pandas_market_calendars` notices about discontinued market times.
+- Read-only review of the helper, both call sites, and the characterization cases found no issues in the inspected scope. Git diff/status was not checked. No progress-record follow-up PR, staging, commit, push, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed for this successor. This change is not canonically published or operationally validated.
+
+## 2026-09-28 — PR #67 merge and master CI successor
+
+- PR #67, `refactor: extract lifecycle startup reads`, merged at `2026-09-27T23:12:11Z`. Head: `3d30acaab382064e71535a5142a2756e2f4c8fe7`; merge commit: `b7209580fa3b5c68fe0719ea35c8dca91427a0a8`. The PR was rechecked open, mergeable, and clean immediately before merge.
+- PR CI run `36357658929` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory. Post-merge `master` push run `36357892773`, for merge commit `b7209580fa3b5c68fe0719ea35c8dca91427a0a8`, completed successfully for all three jobs.
+- This successor records the verified merge and CI evidence. No follow-up PR was created for this record. No Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed; operational validation is not established.
+
+## 2026-09-28 — Orphan-cleanup lifecycle verification extraction successor
+
+- Added four focused characterization cases in the managed worktree for the `AccountEngine` path after `OrphanStateCleaner` reports a cleaned symbol. They cover successful refresh from a persisted `closed` lifecycle marker, a missing marker, malformed lifecycle JSON, and a lifecycle read `PermissionError`. The failure cases retain the in-memory lifecycle cache and disk anchor.
+- The initial focused run exposed a missing `_fx_rate_krw` test-fixture attribute before the target branch. After adding that fixture value, the four selected cases passed: `4 passed, 17 deselected in 1.09s` with Python 3.14.7 and pytest 9.1.1.
+- Added `load_closed_symbol_lifecycles()` to `src/core/lifecycle_persistence.py` and routed the orphan-cleanup lifecycle read in `src/core/engine.py` through it while retaining the account cleanup lock and post-validation cache and disk-anchor assignments in the engine. The helper preserves strict JSON/read-error propagation and requires a per-symbol object whose `status` is `closed`.
+- Post-extraction tests passed: the four selected cases passed in `1.13s`; `tests/test_lifecycle_persistence_characterization.py` passed `23 passed, 5 warnings in 1.10s`; and `tests/test_manual_tranche_lifecycle.py` passed `21 passed, 13 warnings in 2.68s`. The warnings were `pandas_market_calendars` notices about discontinued market times. Managed-worktree `git diff --check` passed.
+- This change is implemented, statically reviewed, and locally tested. No stage, commit, push, PR, CI, merge, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed. It is not canonically published or operationally validated.
+
+## 2026-09-28 — Dashboard profile side-config fail-closed correction delivery successor
+
+- In the managed worktree `C:\Users\jhkhjk\.codex\worktrees\account-engine-tranche-base\kiwoom-autotrade`, corrected dashboard profile validation so `auto_buy` and `auto_sell` are type-checked before any falsy non-dictionary value can be normalized to `{}`. Added characterization cases for `None`, an empty list, and an empty string; the cases preserve an already-current strategy fingerprint and open lifecycle so they exercise the side-configuration guard.
+- The selected characterization passed: `1 passed, 10 deselected in 1.41s`. The full `tests/test_dashboard_profile_steps_save.py` file then passed: `11 passed in 1.73s`, using Python 3.14.7 and pytest 9.1.1. Managed-worktree `git diff --check` passed.
+- The reviewed files were committed as `dcdb8b80419978f29926722478b1514cf48212b0` (`fix: fail closed on malformed dashboard profiles`) and pushed to `origin/codex/extract-tranche-base-persistence`. PR #69 was created with base `master` and that head commit; its creation-time query reported `OPEN` and `MERGEABLE`.
+- A stale process-level `GH_TOKEN` caused an initial GitHub API `401 Bad credentials`; after excluding only `GH_TOKEN` and `GITHUB_TOKEN` from that process, the existing keyring authentication was used for the PR query and creation. CI completion was not queried under a separate CI authorization, so CI verification remains `INCOMPLETE`.
+- This successor records implementation, static review, focused local testing, local commit, push, and PR creation evidence only. It does not record a merge, CI verification, Canonical publication, or operational validation. No Canonical Apply, runtime, Scheduler, account, credential write, or order operation was performed.
+
+## 2026-09-28 - PR #69 merge and CI successor
+
+- PR #69, `fix: fail closed on malformed dashboard profiles`, was rechecked immediately before merge as `OPEN` and `MERGEABLE`, with base `master` and head `dcdb8b80419978f29926722478b1514cf48212b0`.
+- PR check runs `36362630046` and `36363542876` each completed successfully for Quality advisory, Ubuntu compatibility signal (non-blocking), and Windows validation (pending merge gate).
+- PR #69 was merged using the GitHub merge method at `2026-09-28T00:55:51Z`. The merge commit is `da1b138cd9ec96946a9bb6d5e7f5e94413b73d82`.
+- Post-merge `master` CI was not queried under its separate authorization gate and remains `INCOMPLETE`. No Canonical publication or operational validation is claimed.
+- This merge and CI result is recorded directly in this progress file. No follow-up PR was created. The progress update was not staged, committed, or pushed; the original checkout dirty and untracked state was preserved. Access-denied Git status warnings prevent a complete untracked inventory, which remains `INCOMPLETE`.
+
+## 2026-09-28 - PR #69 post-merge master CI successor
+
+- The automatic `master` push workflow run `36364023487` for merge commit `da1b138cd9ec96946a9bb6d5e7f5e94413b73d82` completed successfully. The `linux-smoke` workflow event was `push` on `master`, and the reported head SHA matched the merge commit.
+- Quality advisory, Ubuntu compatibility signal (non-blocking), and Windows validation (pending merge gate) all completed with conclusion `success`. The overall workflow conclusion was `success`.
+- This successor records the verified post-merge master CI result. No follow-up PR was created for this record. The progress update was not staged, committed, or pushed. No Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-28 - PR #69 Canonical publication successor
+
+- Following separate authorization, the PR #69 milestone was published to `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` with `tools/canonical_publisher.ps1`. Operation ID: `e0c79c8c-660c-4665-9bcb-154b8591a0d5`.
+- The verified target preimage was 73,718 bytes with SHA-256 `897B76AAA8C02FE1EA9A88D7B3DB757F99565FE6D13D40643C3FF5DA720E0975`. The 1,239-byte append source `docs/CURRENT_STATE_20260928_PR69_POSTMERGE_APPEND_CANDIDATE.md` had SHA-256 `C48DED6697F20D5251E69DAE4CA8652563A00246BB06CF563A3DDC4D4FFCD99F`; the expected full candidate SHA-256 was `8485292DA6B417BD4DF89ED3CDA2D900375007CCEF2CBE164C9DCF86100F0993`.
+- The publisher returned `Publish: PASS`. Independent readback confirmed the target at 74,957 bytes with SHA-256 `8485292DA6B417BD4DF89ED3CDA2D900375007CCEF2CBE164C9DCF86100F0993`; the original 73,718-byte prefix and exact append suffix matched. The file is strict UTF-8 without BOM, retains its three pre-existing CRLF pairs, has no bare CR, and ends in LF. The operation lock, backup, and temporary paths are absent.
+- This successor records Canonical publication of the PR #69 implementation and CI milestone. No follow-up PR was created. This progress append was not staged, committed, or pushed. No runtime, Scheduler, network, account, credential, or order validation is claimed.
