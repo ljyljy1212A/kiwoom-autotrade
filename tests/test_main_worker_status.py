@@ -27,7 +27,7 @@ def test_worker_heartbeat_publishes_running_when_account_is_not_degraded():
         except asyncio.CancelledError:
             pass
 
-    writer.assert_called_once_with(identity, "RUNNING", ["005930"], None)
+    writer.assert_called_once_with(identity, "RUNNING", ["005930"], None, lock=None)
 
 
 def test_worker_heartbeat_publishes_degraded_state_without_changing_liveness():
@@ -49,7 +49,7 @@ def test_worker_heartbeat_publishes_degraded_state_without_changing_liveness():
         except asyncio.CancelledError:
             pass
 
-    writer.assert_called_once_with(identity, "DEGRADED_FIXED_PORT", [], None)
+    writer.assert_called_once_with(identity, "DEGRADED_FIXED_PORT", [], None, lock=None)
 
 
 def test_worker_status_schema_includes_active_symbols_and_writes_atomically():
@@ -85,6 +85,39 @@ def test_worker_status_marks_no_active_symbols_as_expected_idle_and_records_cont
 
     assert payload["activityState"] == "expected-idle"
     assert payload["lastControllerCycleAt"] == controller_cycle_at
+
+
+def test_worker_status_includes_mutex_owner_evidence_when_available():
+    identity = worker_main.WorkerIdentity("kr_mock", "KR", 123, "instance", "started")
+    lock = Mock()
+    lock.observe_mutex_owner.return_value = {
+        "state": "CONFIRMED", "account": "kr_mock", "ownerPid": 123,
+        "ownerThreadId": 456, "observedAt": "2026-09-28T00:00:00+00:00",
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+        with patch.object(worker_main, "DATA_DIR", data_dir), patch.object(worker_main, "SYS_LOG"):
+            worker_main._write_worker_status(identity, "RUNNING", [], lock=lock)
+        payload = json.loads((data_dir / "worker_kr_mock.status.json").read_text(encoding="utf-8"))
+    assert payload["mutexOwnership"]["state"] == "CONFIRMED"
+    assert payload["mutexOwnership"]["account"] == identity.account_id
+    assert payload["mutexOwnership"]["ownerPid"] == identity.pid
+    assert payload["mutexOwnership"]["ownerThreadId"] == 456
+
+
+def test_worker_status_downgrades_mutex_owner_identity_mismatch():
+    identity = worker_main.WorkerIdentity("kr_mock", "KR", 123, "instance", "started")
+    lock = Mock()
+    lock.observe_mutex_owner.return_value = {
+        "state": "CONFIRMED", "account": "other_mock", "ownerPid": 999,
+        "ownerThreadId": 456, "observedAt": "2026-09-28T00:00:00+00:00",
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+        with patch.object(worker_main, "DATA_DIR", data_dir), patch.object(worker_main, "SYS_LOG"):
+            worker_main._write_worker_status(identity, "RUNNING", [], lock=lock)
+        payload = json.loads((data_dir / "worker_kr_mock.status.json").read_text(encoding="utf-8"))
+    assert payload["mutexOwnership"] == {"state": "INCOMPLETE", "reason": "identity_mismatch"}
 
 
 def test_registry_records_controller_cycle_per_account():

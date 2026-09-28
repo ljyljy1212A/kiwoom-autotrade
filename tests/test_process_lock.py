@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -107,6 +108,31 @@ class WindowsProcessLockTests(unittest.TestCase):
                     except subprocess.TimeoutExpired:
                         proc.kill()
                         proc.wait(timeout=10)
+
+
+    def test_mutex_owner_observation_identifies_the_owning_thread(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            account = f"owner_probe_{uuid.uuid4().hex}"
+            lock = ProcessLock(account, Path(tmp))
+            lock.acquire()
+            try:
+                owner = lock.observe_mutex_owner()
+                self.assertEqual(owner["state"], "CONFIRMED")
+                self.assertEqual(owner["account"], account)
+                self.assertEqual(owner["ownerPid"], os.getpid())
+                self.assertGreater(owner["ownerThreadId"], 0)
+                self.assertEqual(owner["currentCount"], 0)
+                self.assertFalse(owner["abandoned"])
+
+                other_thread = []
+                thread = threading.Thread(target=lambda: other_thread.append(lock.observe_mutex_owner()))
+                thread.start()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(other_thread[0]["state"], "NOT_OWNED")
+                self.assertNotIn("ownerPid", other_thread[0])
+            finally:
+                lock.release()
 
 
 if __name__ == "__main__":

@@ -196,6 +196,7 @@ def _write_worker_status(
     state: str,
     active_symbols: list[str],
     controller_cycle_at: str | None = None,
+    lock: ProcessLock | None = None,
 ) -> None:
     """Atomically publish ownership metadata for dashboard/supervisor reads."""
     status_path = _worker_status_path(identity.account_id)
@@ -212,6 +213,18 @@ def _write_worker_status(
         payload["lastControllerCycleAt"] = controller_cycle_at
     if identity.supervisor_launch_id:
         payload["supervisorLaunchId"] = identity.supervisor_launch_id
+    if lock is not None:
+        try:
+            mutex_ownership = lock.observe_mutex_owner()
+        except Exception as exc:
+            mutex_ownership = {"state": "INCOMPLETE", "reason": type(exc).__name__}
+        if not isinstance(mutex_ownership, dict):
+            mutex_ownership = {"state": "INCOMPLETE", "reason": "invalid_observation"}
+        if (mutex_ownership.get("state") == "CONFIRMED"
+                and (mutex_ownership.get("ownerPid") != identity.pid
+                     or mutex_ownership.get("account") != identity.account_id)):
+            mutex_ownership = {"state": "INCOMPLETE", "reason": "identity_mismatch"}
+        payload["mutexOwnership"] = mutex_ownership
     quote_path = DATA_DIR / f"worker_{identity.account_id}.quotes.json"
     try:
         quotes = json.loads(quote_path.read_text(encoding="utf-8"))
@@ -227,7 +240,8 @@ def _write_worker_status(
 
 
 async def _publish_worker_heartbeat(
-    identity: WorkerIdentity, registry: SymbolEngineRegistry, interval_sec: float = 5.0
+    identity: WorkerIdentity, registry: SymbolEngineRegistry, interval_sec: float = 5.0,
+    lock: ProcessLock | None = None,
 ) -> None:
     """Refresh worker liveness metadata while the account mutex is owned."""
     while True:
@@ -238,6 +252,7 @@ async def _publish_worker_heartbeat(
             state,
             list(registry.running_symbols(identity.account_id)),
             registry.controller_cycle_at(identity.account_id),
+            lock=lock,
         )
 
 
@@ -700,9 +715,13 @@ async def main():
             pass
         except OSError as exc:
             raise RuntimeError(f"Worker launch refused: cannot clear stale stop request: {exc}") from exc
-        _write_worker_status(worker_identity, _startup_worker_status_state(worker_identity.account_id), [])
+        _write_worker_status(
+            worker_identity, _startup_worker_status_state(worker_identity.account_id),
+            [], lock=worker_lock,
+        )
         worker_heartbeat = asyncio.create_task(
-            _publish_worker_heartbeat(worker_identity, registry), name=f"{worker_identity.account_id}-worker-heartbeat"
+            _publish_worker_heartbeat(worker_identity, registry, lock=worker_lock),
+            name=f"{worker_identity.account_id}-worker-heartbeat",
         )
         telegram = TelegramController(
             bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
@@ -725,7 +744,7 @@ async def main():
         engines_task = asyncio.create_task(_run_engines(), name=f"{worker_identity.account_id}-engines")
         done, _ = await asyncio.wait((engines_task, stop_watcher), return_when=asyncio.FIRST_COMPLETED)
         if stop_watcher in done:
-            _write_worker_status(worker_identity, "STOPPING", [])
+            _write_worker_status(worker_identity, "STOPPING", [], lock=worker_lock)
             engines_task.cancel()
             await asyncio.gather(engines_task, return_exceptions=True)
         else:
@@ -742,7 +761,7 @@ async def main():
             worker_heartbeat.cancel()
             await asyncio.gather(worker_heartbeat, return_exceptions=True)
         if worker_identity is not None:
-            _write_worker_status(worker_identity, "STOPPING", [])
+            _write_worker_status(worker_identity, "STOPPING", [], lock=worker_lock)
         if telegram is not None:
             try:
                 await telegram.stop()
