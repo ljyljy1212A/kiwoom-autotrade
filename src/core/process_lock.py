@@ -4,6 +4,7 @@ import ctypes
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.core.runtime_paths import DATA_DIR
@@ -93,6 +94,67 @@ class ProcessLock:
     def owned_by_current_process(self) -> bool:
         """Return whether this lock handle is owned by this process."""
         return bool(self._acquired and self._owner_pid == os.getpid())
+
+    def observe_mutex_owner(self) -> dict:
+        """Diagnose Windows mutex ownership in the calling thread.
+
+        This is evidence only. It does not replace the order-authority guard.
+        An unavailable native query is reported as incomplete.
+        """
+        observed_at = datetime.now(timezone.utc).isoformat()
+        if os.name != "nt" or not self._acquired or self._handle is None:
+            return {"state": "INCOMPLETE", "observedAt": observed_at, "reason": "no_windows_handle"}
+
+        class MutantBasicInformation(ctypes.Structure):
+            _fields_ = [
+                ("CurrentCount", ctypes.c_long),
+                ("OwnedByCaller", ctypes.c_ubyte),
+                ("AbandonedState", ctypes.c_ubyte),
+            ]
+
+        try:
+            ntdll = ctypes.WinDLL("ntdll")
+            query = ntdll.NtQueryMutant
+            query.argtypes = (
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+                ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+            )
+            query.restype = ctypes.c_long
+            kernel32 = ctypes.WinDLL("kernel32")
+            kernel32.GetCurrentThreadId.restype = ctypes.c_uint32
+            info = MutantBasicInformation()
+            returned_length = ctypes.c_ulong()
+            status = query(
+                self._handle, 0, ctypes.byref(info), ctypes.sizeof(info),
+                ctypes.byref(returned_length),
+            )
+            if status != 0 or returned_length.value < ctypes.sizeof(info):
+                return {
+                    "state": "INCOMPLETE", "observedAt": observed_at,
+                    "reason": "native_query_failed", "ntstatus": int(status),
+                }
+            caller_thread = int(kernel32.GetCurrentThreadId())
+        except (AttributeError, OSError, ValueError) as exc:
+            return {
+                "state": "INCOMPLETE", "observedAt": observed_at,
+                "reason": type(exc).__name__,
+            }
+
+        owned_by_caller = bool(info.OwnedByCaller)
+        consistent = not bool(info.AbandonedState) and info.CurrentCount <= 0
+        confirmed = owned_by_caller and consistent and self._owner_pid == os.getpid()
+        state = "CONFIRMED" if confirmed else "NOT_OWNED" if not owned_by_caller else "INCOMPLETE"
+        result = {
+            "state": state, "observedAt": observed_at,
+            "currentCount": int(info.CurrentCount),
+            "abandoned": bool(info.AbandonedState),
+            "callerThreadId": caller_thread,
+        }
+        if confirmed:
+            result["account"] = self.account_id
+            result["ownerPid"] = os.getpid()
+            result["ownerThreadId"] = caller_thread
+        return result
 
     def _acquire_windows(self) -> None:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
