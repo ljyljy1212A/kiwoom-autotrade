@@ -1283,6 +1283,8 @@ class AccountEngine:
                 f"does not match {self.ctx.client.market} worker"
             )
             return
+        self._dashboard_auto_buy = self._dashboard_auto_sell = False
+        self._dashboard_profile_allowed = False
         # The persisted Trade Settings List is the sole allow-list for order
         # execution. A stale control file cannot trade a removed/unlisted stock.
         settings_path = self.data_dir / f"dashboard_settings_{self.ctx.account_id}.json"
@@ -1291,8 +1293,11 @@ class AccountEngine:
             profiles = settings.get("profiles", []) if isinstance(settings, dict) else []
         except (OSError, json.JSONDecodeError):
             profiles = []
+        if not isinstance(profiles, list):
+            profiles = []
         profile = next((p for p in profiles if isinstance(p, dict)
-                        and self._symbol_key((p.get("config") or {}).get("symbol", "")) == symbol), None)
+                        and isinstance(p.get("config"), dict)
+                        and self._symbol_key(p["config"].get("symbol", "")) == symbol), None)
         if profile is None:
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
@@ -1300,10 +1305,40 @@ class AccountEngine:
                 self.ctx.logger.warning(f"Automation blocked: {symbol} is not in the Trade Settings List")
                 self._last_allowlist_warning_symbol = symbol
             return
-        if profile.get("enabled", True) is False:
+        if profile.get("enabled", True) is not True:
             self._dashboard_auto_buy = self._dashboard_auto_sell = False
             self._dashboard_profile_allowed = False
             return
+        saved_config = profile["config"]
+        if str(saved_config.get("market", "")).strip().upper() != self.ctx.client.market:
+            self.ctx.logger.warning(f"Ignoring dashboard profile with mismatched market for {symbol}")
+            return
+        buy_config = saved_config.get("auto_buy")
+        sell_config = saved_config.get("auto_sell")
+        if not isinstance(buy_config, dict) or not isinstance(sell_config, dict):
+            self.ctx.logger.warning("Ignoring invalid dashboard side configuration")
+            return
+        saved_buy = buy_config.get("enabled", False) is True
+        saved_sell = sell_config.get("enabled", False) is True
+        # The durable list is authoritative for the strategy values too; a
+        # stale dashboard_control file may only supply the current opt-in state.
+        config = saved_config
+        fingerprint = json.dumps(config, sort_keys=True, separators=(",", ":"))
+        lifecycle_state = self._symbol_lifecycles.get(symbol, {})
+        lifecycle_is_open = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "open"
+        lifecycle_is_pending = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "pending"
+        needs_activation = (
+            symbol != self._symbol_key(self.ctx.strategy.symbol)
+            or fingerprint != self._dashboard_config_fingerprint
+            or (not lifecycle_is_open and not lifecycle_is_pending)
+        )
+        strategy = self.ctx.strategy
+        if needs_activation:
+            try:
+                strategy = InfiniteGridStrategy(config)
+            except (KeyError, TypeError, ValueError) as exc:
+                self.ctx.logger.warning(f"Ignoring invalid dashboard strategy configuration: {exc}")
+                return
         if symbol in self._closed_symbols_blocked:
             # A closed lifecycle removed its old profile/control. Seeing a new
             # valid profile is an explicit operator re-entry request, not a
@@ -1326,29 +1361,10 @@ class AccountEngine:
                 self._dashboard_profile_allowed = False
                 return
         self._last_allowlist_warning_symbol = ""
-        saved_config = profile.get("config") or {}
-        saved_buy = bool((saved_config.get("auto_buy") or {}).get("enabled", False))
-        saved_sell = bool((saved_config.get("auto_sell") or {}).get("enabled", False))
-        self._dashboard_profile_allowed = True
-        # The durable list is authoritative for the strategy values too; a
-        # stale dashboard_control file may only supply the current opt-in state.
-        config = saved_config
         # The dashboard can operate a previously HTS-purchased holding.  Switch
         # the runtime strategy atomically to that holding's saved configuration;
         # it is never inferred from an arbitrary balance row.
-        fingerprint = json.dumps(config, sort_keys=True, separators=(",", ":"))
-        lifecycle_state = self._symbol_lifecycles.get(symbol, {})
-        lifecycle_is_open = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "open"
-        lifecycle_is_pending = isinstance(lifecycle_state, dict) and lifecycle_state.get("status") == "pending"
-        if (symbol != self._symbol_key(self.ctx.strategy.symbol)
-                or fingerprint != self._dashboard_config_fingerprint
-                or (not lifecycle_is_open and not lifecycle_is_pending)):
-            try:
-                strategy = InfiniteGridStrategy(config)
-            except (KeyError, TypeError, ValueError) as exc:
-                self.ctx.logger.warning(f"Ignoring invalid dashboard strategy configuration: {exc}")
-                self._dashboard_auto_buy = self._dashboard_auto_sell = False
-                return
+        if needs_activation:
             self.ctx.strategy = strategy
             self.ctx.position = PositionState(symbol=strategy.symbol)
             # A profile re-enabled after a full close is a fresh manual-first
@@ -1398,6 +1414,7 @@ class AccountEngine:
                 # REST remains authoritative whenever WS is stale or silent.
                 feed_obj.realtime.subscribe(strategy.symbol)
             self.ctx.logger.info(f"Dashboard strategy activated for existing holding: {symbol}")
+        self._dashboard_profile_allowed = True
         self._dashboard_auto_buy = bool(control.get("auto_buy")) and saved_buy
         self._dashboard_auto_sell = bool(control.get("auto_sell")) and saved_sell
         if self.ctx.account_id in control_snapshot.MOCK_ACCOUNTS and not (
