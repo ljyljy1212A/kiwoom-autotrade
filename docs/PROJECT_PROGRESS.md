@@ -1415,3 +1415,11 @@ publication succeeds and the final target identity is verified.
 - Reran the six focused files covering runtime control, emergency-stop allowlisting, orphan cleanup, fixed-port event policy, fixed-port pause clearing, and reconciliation fail-closed behavior. The run included both new control-state lock timeout regression tests.
 - Local result: `78 passed in 20.86s` on Python 3.14.7 / pytest 9.1.1 with normal plugin loading and a unique isolated `CreatorTemp` basetemp. This is local focused-test evidence, not CI or operational validation.
 - No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-29 — Unused balance-path lint fix delivery
+
+- Removed the unused `balance_path` assignment from `src/core/engine.py`; balance snapshots continue to publish through `_publish_balance_snapshot`.
+- Ruff 0.16.9 passed for `src/core/engine.py` and for the full CI advisory scope `src tests`.
+- Commit `96231aeade50369cb369db7681ded9d7e3a684ce` (`fix: remove unused balance path`) was pushed to `codex/startup-sync-failure-characterization`.
+- GitHub Actions push run `36543631995` for that exact commit completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory, including Ruff and mypy, all completed successfully.
+- No local pytest run, PR creation or merge, Canonical publication, runtime, Scheduler, account, credential, or order action was performed for this change.
