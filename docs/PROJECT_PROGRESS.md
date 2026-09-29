@@ -1218,3 +1218,11 @@ publication succeeds and the final target identity is verified.
 - One explicitly authorized elevated run of the same two files with `C:\auto\pytest_tmp_control_lock_20260929_v2` as basetemp completed `19 passed in 19.16s` on Python 3.14.7 and pytest 9.1.1. This is local focused-test evidence only.
 - In the managed test worktree, `git diff --check -- src/core/orphan_cleanup.py tests/test_runtime_control.py` passed and status showed only those two modified files. Current Git and PR state for `C:\auto\kiwoom-autotrade` was not queried in this record-update scope and remains `INCOMPLETE`.
 - No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed in this record-update scope.
+
+## 2026-09-29 — Control-state lock timeout merge and CI verification
+
+- PR #75, `fix: bound account control-state lock wait`, merged into `master` at `2026-09-29T10:08:02Z` with merge commit `774e0a15401ea90bb3ab5839b84bbe9b09a058cd`. Its feature head was `7f9e5c36657eac60c56129622f705ad50359c368`.
+- Pull-request workflow run `36552602890` and post-merge `master` push run `36553653003` completed successfully. The post-merge run's Windows validation, Ubuntu compatibility signal, and Quality advisory jobs each completed with conclusion `success`.
+- The managed worktree was fetched from `origin/master` and moved to the merge commit in detached HEAD state. Its post-move status was clean. The original `C:\auto\kiwoom-autotrade` checkout was left unchanged; its Git status showed pre-existing dirty and untracked paths, and permission-denied directories prevented a complete untracked inventory.
+- The focused local test result remains the previously recorded `19 passed` for `tests/test_runtime_control.py` and `tests/test_emergency_stop_allowlist.py`. No post-merge local test, runtime, Scheduler, account, credential, or order validation was performed.
+- This is a repository-local delivery record. No Canonical publication was performed; Canonical publication remains `INCOMPLETE`.
