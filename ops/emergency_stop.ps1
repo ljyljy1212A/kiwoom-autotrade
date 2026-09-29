@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Account
+    [string]$Account,
+    [Parameter(Mandatory = $false)]
+    [string]$RuntimeRoot
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -89,8 +91,86 @@ function Enter-CleanupTargetLock {
     }
 }
 
-$repoRoot = $PSScriptRoot | Split-Path -Parent
-$accountsPath = Join-Path $PSScriptRoot '..\config\accounts.yaml'
+function Enter-ControlStateLock {
+    param(
+        [string]$RepoRoot,
+        [string]$Account
+    )
+
+    $lockPath = Join-Path $RepoRoot "data\control_state_$Account.lock"
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $stream = $null
+        try {
+            $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            if ($stream.Length -eq 0) {
+                $stream.WriteByte(0)
+                $stream.Flush()
+            }
+            $stream.Lock(0, 1)
+            return $stream
+        } catch [System.IO.IOException] {
+            if ($null -ne $stream) { $stream.Dispose() }
+            if ($timer.Elapsed.TotalSeconds -ge 2) {
+                throw "Account control-state lock unavailable for $Account within 2 seconds."
+            }
+            Start-Sleep -Milliseconds 50
+        } catch {
+            if ($null -ne $stream) { $stream.Dispose() }
+            throw
+        }
+    }
+}
+
+function Write-AtomicUtf8 {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $directory = [System.IO.Path]::GetDirectoryName($Path)
+    $temporary = Join-Path $directory (".{0}.{1}.tmp" -f [System.IO.Path]::GetFileName($Path), [guid]::NewGuid().ToString("N"))
+    $backup = Join-Path $directory (".{0}.{1}.bak" -f [System.IO.Path]::GetFileName($Path), [guid]::NewGuid().ToString("N"))
+    try {
+        [System.IO.File]::WriteAllText($temporary, $Content, [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Replace($temporary, $Path, $backup)
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+$scriptRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$selectedRuntimeRoot = $scriptRepoRoot
+if (-not [string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+    if (-not [System.IO.Path]::IsPathRooted($RuntimeRoot)) {
+        throw "RuntimeRoot must be an absolute path."
+    }
+
+    $requestedRuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
+    $allowedRuntimeRoots = @(
+        $scriptRepoRoot,
+        [System.IO.Path]::GetFullPath('C:\auto\kiwoom-autotrade')
+    )
+    $runtimeRootAllowed = $false
+    foreach ($allowedRoot in $allowedRuntimeRoots) {
+        if ([System.StringComparer]::OrdinalIgnoreCase.Equals($requestedRuntimeRoot, $allowedRoot)) {
+            $runtimeRootAllowed = $true
+            break
+        }
+    }
+    if (-not $runtimeRootAllowed) {
+        throw "RuntimeRoot is outside the fixed allowlist."
+    }
+    $selectedRuntimeRoot = $requestedRuntimeRoot
+}
+
+$repoRoot = $selectedRuntimeRoot
+$accountsPath = Join-Path $repoRoot 'config\accounts.yaml'
 $allowlistValidator = @'
 from pathlib import Path
 import sys
@@ -158,11 +238,20 @@ if ($validationExitCode -ne 0) {
 
 $failures = [System.Collections.Generic.List[string]]::new()
 if ($controlExists) {
-    $ctrl = Get-Content $controlPath -Raw | ConvertFrom-Json
-    $ctrl.auto_trading_enabled = $false
-    $ctrlJson = $ctrl | ConvertTo-Json -Depth 10
-    [System.IO.File]::WriteAllText($controlPath, $ctrlJson, [System.Text.UTF8Encoding]::new($false))
-    Write-Output "Control file auto_trading_enabled set to false for $Account"
+    $controlLock = Enter-ControlStateLock -RepoRoot $repoRoot -Account $Account
+    try {
+        if (-not (Test-Path -LiteralPath $controlPath -PathType Leaf)) {
+            throw "Control target missing under account control-state lock: $controlPath"
+        }
+        $ctrl = Get-Content $controlPath -Raw | ConvertFrom-Json
+        $ctrl.auto_trading_enabled = $false
+        $ctrlJson = $ctrl | ConvertTo-Json -Depth 10
+        Write-AtomicUtf8 -Path $controlPath -Content $ctrlJson
+        Write-Output "Control file auto_trading_enabled set to false for $Account"
+    } finally {
+        try { $controlLock.Unlock(0, 1) }
+        finally { $controlLock.Dispose() }
+    }
 } else {
     $failures.Add("control target missing: $controlPath")
 }
@@ -201,7 +290,47 @@ if ($settingsExists) {
                 $before.IndexOf('"enabled": false', [System.StringComparison]::Ordinal) -lt 0) {
                 throw "Settings content validation failed before write for $Account; original file was left untouched."
             }
-            [System.IO.File]::WriteAllText($settingsPath, $before, [System.Text.UTF8Encoding]::new($false))
+            $artifactId = [guid]::NewGuid().ToString("N")
+            $settingsFileName = [System.IO.Path]::GetFileName($settingsPath)
+            $tempName = "{0}.emergency_stop_{1}.tmp" -f $settingsFileName, $artifactId
+            $backupName = "{0}.emergency_stop_{1}.bak" -f $settingsFileName, $artifactId
+            $settingsTempPath = Join-Path (Split-Path -Parent $settingsPath) $tempName
+            $settingsBackupPath = Join-Path (Split-Path -Parent $settingsPath) $backupName
+            $settingsStream = $null
+            try {
+                $candidateBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($before)
+                $settingsStream = [System.IO.File]::Open(
+                    $settingsTempPath,
+                    [System.IO.FileMode]::CreateNew,
+                    [System.IO.FileAccess]::Write,
+                    [System.IO.FileShare]::None
+                )
+                $settingsStream.Write($candidateBytes, 0, $candidateBytes.Length)
+                $settingsStream.Flush($true)
+                $settingsStream.Dispose()
+                $settingsStream = $null
+
+                $stagedBytes = [System.IO.File]::ReadAllBytes($settingsTempPath)
+                if ([System.Convert]::ToBase64String($stagedBytes) -cne [System.Convert]::ToBase64String($candidateBytes)) {
+                    throw "Settings temporary file byte validation failed for $Account."
+                }
+                [System.IO.File]::Replace($settingsTempPath, $settingsPath, $settingsBackupPath)
+                [System.IO.File]::Delete($settingsBackupPath)
+            } finally {
+                try {
+                    if ($null -ne $settingsStream) { $settingsStream.Dispose() }
+                } finally {
+                    try {
+                        if ($null -ne $settingsTempPath -and [System.IO.File]::Exists($settingsTempPath)) {
+                            [System.IO.File]::Delete($settingsTempPath)
+                        }
+                    } finally {
+                        if ($null -ne $settingsBackupPath -and [System.IO.File]::Exists($settingsBackupPath)) {
+                            [System.IO.File]::Delete($settingsBackupPath)
+                        }
+                    }
+                }
+            }
         }
     } finally {
         try { $settingsLock.Unlock(0, 1) }

@@ -1303,3 +1303,115 @@ publication succeeds and the final target identity is verified.
 - A read-only `git diff -- docs/PROJECT_PROGRESS.md` showed only additions after tracked `HEAD`, with no deletion lines. It included the existing repository-local successors for Canonical publication failure, new-chat handoff, blocked Canonical Apply, and PR #73 merge/CI verification.
 - Immediately before this append, `docs/PROJECT_PROGRESS.md` was 133,064 bytes with SHA-256 `EBE3838B6C90FF001876E36BA0C5379D257C8E00B6179FDE381F27FFD3F6E243`; it was strict UTF-8 without BOM, had `CRLF=0`, `BareCR=0`, and ended in LF. This edit adds only this successor section.
 - No test, CI, Canonical Apply, runtime, Scheduler, network, account, credential, order, Git stage, commit, push, PR, or merge action was performed for this record-update step. Existing repository-local Canonical status is `CANONICAL_PENDING`; the Canonical target was not queried in this step.
+
+## 2026-09-29 — New-chat progress-record update
+
+- At the start of this chat, the repository `AGENTS.md`, the canonical `CURRENT_STATE.md`, this repository-local progress record, and `CANONICAL_PUBLICATION_WORKFLOW.md` were read.
+- Immediately before this successor edit, `docs/PROJECT_PROGRESS.md` was 134,564 bytes with SHA-256 `EC7F790F65B2100781EB87CCF36E37A4964366CCC416B82FCD7CB830B554BE2C`; it was strict UTF-8 without BOM, had `CRLF=0` and `BareCR=0`, and ended in LF.
+- This successor records only the directly observed pre-edit state and this approved repository-local source-edit scope. Canonical files, Git, tests, CI, runtime, Scheduler, network, account, credential, and order actions were not performed in this chat before this edit.
+
+## 2026-09-29 — Control-state writer serialization restored in runtime checkout
+
+- Read-only local Git inspection identified checkout HEAD `4054147094ebf0c5a5aa99ba748364d24c13f743`, which lacked the control-state serialization from merged PR #61 (`2a033ccd2464f0fd62e47e3c639f6f690398cd44`). The local `origin/master` ref contained that merge.
+- Applied the merged account control-state lock and preserve-unrelated-fields behavior to `src/core/control_state.py` and `src/core/orphan_cleanup.py`, and the bounded lock plus atomic control-file replacement to `ops/emergency_stop.ps1`. Added the merged focused cases in `tests/test_runtime_control.py` and `tests/test_emergency_stop_allowlist.py`. The four patched files matched PR #61 Git objects; the resulting `orphan_cleanup.py` matched the local `origin/master` object while retaining its existing balance and quote locks.
+- The patch helper first reported a reparse-point error after adding only the five-line lock helper; a relative-path attempt changed no additional file. A sandboxed scoped `git apply` failed and removed the previously clean `tests/test_runtime_control.py`; an exact `HEAD` restore recovered it, and the elevated scoped apply then succeeded. No unrelated file was restored, cleaned, or normalized.
+- `git diff --check` passed for the five changed implementation and test files. The first focused pytest attempt ended with `WinError 5` on its isolated basetemp and gave no product verdict. A second elevated run with a new isolated basetemp completed `55 passed in 12.40s` across runtime control, emergency-stop allowlist, fixed-port event, fixed-port pause-clear, and reconciliation fail-closed tests.
+- This is local implementation and focused-test evidence for the current checkout. No staging, commit, push, new PR, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed in this change.
+
+## 2026-09-29 — Control-state checkout alignment and focused verification
+
+- Read-only comparison against the fetched `origin/master` (`7f349b32e92b5ddf89899f19d6c34a58a71a694e`) showed the shared control-state lock changes were already present upstream. The current checkout's `ops/emergency_stop.ps1` and `tests/test_emergency_stop_allowlist.py` were missing upstream `RuntimeRoot` allowlist checks, atomic settings replacement, and their regression tests.
+- Restored those two files to the exact `origin/master` Git objects while retaining the already present control-state lock behavior. Their resulting Git object IDs are `95d712dbe1da5d05b043b4e7eb90436f3708f47b` and `7ebb7c0ecbd7ba08d48d214a62037e605d35ea8c`; both match the corresponding `origin/master` objects. Scoped `git diff --check` passed.
+- The focused Windows run covered `tests/test_runtime_control.py`, `tests/test_emergency_stop_allowlist.py`, `tests/test_fixed_port_event_policy.py`, `tests/test_fixed_port_pause_clear.py`, and `tests/test_reconciliation_fail_closed.py`. The sandboxed attempt was blocked by permission errors and pytest cleanup `WinError 5`, and supplied no product verdict. The same five-file run with an isolated external basetemp completed with `58 passed, 1 warning in 13.87s`; the warning was `PytestCacheWarning` because the existing `.pytest_cache` path could not be created.
+- This verifies local file alignment and focused tests only. No stage, commit, push, PR, CI, Canonical publication, runtime, Scheduler, account, credential, or order validation was performed. No follow-up PR is needed for these changes because the compared files match `origin/master`.
+
+## 2026-09-29 — kr_mock/KR source-aligned worker restart
+
+- Under explicit kr_mock/KR runtime approval, the prior worker PID 14304 was stopped gracefully. The preflight status showed RUNNING, confirmed liveness, no active symbols, and activityState=expected-idle; read_auto_trading_enabled("kr_mock") returned False. The setting was rechecked as False immediately before start.
+- The worker was started through C:\auto\kiwoom-autotrade\src\worker_supervisor.py, whose ROOT resolved to C:\auto\kiwoom-autotrade and whose child launch uses cwd=ROOT. The start result and worker status payload shared launch ID ade3834f8f03409e91f6f2ad38a92e0b, identifying the child as launched by this checkout's supervisor.
+- The new worker is PID 18832, instance 57ecb37f3b19416d90f47ea021338b6f, state RUNNING, with confirmed liveness and mutex ownership (ownerPid=18832, ownerThreadId=6792, currentCount=0, abandoned=false). Its status showed no active symbols, activityState=expected-idle, and advancing heartbeat/controller cycle. Auto-trading remained disabled.
+- Git HEAD at verification was 4054147094ebf0c5a5aa99ba748364d24c13f743. src/main.py had no scoped Git modification; src/core/control_state.py and src/core/orphan_cleanup.py were modified in the working tree and their diffs were reviewed. Scoped git diff --check passed. The running source therefore corresponds to this checkout's HEAD plus those two working-tree changes; the exact branch and full dirty/untracked inventory were not checked.
+- SHA-256 values of the source files at verification were src/main.py 4AB1B3C37FA8F09BA3915BDBC35A394B78BF25995F6775D487CF40B5A4BCFEB1, src/core/control_state.py 3010AC05DFF0AF6BCED6C5C1E936EEB57E4FA64E69D1A88B27C059B4CD4F6FB0, and src/core/orphan_cleanup.py D23ACCEEDFD36DA66265128CDC389C7194779634389541F81DB1312B24E63339.
+- A direct read-only process-memory query for the earlier worker was denied; it was not retried. The new source path was established through the supervisor launch ID and the checked cwd=ROOT launch behavior. No tests, source-code edits, staging, commit, push, PR, CI, Canonical publication, Scheduler, network, real-account, credential, or order action occurred in this runtime operation.
+
+## 2026-09-29 — master-source kr_mock/KR startup recovery
+
+- Before this append, this record was 141,109 bytes with SHA-256 `EC93403AB0C89F114915F05922F62B2213B87EE859F3E01CB7E1FE69BD3880AC`; it was strict UTF-8 without BOM, LF-only, and ended in LF.
+- The isolated managed checkout at `C:\Users\jhkhjk\.codex\worktrees\master-source-alignment\kiwoom-autotrade` was verified at master commit `7f349b32e92b5ddf89899f19d6c34a58a71a694e`. The prior `kr_mock/KR` worker PID 18832 was stopped through the supervisor with `mode=graceful`, `STOPPED` state, and dead mutex; no force termination occurred.
+- Startup from the managed checkout initially failed when its exact `logs` directory could not be created. That directory was created after approval without changing ACLs. A later start returned `worker-exited-before-start`, exit code 1. Scoped diagnosis found `ACCOUNT_D_NO`, `ACCOUNT_D_APPKEY`, and `ACCOUNT_D_SECRETKEY` absent from the new checkout environment but present in the original checkout's `.env`.
+- Supplying only those three mock values in process memory let a child publish PID 13808, a new instance ID, and a launch ID before it exited with code 1. Static source review found that `src.main` then requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; both were absent from the new environment and present in the original `.env`. The exact child exception was not captured because the supervisor discarded child stderr, so that exception remains `INCOMPLETE`.
+- A subsequent authorized start supplied only the five required values in the launch process environment; no values were printed or copied to the managed checkout. `KIWOOM_DATA_DIR` and `KIWOOM_LOG_DIR` pointed to the original repository runtime paths. The master supervisor reported `started=true`, `RUNNING`, and `liveness=confirmed` for PID 9788, instance `cb239dfa7a6e48ad89955f3f521afeb7`, launch ID `e25a89cd585d495294900aea109eaa2c`.
+- Two status samples six seconds apart showed advancing process heartbeat and controller cycle. The status record reported mutex ownership `CONFIRMED` for PID 9788 and account `kr_mock`; active symbols remained empty with `activityState=expected-idle`. `read_auto_trading_enabled('kr_mock')` was `False`, and the directly inspected KR dashboard profile count was zero.
+- This is observed mock runtime evidence. No source-code edit, test, Git stage/commit/push, PR, CI, or Canonical publication was performed for this recovery. Broker and Telegram network results and order ledgers were not independently verified.
+
+## 2026-09-29 — master-source mock runtime local-evidence check
+
+- A read-only check of `C:\auto\kiwoom-autotrade\logs\system_kr.log` found `Telegram notification accepted by API` at 2026-09-29 14:19:07, following the worker-start notification attempt at 14:19:03.
+- Read-only SQLite connections opened `data/trades_kr_mock.db` with `mode=ro`. The `pending_orders` and `trade_ledger` tables had no rows for `kr_mock`; there were zero pending-order or ledger rows created since worker start at 2026-09-29T05:19:02.532577+00:00. `data/order_attempts_kr_mock.db` was absent, so order-dispatch-attempt coverage remains `INCOMPLETE`.
+- No broker API request or order action was performed for this local-evidence check. Broker-side order state remains `INCOMPLETE`; local empty tables do not establish remote absence.
+- At 2026-09-29T05:26:10Z, supervisor status still reported PID 9788 `RUNNING` with confirmed liveness, instance `cb239dfa7a6e48ad89955f3f521afeb7`, launch ID `e25a89cd585d495294900aea109eaa2c`, expected-idle activity, and no active symbols. The process heartbeat and controller cycle were advancing.
+- This was a read-only runtime evidence check plus this repository-local progress append. No source edit, test, Git delivery, CI, Canonical publication, broker API request, or order action occurred in this step.
+## 2026-09-29 - kr_mock/KR broker-order reconciliation
+
+- After a confirmed graceful stop of kr_mock/KR PID 17900, the read-only broker inquiry used the mock KR account and only the order-history APIs ka10075 (unfilled) and ka10076 (executions). The fixed source port was allowed to cool for 180 seconds before the requests. Both responses completed pagination in one page.
+- ka10075 returned one row in oso; its ord_no did not match any local pending_orders row. ka10076 returned six rows in cntr; all six distinct ord_no values did not match local trade_ledger rows. The local kr_mock counts were zero in both tables. Order values were not emitted or persisted by the query. No order was submitted, changed, or cancelled.
+- The earlier failed attempt ended with RetryableError and updated the preserved account-number-scoped fixed-port incident marker for operation token; its holdoff was observed to have expired before this successful attempt. No fixed_port_degraded_kr_mock.json marker was present after the successful queries.
+- The worker was restarted through the managed master-source supervisor after a further 180-second fixed-port cooldown. PID 19112, instance 7f9a14038cce4a609230e258965966d3, and launch ID 130480d1ccfa441f9f18da4995763254 were confirmed. Two status observations six seconds apart showed RUNNING, confirmed liveness, expected-idle state, no active symbols, and advancing heartbeat/controller cycle. auto_trading_enabled remained false.
+- This establishes broker-returned order rows without matching local ledger rows; it does not attribute them to a source or authorize reconciliation edits or order actions. No source-code edit, test, Git delivery, CI, or Canonical publication occurred.
+
+## 2026-09-29 - kr_mock order-attribution follow-up
+
+- A second read-only ka10075/ka10076 query after a confirmed graceful stop and 180-second fixed-port cooldown returned one unfilled row and six execution rows; pagination completed for both APIs. The selected order fields were inspected with order numbers masked. No mutation request was sent.
+- A fresh read-only comparison again found zero kr_mock rows in local pending_orders and trade_ledger, with no order-number matches for the broker rows. The broker detail response reported one unfilled quantity and six filled execution rows across three stock codes. Row-level details are not copied into this progress record.
+- The reviewed kr_mock.log files from the original checkout and managed master-source checkout contained no exact order-number or stock-code evidence. Matches on short order-number suffixes alone were not treated as attribution evidence. Order origin therefore remains unresolved.
+- After the detail query, the managed master-source supervisor restarted kr_mock/KR as PID 16220, instance 9c4ab33e729f40a593c84ca411698e1d, launch ID 00ab0ecdb30442798f59b7db3a9f84f1. Two status observations showed confirmed liveness and advancing heartbeat/controller cycle; activity remained expected-idle, active symbols were empty, and auto-trading remained disabled.
+- No order was submitted, changed, cancelled, or adopted into the local ledger. No source edit, test, Git delivery, CI, or Canonical publication occurred. Broker-row attribution and the appropriate operator disposition remain unresolved.
+
+## 2026-09-29 — Operator-provided manual-trading attribution
+
+- The user stated that automated trading has not been used for more than one month and that all transactions still present were placed manually through HTS. The user had identified the reviewed names as Hanwha Solutions (009830), LG Innotek (011070), and Daeduck Electronics (353200).
+- This records the user's direct attribution; it is not an independently verified broker-side source field. The prior order-attribution follow-up's unresolved source conclusion is superseded by this operator-provided attribution, while the API rows still did not expose a calendar date and the local order ledgers still had no matching rows.
+- No broker request, order action, runtime operation, Git operation, test, CI action, or Canonical publication was performed for this attribution update.
+
+## 2026-09-29 — Pytest temporary-directory access recovery
+
+- The direct investigation established that `C:\auto\kiwoom-autotrade\.pytest-basetemp-focused-20260927-v2` was a normal directory, not a reparse point. Its direct children included 58 ordinary directories, 2 regular files, and 52 symbolic links; each inspected link target stayed within that directory.
+- Under explicit approval, Windows UAC administrator actions recovered access to the exact temporary-directory tree. Symbolic links were removed without following their targets, then the verified in-root temporary contents and the empty root directory were deleted. Readback confirmed that the exact root path no longer existed.
+- A subsequent read-only Git status command ended with exit code 0 and no access-denied warnings. It was an observation only: no stage, commit, push, PR, CI, source-code edit, test, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed for the recovery.
+- This resolves the access-denied boundary for the removed path only. No claim is made about the provenance or required disposition of other dirty or untracked paths.
+
+## 2026-09-29 — Bounded control-state lock wait
+
+- Updated `account_control_state_lock` to bound both the in-process thread-lock wait and cross-process file-lock wait to two seconds. The timeout raises `TimeoutError` instead of waiting indefinitely.
+- Kept the default behavior of the shared account file-lock helper unchanged for orphan-cleanup, balance-snapshot, and quote-snapshot locks.
+- Added bounded nonblocking acquisition for Windows and POSIX when the timeout option is supplied. This change is implemented but not locally tested; tests, Git delivery, CI, Canonical publication, and runtime operations were not performed for this change.
+
+## 2026-09-29 — Control-state lock focused test attempt
+
+- Ran Python 3.14.7 / pytest 9.1.1 against `tests/test_runtime_control.py`, `tests/test_emergency_stop_allowlist.py`, `tests/test_orphan_cleanup.py`, `tests/test_fixed_port_event_policy.py`, `tests/test_fixed_port_pause_clear.py`, and `tests/test_reconciliation_fail_closed.py`, using a unique `CreatorTemp` basetemp, disabled pytest cache provider, and disabled third-party plugin autoload.
+- Pytest collected 76 items and displayed error markers across the selected files. During session cleanup, `cleanup_dead_symlinks` raised `PermissionError: [WinError 5] Access is denied` for the isolated basetemp root; the process exited 1 before emitting detailed per-test errors or a summary.
+- Product test outcome is `INCOMPLETE`; this run does not establish a product pass or failure. The denied basetemp was not retried, removed, or permission-modified. No other test run, Git delivery, CI, Canonical publication, or runtime operation was performed.
+
+## 2026-09-29 — Bounded control-state lock focused tests
+
+- After explicit approval for a second test attempt, reran the same six focused test files with normal pytest plugin loading, a new isolated `CreatorTemp` basetemp, and the pytest cache provider disabled. The run was allowed outside the sandbox after the first attempt's basetemp access failure.
+- Local focused result: `76 passed in 19.39s` on Python 3.14.7 / pytest 9.1.1. This verifies the selected local tests only; it is not CI evidence or operational validation.
+- No Git stage, commit, push, PR, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-29 — Control-state lock timeout regression test
+
+- Added `test_control_state_lock_times_out_for_contending_thread` to `tests/test_runtime_control.py`. It holds the account control-state lock in one thread, requests the same lock from another thread, and asserts a `TimeoutError` naming the two-second bound while limiting test-thread waits.
+- The new test passed locally: `1 passed in 2.98s` on Python 3.14.7 / pytest 9.1.1 with normal plugin loading and a unique isolated `CreatorTemp` basetemp. This directly verifies same-process thread contention; cross-process Python lock timeout is not directly covered by this test.
+- No other source or test files were changed for this test step. No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-29 — Cross-process control-state lock timeout coverage
+
+- Added `test_control_state_lock_times_out_for_contending_process` to `tests/test_runtime_control.py`. A child Python process holds the account control-state file lock while a second thread attempts acquisition; the test requires a `TimeoutError` within the configured bound and releases the child through a temporary signal file.
+- Reran both lock-timeout regression tests with normal pytest plugin loading and a new isolated `CreatorTemp` basetemp. Result: `2 passed in 5.01s` on Python 3.14.7 / pytest 9.1.1. The pair directly covers same-process thread contention and cross-process file-lock contention locally.
+- This is local focused-test evidence only. No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-29 — Control-state lock full focused verification
+
+- Reran the six focused files covering runtime control, emergency-stop allowlisting, orphan cleanup, fixed-port event policy, fixed-port pause clearing, and reconciliation fail-closed behavior. The run included both new control-state lock timeout regression tests.
+- Local result: `78 passed in 20.86s` on Python 3.14.7 / pytest 9.1.1 with normal plugin loading and a unique isolated `CreatorTemp` basetemp. This is local focused-test evidence, not CI or operational validation.
+- No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.orphan_cleanup import account_cleanup_lock
+from src.core.orphan_cleanup import account_cleanup_lock, account_control_state_lock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -72,14 +73,22 @@ def _targets(repo: Path, account: str, *, control: bool = True, settings: bool =
     return control_path, settings_path
 
 
-def _run(script: Path, account: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: Path,
+    account: str,
+    *,
+    runtime_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     temp_dir = script.parent.parent / ".tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["TEMP"] = str(temp_dir)
     env["TMP"] = str(temp_dir)
+    command = [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Account", account]
+    if runtime_root is not None:
+        command.extend(["-RuntimeRoot", str(runtime_root)])
     return subprocess.run(
-        [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Account", account],
+        command,
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -87,6 +96,36 @@ def _run(script: Path, account: str) -> subprocess.CompletedProcess[str]:
         check=False,
         env=env,
     )
+
+
+def test_explicit_allowed_runtime_root_disables_control_and_profile(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+
+    result = _run(script, account, runtime_root=repo)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(control_path.read_text(encoding="utf-8"))["auto_trading_enabled"] is False
+    profile = json.loads(settings_path.read_text(encoding="utf-8"))["profiles"][0]
+    assert profile["enabled"] is False
+    assert profile["auto_buy"]["enabled"] is False
+    assert profile["auto_sell"]["enabled"] is False
+
+
+def test_runtime_root_outside_fixed_allowlist_is_rejected_before_writes(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+    original_control = control_path.read_bytes()
+    original_settings = settings_path.read_bytes()
+
+    result = _run(script, account, runtime_root=tmp_path / "unapproved-runtime-root")
+
+    assert result.returncode != 0
+    assert "fixed allowlist" in _normalize_stderr(result.stderr).lower()
+    assert control_path.read_bytes() == original_control
+    assert settings_path.read_bytes() == original_settings
 
 
 def test_eligible_mock_account_disables_control_and_profile(tmp_path: Path):
@@ -102,6 +141,27 @@ def test_eligible_mock_account_disables_control_and_profile(tmp_path: Path):
     assert profile["enabled"] is False
     assert profile["auto_buy"]["enabled"] is False
     assert profile["auto_sell"]["enabled"] is False
+
+
+def test_eligible_mock_account_preserves_control_events(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, _ = _targets(repo, account)
+    initial = {
+        "account": account,
+        "auto_trading_enabled": True,
+        "fixed_port_event": {"event_id": "fixed-port-event", "kind": "entered"},
+        "pause_clear_event": {"event_id": "pause-clear-event", "reason": "fixed_port_degraded"},
+    }
+    control_path.write_text(json.dumps(initial), encoding="utf-8")
+
+    result = _run(script, account)
+
+    assert result.returncode == 0, result.stderr
+    updated = json.loads(control_path.read_text(encoding="utf-8"))
+    assert updated["auto_trading_enabled"] is False
+    assert updated["fixed_port_event"] == initial["fixed_port_event"]
+    assert updated["pause_clear_event"] == initial["pause_clear_event"]
 
 
 def test_ineligible_mock_account_is_rejected_before_writes(tmp_path: Path):
@@ -218,3 +278,71 @@ def test_cleanup_lock_contention_disables_control_and_preserves_settings(tmp_pat
     assert profile["enabled"] is False
     assert profile["auto_buy"]["enabled"] is False
     assert profile["auto_sell"]["enabled"] is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows file sharing semantics are required")
+def test_settings_replace_failure_preserves_original_bytes(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+    original_settings = settings_path.read_bytes()
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    create_file.restype = ctypes.c_void_p
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+
+    generic_read = 0x80000000
+    share_read_write = 0x00000001 | 0x00000002
+    open_existing = 3
+    file_attribute_normal = 0x00000080
+    handle = create_file(
+        str(settings_path),
+        generic_read,
+        share_read_write,
+        None,
+        open_existing,
+        file_attribute_normal,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    assert handle not in (None, invalid_handle), f"CreateFileW failed: {ctypes.get_last_error()}"
+
+    try:
+        result = _run(script, account)
+    finally:
+        assert close_handle(handle), f"CloseHandle failed: {ctypes.get_last_error()}"
+
+    assert result.returncode != 0
+    assert "replace" in _normalize_stderr(result.stderr).lower()
+    assert json.loads(control_path.read_text(encoding="utf-8"))["auto_trading_enabled"] is False
+    assert settings_path.read_bytes() == original_settings
+    assert not list(settings_path.parent.glob(settings_path.name + ".emergency_stop_*.tmp"))
+    assert not list(settings_path.parent.glob(settings_path.name + ".emergency_stop_*.bak"))
+
+
+def test_control_state_lock_contention_preserves_control_and_settings(tmp_path: Path):
+    account = "eligible_mock"
+    repo, script = _repo(tmp_path, _config([_entry(account)]))
+    control_path, settings_path = _targets(repo, account)
+    original_control = control_path.read_bytes()
+    original_settings = settings_path.read_bytes()
+
+    with account_control_state_lock(repo / "data", account):
+        blocked = _run(script, account)
+
+    assert blocked.returncode != 0
+    assert "control-state lock unavailable" in _normalize_stderr(blocked.stderr)
+    assert control_path.read_bytes() == original_control
+    assert settings_path.read_bytes() == original_settings
