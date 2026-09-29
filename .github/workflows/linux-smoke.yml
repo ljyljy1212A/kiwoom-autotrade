@@ -5,6 +5,15 @@ on:
   pull_request:
 
 jobs:
+  docker-build:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Build runtime image
+        run: docker build --file Dockerfile --tag kiwoom-autotrade:ci .
+
   test:
     name: Ubuntu compatibility signal (non-blocking)
     runs-on: ubuntu-latest
