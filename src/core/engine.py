@@ -2460,7 +2460,6 @@ class AccountEngine:
         if self.ctx.client.market == "US":
             await self._refresh_fx_rate()
 
-        balance_path = self.data_dir / f"balance_{self.ctx.account_id}.json"
         balance_snapshot = {
             "account": self.ctx.account_id, "symbol": self.ctx.strategy.symbol,
             "qty": qty, "avgPrice": avg_price, "updatedAt": datetime.now().isoformat(),
