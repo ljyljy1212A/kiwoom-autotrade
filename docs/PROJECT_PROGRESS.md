@@ -1204,3 +1204,9 @@ publication succeeds and the final target identity is verified.
 
 - A read-only local capability check found no `docker.exe`. `wsl.exe` was present, but `wsl.exe --list --quiet` returned `Wsl/EnumerateDistros/Service/E_ACCESSDENIED`. No WSL distribution or Linux runtime was accessed, and no elevation or alternate execution route was attempted.
 - Linux dependency installation and Docker build validation remain `INCOMPLETE`. No CI or repository source action was performed in this check.
+
+## 2026-09-29 — Dependency-lock GitHub Actions verification
+
+- Pushed commit dfe9bc34d51a735a54bbd94aa50c8771515323fa on codex/master-aligned-followup. GitHub Actions run 36514401830 completed with conclusion success.
+- The Ubuntu compatibility job installed requirements-dev.lock with --require-hashes and completed the pytest step successfully. The Windows validation job completed the same locked development installation and test step successfully. The Quality advisory job completed its locked installation, Ruff check, and mypy check successfully.
+- Ubuntu remains a non-blocking compatibility signal. This CI run does not verify the Docker image build or installation of the runtime-only requirements.lock in Docker; those remain unverified. No runtime, Scheduler, account, credential, order, Canonical publication, PR creation, or merge action was performed.
