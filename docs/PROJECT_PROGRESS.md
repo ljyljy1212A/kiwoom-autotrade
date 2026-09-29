@@ -1210,3 +1210,11 @@ publication succeeds and the final target identity is verified.
 - Pushed commit dfe9bc34d51a735a54bbd94aa50c8771515323fa on codex/master-aligned-followup. GitHub Actions run 36514401830 completed with conclusion success.
 - The Ubuntu compatibility job installed requirements-dev.lock with --require-hashes and completed the pytest step successfully. The Windows validation job completed the same locked development installation and test step successfully. The Quality advisory job completed its locked installation, Ruff check, and mypy check successfully.
 - Ubuntu remains a non-blocking compatibility signal. This CI run does not verify the Docker image build or installation of the runtime-only requirements.lock in Docker; those remain unverified. No runtime, Scheduler, account, credential, order, Canonical publication, PR creation, or merge action was performed.
+
+## 2026-09-29 — Control-state lock timeout local verification
+
+- During this chat, `src/core/orphan_cleanup.py` was changed so the account control-state lock uses a two-second bounded wait, while the shared helper's default behavior for other account locks remains unchanged. `tests/test_runtime_control.py` was extended with same-process thread-contention and cross-process file-lock-contention timeout coverage.
+- Two non-elevated attempts to run `tests/test_runtime_control.py` and `tests/test_emergency_stop_allowlist.py` could not create their requested isolated pytest basetemp directories and each ended with 19 setup errors caused by `PermissionError: [WinError 5]`. Those attempts provide no product-test verdict.
+- One explicitly authorized elevated run of the same two files with `C:\auto\pytest_tmp_control_lock_20260929_v2` as basetemp completed `19 passed in 19.16s` on Python 3.14.7 and pytest 9.1.1. This is local focused-test evidence only.
+- In the managed test worktree, `git diff --check -- src/core/orphan_cleanup.py tests/test_runtime_control.py` passed and status showed only those two modified files. Current Git and PR state for `C:\auto\kiwoom-autotrade` was not queried in this record-update scope and remains `INCOMPLETE`.
+- No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed in this record-update scope.

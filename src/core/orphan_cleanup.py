@@ -28,12 +28,20 @@ _FILE_LOCK_DEPTH = threading.local()
 
 
 @contextmanager
-def _account_file_lock(path: Path):
+def _account_file_lock(path: Path, *, timeout_seconds: float | None = None):
     """Serialize account cleanup state and target writes across processes."""
+    if timeout_seconds is not None and timeout_seconds < 0:
+        raise ValueError("timeout_seconds must be non-negative")
+
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     key = str(path.resolve())
     with _FILE_LOCKS_GUARD:
         thread_lock = _FILE_LOCKS.setdefault(key, threading.RLock())
-    with thread_lock:
+    if deadline is None:
+        thread_lock.acquire()
+    elif not thread_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise TimeoutError(f"Account file lock unavailable within {timeout_seconds:g} seconds: {path}")
+    try:
         depths = getattr(_FILE_LOCK_DEPTH, "values", None)
         if depths is None:
             depths = {}
@@ -58,11 +66,27 @@ def _account_file_lock(path: Path):
                     try:
                         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                         break
-                    except OSError:
-                        time.sleep(0.05)
+                    except OSError as exc:
+                        if deadline is not None and time.monotonic() >= deadline:
+                            raise TimeoutError(
+                                f"Account file lock unavailable within {timeout_seconds:g} seconds: {path}"
+                            ) from exc
+                        time.sleep(0.05 if deadline is None else min(0.05, max(0.0, deadline - time.monotonic())))
             else:
                 import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                if deadline is None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                else:
+                    while True:
+                        try:
+                            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except OSError as exc:
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError(
+                                    f"Account file lock unavailable within {timeout_seconds:g} seconds: {path}"
+                                ) from exc
+                            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
             depths[key] = 1
             try:
                 yield
@@ -73,6 +97,8 @@ def _account_file_lock(path: Path):
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
                 else:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        thread_lock.release()
 
 
 def account_cleanup_lock(data_dir: Path, account_id: str):
@@ -82,7 +108,10 @@ def account_cleanup_lock(data_dir: Path, account_id: str):
 
 def account_control_state_lock(data_dir: Path, account_id: str):
     """Serialize account-wide control-state updates across processes."""
-    return _account_file_lock(Path(data_dir) / f"control_state_{account_id}.lock")
+    return _account_file_lock(
+        Path(data_dir) / f"control_state_{account_id}.lock",
+        timeout_seconds=2.0,
+    )
 
 
 def account_balance_snapshot_lock(data_dir: Path, account_id: str):
