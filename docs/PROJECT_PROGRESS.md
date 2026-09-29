@@ -1423,3 +1423,10 @@ publication succeeds and the final target identity is verified.
 - Commit `96231aeade50369cb369db7681ded9d7e3a684ce` (`fix: remove unused balance path`) was pushed to `codex/startup-sync-failure-characterization`.
 - GitHub Actions push run `36543631995` for that exact commit completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory, including Ruff and mypy, all completed successfully.
 - No local pytest run, PR creation or merge, Canonical publication, runtime, Scheduler, account, credential, or order action was performed for this change.
+
+## 2026-09-30 — PR #77 merge and post-merge CI verification
+
+- PR #77, `docs: record PR #76 merge verification`, merged into `master` at `2026-09-29T22:14:25Z` with merge commit `59c3095d9cf26e654d8ef1f9b6dfcee4cb4f4438`. Its head commit was `96009d57dfab98c38d9bf961a67b478f406fa441`.
+- PR-triggered workflow run `36637465165` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
+- Post-merge `master` push run `36638376114` for merge commit `59c3095d9cf26e654d8ef1f9b6dfcee4cb4f4438` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
+- This is a repository-local progress record. No local tests, Canonical publication, or operational validation were performed while recording this checkpoint.
