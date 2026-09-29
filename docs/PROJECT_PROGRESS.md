@@ -1226,3 +1226,10 @@ publication succeeds and the final target identity is verified.
 - The managed worktree was fetched from `origin/master` and moved to the merge commit in detached HEAD state. Its post-move status was clean. The original `C:\auto\kiwoom-autotrade` checkout was left unchanged; its Git status showed pre-existing dirty and untracked paths, and permission-denied directories prevented a complete untracked inventory.
 - The focused local test result remains the previously recorded `19 passed` for `tests/test_runtime_control.py` and `tests/test_emergency_stop_allowlist.py`. No post-merge local test, runtime, Scheduler, account, credential, or order validation was performed.
 - This is a repository-local delivery record. No Canonical publication was performed; Canonical publication remains `INCOMPLETE`.
+
+## 2026-09-30 — PR #76 merge and post-merge CI verification
+
+- PR #76, `docs: record PR #75 merge and master CI`, merged into `master` at `2026-09-29T21:34:18Z` with merge commit `0b6e0b19ef3811d13612a16debcfeca652c0b250`. Its feature head was `6dbbc816b835e887ebdc66caae073944484c0f82`.
+- Pull-request workflow run `36633526075` and post-merge `master` push run `36634160487` completed successfully. The post-merge run's Windows validation, Ubuntu compatibility signal, and Quality advisory jobs each completed with conclusion `success`.
+- This merge and CI result is recorded in this repository-local successor. No follow-up PR was created for this entry.
+- No additional local tests, runtime, Scheduler, account, credential, or order validation were performed. No Canonical publication or operational validation is claimed.
