@@ -19,6 +19,24 @@ def test_partial_fill_is_idempotent_and_dashboard_shaped(tmp_path):
     store.close()
 
 
+def test_cumulative_fills_use_database_quantity_with_a_stale_pending_snapshot(tmp_path):
+    store = TradeLedgerStore(str(tmp_path / "trades.db"), "account-a")
+    stale_pending = PendingOrder("42", "NVDA", "BUY", 5, 100, "BUY", 3, {})
+    store.add_pending(stale_pending)
+
+    first = store.record_fill(stale_pending, 2, 100, "2026-08-11")
+    second = store.record_fill(stale_pending, 5, 101, "2026-08-11")
+    duplicate = store.record_fill(stale_pending, 5, 101, "2026-08-11")
+
+    assert first["qty"] == 2
+    assert second["qty"] == 3
+    assert duplicate is None
+    assert store.get_pending("42").filled_qty == 5
+    assert [row["qty"] for row in store.ledger_rows("NVDA")] == [2, 3]
+    assert store.open_tranche_qty("NVDA", 3) == 5
+    store.close()
+
+
 def test_backup_preserves_account_scoped_confirmed_fills(tmp_path):
     store = TradeLedgerStore(str(tmp_path / "trades.db"), "account-a")
     pending = PendingOrder("43", "SOXL", "BUY", 3, 20, "BUY", 1, {})

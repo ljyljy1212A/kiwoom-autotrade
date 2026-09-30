@@ -74,6 +74,46 @@ def test_second_tranche_never_sells_below_its_own_target():
     assert strategy.check_sell(snap, pos) is None
 
 
+def test_each_tranche_sells_only_its_remaining_filled_quantity():
+    cfg = {
+        "symbol": "TEST",
+        "first_buy": {"mode": "manual", "amount": 100},
+        "buy_steps": [
+            {"step": 1, "drop_pct": -1, "amount": 300},
+            {"step": 2, "drop_pct": -1, "amount": 500},
+        ],
+        "sell_steps": [
+            {"step": 1, "profit_pct": 1},
+            {"step": 2, "profit_pct": 1},
+            {"step": 3, "profit_pct": 1},
+        ],
+    }
+    strategy = InfiniteGridStrategy(cfg)
+    strategy.step_prices = {1: 100, 2: 90, 3: 80}
+    strategy.step_qty = {1: 1, 2: 3, 3: 5}
+    position = PositionState(symbol="TEST", qty=9, step=3)
+
+    step_three_target = strategy.sell_target_price(3)
+    step_three_sell = strategy.check_sell(
+        MarketSnapshot("TEST", step_three_target, "t3"), position,
+    )
+    assert step_three_sell is not None
+    assert step_three_sell.qty == 5
+    assert step_three_sell.meta["step"] == 3
+    strategy.on_filled(Action.SELL, 3, 5, step_three_target)
+
+    position.qty = 4
+    position.step = 2
+    step_two_target = strategy.sell_target_price(2)
+    step_two_sell = strategy.check_sell(
+        MarketSnapshot("TEST", step_two_target, "t2"), position,
+    )
+    assert step_two_sell is not None
+    assert step_two_sell.qty == 3
+    assert step_two_sell.meta["step"] == 2
+    assert strategy.step_qty == {1: 1, 2: 3, 3: 0}
+
+
 def test_sell_target_includes_entry_and_exit_commissions():
     cfg = {
         "symbol": "TEST", "commission_rate": 0.001,

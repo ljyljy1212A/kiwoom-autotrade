@@ -1930,6 +1930,11 @@ class AccountEngine:
         # an accepted order, an unfilled row must not block a symbol forever.
         # Confirmed fills are never touched because their status is ``filled``.
         for order in self.ledger.execution_recovery_orders(self.ctx.strategy.symbol):
+            # A terminal cancellation response does not prove that no fill
+            # occurred. Keep this row in execution-history recovery until a
+            # cumulative fill is reconciled; elapsed time alone cannot retire it.
+            if order.status == "awaiting_execution_history":
+                continue
             # A malformed terminal row must be recovered from execution
             # history, but must never be sent to the broker cancellation path.
             if order.status == "filled":
@@ -1944,16 +1949,6 @@ class AccountEngine:
             if remaining_qty <= 0:
                 continue
             age = (now - created_at).total_seconds()
-            # ``awaiting_execution_history`` means cancellation/fill lookup
-            # already reached a terminal broker response.  After the bounded
-            # grace period, retire it locally as unfilled; this is explicitly
-            # auditable and still leaves confirmed-fill ledger rows untouched.
-            if order.status == "awaiting_execution_history" and age >= self.pending_order_cancel_after_sec:
-                self.ledger.mark_cancelled(order.ord_no)
-                self.ctx.logger.warning(
-                    f"Force-closed unresolved {order.side} after {age:g}s without confirmed fill: {order.ord_no}"
-                )
-                return
             # kt10003 is quota constrained.  Submit one cancellation per sync
             # cycle and keep it behind the same minimum request interval used
             # for other broker reconciliation calls.
