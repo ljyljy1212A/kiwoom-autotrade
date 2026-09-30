@@ -24,7 +24,11 @@ from src.core.broker_http import (
     is_fixed_port_collision_error,
     is_fixed_port_holdoff_error,
 )
-from src.data.order_attempts import OrderAttemptStore, order_attempt_store
+from src.data.order_attempts import (
+    OrderAttemptStore,
+    existing_unattributed_attempt_ids,
+    order_attempt_store,
+)
 from src.core.token_manager import TokenManager
 from src.core.rate_limit_observability import emit_rate_limit_event
 from src.core.process_lock import AccountOrderAuthority
@@ -33,6 +37,7 @@ from src.utils.exceptions import (
     ExchangeResolutionError,
     KiwoomAPIError,
     OrderAuthorityError,
+    OrderDispatchBlockedError,
     OrderRejectedError,
     QuoteCircuitOpenError,
     RetryableError,
@@ -49,6 +54,7 @@ Side = Literal["BUY", "SELL"]
 class OrderResult:
     ord_no: str
     raw: dict
+    attempt_id: str | None = None
 
 
 @dataclass
@@ -109,9 +115,15 @@ class KiwoomClient:
         mode: Literal["real", "mock"] = "mock",
         logger=None,
         order_authority: AccountOrderAuthority | None = None,
+        order_attempt_account_id: str | None = None,
     ):
         self.domain = REAL_DOMAIN if mode == "real" else MOCK_DOMAIN
         self.account_no = account_no
+        # Attempt records use the configured account ID used by reconciliation,
+        # not the broker account number used for API authentication.
+        self.order_attempt_account_id = (
+            order_attempt_account_id if order_attempt_account_id is not None else account_no
+        )
         self.market = market
         self.exchange = exchange
         self.mode = mode
@@ -167,8 +179,13 @@ class KiwoomClient:
 
     def _attempt_store(self) -> OrderAttemptStore:
         if self._order_attempt_store is None:
-            self._order_attempt_store = order_attempt_store(self.account_no)
+            self._order_attempt_store = order_attempt_store(self.order_attempt_account_id)
         return self._order_attempt_store
+
+    def mark_order_pending_recorded(self, result: OrderResult) -> None:
+        if not result.attempt_id:
+            raise ValueError("Order result has no durable attempt ID")
+        self._attempt_store().mark_pending_recorded(result.attempt_id)
 
     async def _notify_exchange_failure(self, symbol: str, error: Exception) -> None:
         if symbol in self._exchange_alerted_symbols:
@@ -355,29 +372,52 @@ class KiwoomClient:
                 "cond_uv": "",
             }
 
-        try:
-            async with self._order_gate.lock:
-                now = time.monotonic()
-                wait_for = self._order_min_interval_sec - (now - self._order_gate.last_request_at)
-                if wait_for > 0:
-                    await asyncio.sleep(wait_for)
-                self._order_authority.assert_owned()
-                attempt = self._attempt_store().record_attempt(side, symbol, qty, price, order_type)
-                self._order_gate.last_request_at = time.monotonic()
-                try:
-                    data = await self._post_once(path, api_id, body, allow_reauth_retry=False)
-                except Exception as exc:
-                    if is_fixed_port_collision_error(exc):
-                        self._attempt_store().mark_unattributed(attempt.attempt_id)
-                    raise
-        except KiwoomAPIError as e:
-            raise OrderRejectedError(str(e)) from e
+        async with self._order_gate.lock:
+            now = time.monotonic()
+            wait_for = self._order_min_interval_sec - (now - self._order_gate.last_request_at)
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+            self._order_authority.assert_owned()
+            attempt_store = self._attempt_store()
+            try:
+                unresolved_attempt_ids = attempt_store.unattributed_attempt_ids()
+                if self.order_attempt_account_id != self.account_no:
+                    # Records made before the namespace correction may still
+                    # exist under the broker number. Refuse dispatch until
+                    # those outcomes are reconciled; never migrate them here.
+                    unresolved_attempt_ids.extend(
+                        existing_unattributed_attempt_ids(self.account_no)
+                    )
+            except Exception as exc:
+                raise OrderDispatchBlockedError(
+                    f"Cannot verify unresolved order attempts for account {self.order_attempt_account_id}"
+                ) from exc
+            if unresolved_attempt_ids:
+                raise OrderDispatchBlockedError(
+                    "Unresolved order attempt(s) must be reconciled before dispatch: "
+                    + ", ".join(unresolved_attempt_ids)
+                )
+            attempt = attempt_store.record_attempt(side, symbol, qty, price, order_type)
+            self._order_gate.last_request_at = time.monotonic()
+            try:
+                data = await self._post_once(path, api_id, body, allow_reauth_retry=False)
+                if not isinstance(data, dict):
+                    raise RetryableError(f"{api_id} returned a malformed order response")
+                ord_no = data.get("ord_no")
+                if not isinstance(ord_no, str) or not ord_no.strip():
+                    raise RetryableError(f"{api_id} response did not contain a valid ord_no")
+                self._attempt_store().mark_accepted_unlinked(attempt.attempt_id)
+            except KiwoomAPIError as exc:
+                self._attempt_store().mark_rejected(attempt.attempt_id)
+                raise OrderRejectedError(str(exc)) from exc
+            except Exception:
+                self._attempt_store().mark_unknown(attempt.attempt_id)
+                raise
 
-        ord_no = data.get("ord_no", "")
         if self.logger:
             logger = self.logger.bind(symbol=symbol) if hasattr(self.logger, "bind") else self.logger
             logger.info(f"주문 완료: {side} {symbol} x{qty} @ {price} -> ord_no={ord_no}")
-        return OrderResult(ord_no=ord_no, raw=data)
+        return OrderResult(ord_no=ord_no, raw=data, attempt_id=attempt.attempt_id)
 
     async def cancel_order(self, symbol: str, orig_ord_no: str, qty: int) -> dict:
         if self.market == "US":

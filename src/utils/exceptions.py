@@ -36,7 +36,7 @@ class OrderRejectedError(TradingSystemError):
 
 
 class OrderDispatchBlockedError(OrderRejectedError):
-    """A mock degraded-account reconciliation check could not clear dispatch."""
+    """An unresolved order attempt or reconciliation failure blocks dispatch."""
 
 
 class OrderAuthorityError(OrderRejectedError):

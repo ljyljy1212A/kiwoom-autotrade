@@ -11,6 +11,7 @@ from src.core.engine import (
     AccountEngine, DispatchClearanceService, NormalizedBalanceHolding,
     ReconciliationClearanceSnapshot,
 )
+from src.data.order_attempts import OrderAttemptStore
 from src.data.trade_ledger import TradeLedgerStore
 from src.utils.exceptions import OrderDispatchBlockedError
 from src.strategy.base import Action, OrderIntent
@@ -39,6 +40,7 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine.ctx = SimpleNamespace(
         account_id="us_mock", client=SimpleNamespace(
             market="US", mode="mock", place_order=place_order,
+            mark_order_pending_recorded=Mock(),
         ), logger=Mock(), position=SimpleNamespace(step=0),
     )
     engine._dashboard_profile_allowed = True
@@ -116,6 +118,82 @@ def test_kill_switch_disables_degraded_dispatch_seam(tmp_path):
     engine = asyncio.run(_blocked_dispatch(False, tmp_path))
 
     engine.ctx.client.place_order.assert_awaited_once()
+
+
+def test_pending_ledger_failure_keeps_order_attempt_unresolved(tmp_path):
+    store = OrderAttemptStore(tmp_path / "order_attempts.db", "us_mock")
+    attempt = store.record_attempt("BUY", "SOXL", 1, 10.0, "00")
+    store.mark_accepted_unlinked(attempt.attempt_id)
+    engine = _engine(None, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+    engine.ctx.client.place_order.return_value = SimpleNamespace(
+        ord_no="ORDER-1", attempt_id=attempt.attempt_id,
+    )
+    engine.ctx.client.mark_order_pending_recorded.side_effect = (
+        lambda result: store.mark_pending_recorded(result.attempt_id)
+    )
+    engine.ledger.add_pending.side_effect = RuntimeError("pending ledger unavailable")
+    intent = OrderIntent(Action.BUY, "SOXL", 1, 10.0, "00", {})
+
+    try:
+        try:
+            with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
+                asyncio.run(engine._execute_order(intent))
+        except RuntimeError as exc:
+            assert str(exc) == "pending ledger unavailable"
+        else:
+            raise AssertionError("pending ledger failure did not propagate")
+
+        engine.ctx.client.mark_order_pending_recorded.assert_not_called()
+        assert engine._last_auto_buy_price == {}
+        unresolved = store.get_attempt(attempt.attempt_id)
+        assert unresolved.dispatch_state == "accepted_unlinked"
+        assert store.unattributed_attempt_ids() == [attempt.attempt_id]
+    finally:
+        store.close()
+
+
+def test_attempt_confirmation_failure_keeps_order_unresolved_after_pending_write(tmp_path):
+    store = OrderAttemptStore(tmp_path / "order_attempts.db", "us_mock")
+    attempt = store.record_attempt("BUY", "SOXL", 1, 10.0, "00")
+    store.mark_accepted_unlinked(attempt.attempt_id)
+    engine = _engine(None, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+    engine.ctx.client.place_order.return_value = SimpleNamespace(
+        ord_no="ORDER-1", attempt_id=attempt.attempt_id,
+    )
+    ledger_path = tmp_path / "trades_us_mock.db"
+    engine.ledger = TradeLedgerStore(ledger_path, "us_mock")
+
+    def fail_after_pending_commit(result):
+        reader = TradeLedgerStore(ledger_path, "us_mock")
+        try:
+            pending = reader.get_pending(result.ord_no)
+            assert pending is not None
+            assert pending.symbol == "SOXL"
+        finally:
+            reader.close()
+        raise RuntimeError("confirmation unavailable")
+
+    engine.ctx.client.mark_order_pending_recorded.side_effect = fail_after_pending_commit
+    intent = OrderIntent(Action.BUY, "SOXL", 1, 10.0, "00", {})
+
+    try:
+        with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
+            asyncio.run(engine._execute_order(intent))
+
+        pending = engine.ledger.get_pending("ORDER-1")
+        assert pending is not None
+        assert pending.symbol == "SOXL"
+        engine.ctx.client.mark_order_pending_recorded.assert_called_once()
+        engine.telegram.notify_error.assert_awaited_once()
+        assert "confirmation unavailable" in engine.telegram.notify_error.await_args.args[0]
+        engine.telegram.notify_order.assert_not_awaited()
+        engine.sync_broker_state.assert_not_awaited()
+        unresolved = store.get_attempt(attempt.attempt_id)
+        assert unresolved.dispatch_state == "accepted_unlinked"
+        assert store.unattributed_attempt_ids() == [attempt.attempt_id]
+    finally:
+        engine.ledger.close()
+        store.close()
 
 
 def test_a_prefixed_symbol_completes_active_clearance_cycle(tmp_path):
