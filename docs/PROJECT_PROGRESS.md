@@ -1240,3 +1240,12 @@ publication succeeds and the final target identity is verified.
 - PR-triggered workflow run `36637465165` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
 - Post-merge `master` push run `36638376114` for merge commit `59c3095d9cf26e654d8ef1f9b6dfcee4cb4f4438` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
 - This is a repository-local progress record. No local tests, Canonical publication, or operational validation were performed while recording this checkpoint.
+
+## 2026-09-30 — PR #78 CI recovery and PR #79 manual-dispatch delivery
+
+- PR #78 merged into `master` as `cddcfdf5e9ec2792b9e5da48e4c8c02a598be65d`. Its workflow file included both `push` and `pull_request` triggers, Actions was enabled, and the workflow was active. Its merge commit had no Actions run, check run, or check suite; the underlying GitHub event-delivery cause was not established.
+- To verify the exact merged code, branch `codex/pr78-merge-ci-verify` was created at `cddcfdf5e9ec2792b9e5da48e4c8c02a598be65d`. Its push workflow run `36647224181` completed successfully: Docker image build, Ubuntu compatibility signal (non-blocking), Quality advisory, and Windows validation each concluded `success`. This verifies the merge SHA on the verification branch; it does not create or prove a delayed `master` run for PR #78.
+- Commit `2fbabaf26786998fede446a895c97e7917eb9ba8` (`ci: add manual workflow dispatch fallback`) added only `workflow_dispatch` to `.github/workflows/linux-smoke.yml`. PR #79 merged into `master` as `29f0d39d21a538624a216cb07570b71c57fa7d98`.
+- PR #79's push run `36647949296`, pull-request run `36648082811`, and post-merge `master` push run `36648513145` each completed successfully. In each run, Docker image build, Ubuntu compatibility signal (non-blocking), Quality advisory, and Windows validation concluded `success`.
+- The `workflow_dispatch` trigger provides a manual recovery path for a future missing automatic workflow run. It does not establish the cause of PR #78's missing `master` push run.
+- No local test, Canonical publication, runtime, Scheduler, account, credential, or order action was performed during this progress-record update.
