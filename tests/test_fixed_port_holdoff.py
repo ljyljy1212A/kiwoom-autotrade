@@ -371,6 +371,7 @@ class FixedPortHoldoffTest(unittest.IsolatedAsyncioTestCase):
         authority_lock = Mock()
         authority_lock.owned_by_current_process.return_value = True
         attempt_store = Mock()
+        attempt_store.unattributed_attempt_ids.return_value = []
         attempt_store.record_attempt.return_value = SimpleNamespace(attempt_id="attempt-1")
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
@@ -395,6 +396,7 @@ class FixedPortHoldoffTest(unittest.IsolatedAsyncioTestCase):
         authority_lock = Mock()
         authority_lock.owned_by_current_process.return_value = True
         attempt_store = Mock()
+        attempt_store.unattributed_attempt_ids.return_value = []
         attempt_store.record_attempt.return_value = SimpleNamespace(attempt_id="attempt-2")
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.object(broker_http, "DATA_DIR", Path(temp_dir)):
