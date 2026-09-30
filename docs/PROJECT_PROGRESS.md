@@ -1430,3 +1430,10 @@ publication succeeds and the final target identity is verified.
 - PR-triggered workflow run `36637465165` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
 - Post-merge `master` push run `36638376114` for merge commit `59c3095d9cf26e654d8ef1f9b6dfcee4cb4f4438` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
 - This is a repository-local progress record. No local tests, Canonical publication, or operational validation were performed while recording this checkpoint.
+
+## 2026-09-30 — Pending-ledger failure price-cache fix
+
+- Moved the BUY price-cache update in `src/core/engine.py` to after `ledger.add_pending` returns successfully. A pending-ledger write failure now leaves `_last_auto_buy_price` unchanged for that attempt.
+- Extended `test_pending_ledger_failure_keeps_order_attempt_unresolved` in `tests/test_dispatch_clearance_integration.py` to assert the price cache remains empty when `add_pending` raises.
+- The focused test ran with `python -m pytest -p no:cacheprovider --basetemp C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-price-cache-20260930-v2 C:\auto\kiwoom-autotrade\tests\test_dispatch_clearance_integration.py::test_pending_ledger_failure_keeps_order_attempt_unresolved` and reported `1 passed in 1.05s` on Python 3.14.7 / pytest 9.1.1. This is local focused-test evidence only.
+- No Git status/diff or delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed for this follow-up. Those states are `INCOMPLETE`.

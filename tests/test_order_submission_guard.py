@@ -18,6 +18,7 @@ from src.core.broker_http import (
     get_fixed_port_degraded_state,
 )
 from src.core.kiwoom_client import KiwoomClient
+from src.data.order_attempts import OrderAttemptStore
 from src.core.process_lock import AccountOrderAuthority
 from src.utils.exceptions import ExchangeResolutionError, KiwoomAPIError, OrderAuthorityError, RetryableError
 
@@ -33,6 +34,18 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
             client.bind_order_authority(AccountOrderAuthority("test", lock))
         self.kr._order_min_interval_sec = 0.2
         self.us._order_min_interval_sec = 0.2
+        self.attempt_temp = tempfile.TemporaryDirectory()
+        self.kr._order_attempt_store = OrderAttemptStore(
+            Path(self.attempt_temp.name) / "kr_attempts.db", "kr-account"
+        )
+        self.us._order_attempt_store = OrderAttemptStore(
+            Path(self.attempt_temp.name) / "us_attempts.db", "us-account"
+        )
+
+    async def asyncTearDown(self):
+        self.kr._order_attempt_store.close()
+        self.us._order_attempt_store.close()
+        self.attempt_temp.cleanup()
 
     async def test_order_without_authority_fails_before_exchange_lookup(self):
         client = KiwoomClient("key", "secret", "unauthorized", market="US", exchange="ND", mode="mock")
@@ -64,6 +77,12 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
             return {"ord_no": f"{len(call_started_at):07d}"}
 
+        attempts = Mock()
+        attempts.unattributed_attempt_ids.return_value = []
+        attempts.record_attempt.side_effect = [
+            Mock(attempt_id="first"), Mock(attempt_id="second")
+        ]
+        self.kr._attempt_store = Mock(return_value=attempts)
         self.kr._post_once = post_once
 
         first, second = await asyncio.gather(
@@ -79,6 +98,7 @@ class OrderSubmissionGuardTest(unittest.IsolatedAsyncioTestCase):
     async def test_record_attempt_delay_keeps_post_spacing_deterministic(self):
         call_started_at: list[float] = []
         attempts = Mock()
+        attempts.unattributed_attempt_ids.return_value = []
         attempts.record_attempt.side_effect = lambda *_args: (
             time.sleep(0.08),
             Mock(attempt_id="attempt-id"),

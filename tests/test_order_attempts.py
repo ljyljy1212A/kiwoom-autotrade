@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.core.broker_http import FixedPortCollisionError
 from src.core.kiwoom_client import KiwoomClient
@@ -9,9 +9,15 @@ from src.core.process_lock import AccountOrderAuthority
 from src.data.order_attempts import (
     OrderAttestationOutcome,
     OrderAttemptStore,
+    existing_unattributed_attempt_ids,
     unattributed_attempt_ids,
 )
-from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, RetryableError
+from src.utils.exceptions import (
+    KiwoomAPIError,
+    OrderDispatchBlockedError,
+    OrderRejectedError,
+    RetryableError,
+)
 
 
 class OrderAttemptStoreTest(unittest.TestCase):
@@ -70,6 +76,17 @@ class OrderAttemptStoreTest(unittest.TestCase):
         finally:
             second.close()
 
+    def test_existing_namespace_lookup_is_read_only_and_sees_unresolved_attempts(self):
+        missing_path = self.data_dir / "order_attempts_missing.db"
+        self.assertEqual(existing_unattributed_attempt_ids("missing", self.data_dir), [])
+        self.assertFalse(missing_path.exists())
+
+        attempt = self.store.record_attempt("BUY", "SOXL", 2, 10.5, "00")
+        self.assertEqual(
+            existing_unattributed_attempt_ids("account-a", self.data_dir),
+            [attempt.attempt_id],
+        )
+
     def test_attestation_accepts_cancelled_and_replay_guard(self):
         accepted = self.store.record_attempt("BUY", "SOXL", 2, 10.5, "00")
         cancelled = self.store.record_attempt("SELL", "NVDA", 1, 100, "00")
@@ -123,7 +140,59 @@ class OrderAttemptRecordingTest(unittest.IsolatedAsyncioTestCase):
         result = await self.client.place_order("BUY", "NVDA", 2, 10.5)
 
         self.assertEqual(result.ord_no, "ORD-1")
+        self.assertIsNotNone(result.attempt_id)
+        attempt = self.store.get_attempt(result.attempt_id)
+        self.assertEqual(attempt.dispatch_state, "accepted_unlinked")
+        self.assertEqual(self.store.unattributed_attempt_ids(), [result.attempt_id])
+
+        self.client.mark_order_pending_recorded(result)
+
+        recorded = self.store.get_attempt(result.attempt_id)
+        self.assertEqual(recorded.dispatch_state, "pending_recorded")
         self.assertEqual(self.store.unattributed_attempt_ids(), [])
+
+    async def test_ambiguous_response_blocks_later_dispatch_without_degraded_state(self):
+        calls = 0
+
+        async def lost_response(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise RetryableError("simulated lost response")
+
+        self.client._post_once = lost_response
+        with self.assertRaises(RetryableError):
+            await self.client.place_order("BUY", "NVDA", 2, 10.5)
+
+        unresolved = self.store.unattributed_attempt_ids()
+        self.assertEqual(len(unresolved), 1)
+        self.assertEqual(self.store.get_attempt(unresolved[0]).dispatch_state, "unknown")
+        with self.assertRaises(OrderDispatchBlockedError):
+            await self.client.place_order("BUY", "NVDA", 2, 10.5)
+        self.assertEqual(calls, 1)
+
+    async def test_accepted_unlinked_attempt_blocks_later_dispatch(self):
+        attempt = self.store.record_attempt("BUY", "NVDA", 2, 10.5, "00")
+        self.store.mark_accepted_unlinked(attempt.attempt_id)
+        self.client._post_once = AsyncMock(side_effect=AssertionError("order must not run"))
+
+        with self.assertRaises(OrderDispatchBlockedError):
+            await self.client.place_order("BUY", "NVDA", 2, 10.5)
+
+        self.client._post_once.assert_not_awaited()
+
+    async def test_old_account_number_namespace_still_blocks_dispatch(self):
+        self.client.account_no = "previous-broker-number"
+        self.client._post_once = AsyncMock(side_effect=AssertionError("order must not run"))
+
+        with patch(
+            "src.core.kiwoom_client.existing_unattributed_attempt_ids",
+            return_value=["legacy-attempt"],
+        ) as legacy_lookup:
+            with self.assertRaises(OrderDispatchBlockedError):
+                await self.client.place_order("BUY", "NVDA", 2, 10.5)
+
+        legacy_lookup.assert_called_once_with("previous-broker-number")
+        self.client._post_once.assert_not_awaited()
 
     async def test_fixed_port_failure_marks_attempt_unattributed(self):
         async def fixed_port_failure(*_args, **_kwargs):
