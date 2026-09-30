@@ -170,6 +170,29 @@ class RateLimitObservabilityTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(balance_events), 3)
         self.assertTrue(all(event["quota_tier"] == "1700" for event in balance_events))
 
+    async def test_terminal_order_keeps_awaiting_execution_history_after_timeout(self):
+        order = SimpleNamespace(
+            created_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            requested_qty=1,
+            filled_qty=0,
+            status="awaiting_execution_history",
+            ord_no="order-1",
+            symbol="005930",
+            side="BUY",
+        )
+        engine = self._engine(balance_only=False)
+        engine.ledger = SimpleNamespace(
+            execution_recovery_orders=lambda _symbol: [order],
+            mark_cancelled=unittest.mock.Mock(),
+        )
+        engine.ctx.client.cancel_order = AsyncMock()
+
+        await engine._cancel_stale_orders()
+
+        self.assertEqual(order.status, "awaiting_execution_history")
+        engine.ledger.mark_cancelled.assert_not_called()
+        engine.ctx.client.cancel_order.assert_not_awaited()
+
     async def test_order_cancellation_hook_filters_unrelated_errors(self):
         order = SimpleNamespace(
             created_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),

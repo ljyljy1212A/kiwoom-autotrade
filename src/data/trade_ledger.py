@@ -172,21 +172,45 @@ class TradeLedgerStore:
 
     def record_fill(self, pending: PendingOrder, cumulative_qty: float, price: float, filled_at: str) -> dict | None:
         """Record only the newly-confirmed quantity from a cumulative broker value."""
-        delta = max(0.0, cumulative_qty - pending.filled_qty)
-        if delta <= 0:
-            return None
-        # A cumulative quantity makes the id stable across repeated REST polling.
-        row_id = f"{'B' if pending.side == 'BUY' else 'S'}-{pending.ord_no}-{_num(cumulative_qty)}"
-        buy_id = self._buy_id_for_sell_order(pending) if pending.side == 'SELL' else None
-        self.db.execute("""INSERT OR IGNORE INTO trade_ledger
-            (id,account_id,ord_no,symbol,type,step,filled_at,qty,price,buy_id,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (row_id, self.account_id, pending.ord_no, pending.symbol, pending.side.lower(), pending.step,
-             filled_at, delta, price, buy_id, _now()))
-        status = 'filled' if cumulative_qty >= pending.requested_qty else 'open'
-        self.db.execute("UPDATE pending_orders SET filled_qty=?, status=?, updated_at=? WHERE account_id=? AND ord_no=?",
-                        (cumulative_qty, status, _now(), self.account_id, pending.ord_no))
-        self.db.commit()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            current_row = self.db.execute(
+                "SELECT * FROM pending_orders WHERE account_id=? AND ord_no=?",
+                (self.account_id, pending.ord_no),
+            ).fetchone()
+            if current_row is None:
+                raise ValueError(f"No pending order {pending.ord_no} for account {self.account_id}")
+            current = self._pending_from_row(current_row)
+            cumulative_qty = float(cumulative_qty)
+            delta = cumulative_qty - float(current.filled_qty)
+            if delta <= 0:
+                self.db.rollback()
+                return None
+
+            # Read the persisted cumulative quantity inside the write
+            # transaction. Callers can process several rows from one broker
+            # response while holding the same stale PendingOrder snapshot.
+            row_id = f"{'B' if current.side == 'BUY' else 'S'}-{current.ord_no}-{_num(cumulative_qty)}"
+            buy_id = self._buy_id_for_sell_order(current) if current.side == 'SELL' else None
+            inserted = self.db.execute("""INSERT INTO trade_ledger
+                (id,account_id,ord_no,symbol,type,step,filled_at,qty,price,buy_id,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (row_id, self.account_id, current.ord_no, current.symbol, current.side.lower(), current.step,
+                 filled_at, delta, price, buy_id, _now()))
+            if inserted.rowcount != 1:
+                raise RuntimeError(f"Could not record unique fill {row_id}")
+            status = 'filled' if cumulative_qty >= current.requested_qty else 'open'
+            updated = self.db.execute(
+                "UPDATE pending_orders SET filled_qty=?, status=?, updated_at=? "
+                "WHERE account_id=? AND ord_no=? AND filled_qty=?",
+                (cumulative_qty, status, _now(), self.account_id, current.ord_no, current.filled_qty),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError(f"Pending order changed while recording fill {current.ord_no}")
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         row = self.db.execute("SELECT * FROM trade_ledger WHERE id=?", (row_id,)).fetchone()
         return dict(row) if row else None
 
