@@ -1616,12 +1616,20 @@ class AccountEngine:
             self.ctx.logger.error("Broker accepted an order without ord_no; no state was changed")
             await self.telegram.notify_error("Broker accepted an order without an order ID; no state was changed")
             return
-        if side == "BUY":
-            self._last_auto_buy_price[self._symbol_key(intent.symbol)] = float(intent.price or 0)
         # Order acceptance is intentionally the only outcome here.  No position or
         # strategy state changes until get_executed_orders confirms a fill.
         self.ledger.add_pending(PendingOrder(result.ord_no, intent.symbol, side, intent.qty, intent.price,
                                 intent.action.value, int(intent.meta.get("step", self.ctx.position.step)), dict(intent.meta)))
+        if side == "BUY":
+            self._last_auto_buy_price[self._symbol_key(intent.symbol)] = float(intent.price or 0)
+        try:
+            self.ctx.client.mark_order_pending_recorded(result)
+        except Exception as exc:
+            self.ctx.logger.error(f"Pending order persisted but dispatch attempt confirmation failed: {exc}")
+            await self.telegram.notify_error(
+                f"Pending order {result.ord_no} persisted, but dispatch attempt confirmation failed: {exc}"
+            )
+            return
         self.ctx.logger.info(f"Accepted order is pending confirmation: {result.ord_no}")
         await self.telegram.notify_order(side, intent.symbol, intent.qty, intent.price, result.ord_no)
         await self.sync_broker_state()

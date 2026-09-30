@@ -71,6 +71,7 @@ def load_accounts(config_path: str = "config/accounts.yaml",
 
         client = KiwoomClient(
             appkey=appkey, secretkey=secretkey, account_no=account_no,
+            order_attempt_account_id=acc["id"],
             market=acc["market"], exchange=acc["exchange"], mode=mode, logger=logger,
         )
 
