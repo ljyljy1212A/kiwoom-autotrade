@@ -1948,7 +1948,6 @@ class AccountEngine:
             remaining_qty = int(order.requested_qty - order.filled_qty)
             if remaining_qty <= 0:
                 continue
-            age = (now - created_at).total_seconds()
             # kt10003 is quota constrained.  Submit one cancellation per sync
             # cycle and keep it behind the same minimum request interval used
             # for other broker reconciliation calls.
