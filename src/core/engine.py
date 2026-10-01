@@ -35,7 +35,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from src.calendar_utils.market_calendar import MarketCalendar
-from src.data.trade_ledger import PendingOrder, TradeLedgerStore
+from src.data.trade_ledger import FillQuantityExceededError, PendingOrder, TradeLedgerStore
 from src.data.order_attempts import unattributed_attempt_ids
 from src.core.us_market import (
     extract_us_fx_rate,
@@ -225,6 +225,14 @@ class _ReadOnlyClearanceLedger:
 
     def execution_recovery_orders(self, symbol: str) -> list[_ReadOnlyOrderReference]:
         return self.pending_orders(symbol)
+
+    def quantity_conflict_order_ids(self, symbol: str) -> tuple[str, ...]:
+        rows = self.db.execute(
+            "SELECT ord_no FROM execution_quantity_conflicts "
+            "WHERE account_id=? AND symbol=? ORDER BY ord_no",
+            (self.account_id, symbol),
+        ).fetchall()
+        return tuple(str(row["ord_no"]) for row in rows)
 
     def open_tranche_qty(self, symbol: str, step: int) -> float:
         row = self.db.execute(
@@ -967,11 +975,13 @@ class AccountEngine:
 
     def _unresolved_reconciliation_order_ids(self, symbol: str, *, ledger=None) -> tuple[str, ...]:
         ledger = self.ledger if ledger is None else ledger
-        return tuple(sorted({
+        unresolved = {
             order.ord_no
             for order in (ledger.pending_orders(symbol) + ledger.execution_recovery_orders(symbol))
             if order.ord_no
-        }))
+        }
+        unresolved.update(ledger.quantity_conflict_order_ids(symbol))
+        return tuple(sorted(unresolved))
 
     def _reconciliation_open_rows(self, symbol: str, avg_price: float, *, ledger=None) -> list[tuple[int, float, float]]:
         ledger = self.ledger if ledger is None else ledger
@@ -1151,8 +1161,10 @@ class AccountEngine:
             with sqlite3.connect(path, timeout=0.25) as db:
                 return db.execute(
                     "SELECT 1 FROM pending_orders WHERE account_id=? AND symbol=? "
-                    "AND status IN ('open','awaiting_execution_history') LIMIT 1",
-                    (self.ctx.account_id, symbol),
+                    "AND status IN ('open','awaiting_execution_history') "
+                    "UNION ALL SELECT 1 FROM execution_quantity_conflicts "
+                    "WHERE account_id=? AND symbol=? LIMIT 1",
+                    (self.ctx.account_id, symbol, self.ctx.account_id, symbol),
                 ).fetchone() is not None
         except sqlite3.Error as exc:
             raise RuntimeError("unresolved-order inspection failed") from exc
@@ -1558,6 +1570,8 @@ class AccountEngine:
             await self._execute_order(intent)
 
     async def _execute_order(self, intent: OrderIntent):
+        if self._quantity_conflict_blocks_order(intent.symbol):
+            return
         if not getattr(self, "_symbol_key_migration_complete", True) or self._symbol_key_manual_review(intent.symbol):
             self.ctx.logger.error(f"Order blocked pending symbol-key migration review: {intent.symbol}")
             return
@@ -1605,6 +1619,10 @@ class AccountEngine:
                 self.ctx.logger.error(f"Order blocked: {exc}")
                 await self.telegram.notify_error(f"Order blocked: {exc}")
                 return
+        # Clearance can await broker I/O. Re-read the durable latch at the
+        # submission boundary, including when optional clearance is disabled.
+        if self._quantity_conflict_blocks_order(intent.symbol):
+            return
         try:
             result = await self.ctx.client.place_order(side=side, symbol=intent.symbol, qty=intent.qty,
                                                        price=intent.price, order_type=intent.order_type)
@@ -1683,7 +1701,12 @@ class AccountEngine:
                     return False
                 self._balance_sync_blocked = False
                 return True
-            if self.ledger.pending_orders(self.ctx.strategy.symbol):
+            if self._quantity_conflict_blocks_order(self.ctx.strategy.symbol):
+                self._balance_sync_blocked = True
+                return False
+            completed_orders = {order.ord_no: order for order in
+                                self.ledger.completed_orders_for_execution_observation(self.ctx.strategy.symbol)}
+            if self.ledger.pending_orders(self.ctx.strategy.symbol) or completed_orders:
                 try:
                     async with self._balance_gate.execution_lock:
                         now = asyncio.get_running_loop().time()
@@ -1695,6 +1718,10 @@ class AccountEngine:
                         self._balance_gate.last_execution_request_at = completed_at
                         self._last_execution_query_at = completed_at
                     self._last_execution_unavailable_symbol = ""
+                except ValueError as exc:
+                    self.ctx.logger.error(f"Incomplete execution history; sync blocked: {exc}")
+                    self._balance_sync_blocked = True
+                    return False
                 except KiwoomAPIError as exc:
                     completed_at = asyncio.get_running_loop().time()
                     self._balance_gate.last_execution_request_at = completed_at
@@ -1731,39 +1758,66 @@ class AccountEngine:
                 recovery_orders = {order.ord_no: order for order in self.ledger.execution_recovery_orders(
                     self.ctx.strategy.symbol
                 )}
+                observation_orders = {**completed_orders, **recovery_orders}
                 for raw in execution_rows:
-                    order = recovery_orders.get(str(raw.get("ord_no", "")))
+                    order = observation_orders.get(str(raw.get("ord_no", "")))
                     if not order:
                         self._log_skipped_execution_row(
                             raw, "no_matching_pending_or_recovery_order"
                         )
                         continue
                     total, price = _number(raw.get("cntr_qty")), _number(raw.get("cntr_pric") or raw.get("cntr_uv"))
-                    if not math.isfinite(total) or not math.isfinite(price):
-                        reason = ("non_finite_cumulative_quantity" if not math.isfinite(total)
-                                  else "non_finite_execution_price")
+                    try:
+                        if math.isfinite(total):
+                            # Persist quantity conflicts before price rejection.
+                            # Observation never records an economic fill.
+                            self.ledger.record_fill(
+                                order, total, price, _filled_at(raw), observation_only=True,
+                            )
+                        if not math.isfinite(total) or not math.isfinite(price):
+                            reason = ("non_finite_cumulative_quantity" if not math.isfinite(total)
+                                      else "non_finite_execution_price")
+                            self._log_skipped_execution_row(
+                                raw, reason, order=order,
+                                total=total if math.isfinite(total) else None,
+                                price=price if math.isfinite(price) else None,
+                            )
+                            continue
+                        if price <= 0:
+                            self._log_skipped_execution_row(
+                                raw, "non_positive_execution_price",
+                                order=order, total=total, price=price,
+                            )
+                            continue
+                        if order.ord_no not in recovery_orders:
+                            row = None
+                        else:
+                            row = self.ledger.record_fill(order, total, price, _filled_at(raw))
+                    except FillQuantityExceededError as exc:
                         self._log_skipped_execution_row(
-                            raw, reason, order=order,
-                            total=total if math.isfinite(total) else None,
+                            raw, exc.reason, order=order, total=total,
                             price=price if math.isfinite(price) else None,
+                            requested_qty=exc.requested_qty, stored_filled_qty=exc.filled_qty,
                         )
-                        continue
-                    if total <= order.filled_qty:
+                        # A conflicting fill cannot justify an order decision.
+                        # Stop this cycle before cancellation or balance success
+                        # can conceal the unresolved attribution.
+                        self._balance_sync_blocked = True
+                        return False
+                    except sqlite3.Error as exc:
+                        # A failed latch write provides no complete attribution
+                        # evidence. Do not retry or turn it into sync success.
+                        self.ctx.logger.error(f"Execution ledger write failed; sync blocked: {exc}")
+                        self._balance_sync_blocked = True
+                        return False
+                    if row:
+                        await self._apply_confirmed_fill(order, row)
+                        confirmed_fill = True
+                    else:
                         self._log_skipped_execution_row(
                             raw, "non_incremental_cumulative_quantity",
                             order=order, total=total, price=price,
                         )
-                        continue
-                    if price <= 0:
-                        self._log_skipped_execution_row(
-                            raw, "non_positive_execution_price",
-                            order=order, total=total, price=price,
-                        )
-                        continue
-                    row = self.ledger.record_fill(order, total, price, _filled_at(raw))
-                    if row:
-                        await self._apply_confirmed_fill(order, row)
-                        confirmed_fill = True
                 await self._cancel_stale_orders()
             now = asyncio.get_running_loop().time()
             if confirmed_fill or force_balance or now - self._last_balance_reconciliation >= self.balance_reconcile_sec:
@@ -1817,6 +1871,8 @@ class AccountEngine:
         order: PendingOrder | None = None,
         total: float | None = None,
         price: float | None = None,
+        requested_qty: float | None = None,
+        stored_filled_qty: float | None = None,
     ) -> None:
         self.ctx.logger.warning(
             json.dumps(
@@ -1827,6 +1883,8 @@ class AccountEngine:
                     "orderNo": order.ord_no if order is not None else str(raw.get("ord_no", "")),
                     "total": total,
                     "price": price,
+                    "requestedQty": requested_qty,
+                    "storedFilledQty": stored_filled_qty,
                     "raw": {
                         key: str(value) if isinstance(value, float) and not math.isfinite(value) else value
                         for key, value in raw.items()
@@ -3040,9 +3098,27 @@ class AccountEngine:
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self.ctx.logger.warning(f"Quote diagnostic publication deferred: {exc}")
 
+    def _quantity_conflict_blocks_order(self, symbol: str) -> bool:
+        """A durable quantity conflict survives pauses and process restarts."""
+        try:
+            with self._clearance_ledger(symbol) as ledger:
+                conflicts = ledger.quantity_conflict_order_ids(self._symbol_key(symbol))
+        except Exception as exc:
+            self.ctx.logger.error(f"Order blocked: quantity-conflict inspection failed: {exc}")
+            return True
+        if conflicts:
+            self.ctx.logger.error(
+                f"Order blocked: unresolved execution quantity conflict for {symbol}: "
+                + ", ".join(conflicts)
+            )
+            return True
+        return False
+
     def pause_buying(self): self._buying_paused = True
     def resume_buying(self): self._buying_paused = False
     def resume_trading(self):
+        if self._quantity_conflict_blocks_order(self.ctx.strategy.symbol):
+            return
         self._trading_paused = False
         self.ctx.logger.info(f"Resuming trading for {self.ctx.strategy.symbol}; clearing pause reason: {self._pause_reason}")
         self._pause_reason = ""

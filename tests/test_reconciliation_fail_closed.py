@@ -609,7 +609,11 @@ class SyncBrokerStateIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fill_reconciliation_retryable_error_wiring_reaches_pause_threshold(self):
         engine = _sync_engine("kr_mock", ".", balance_only=False)
-        engine.ledger = SimpleNamespace(pending_orders=lambda _symbol: False)
+        engine.ledger = SimpleNamespace(
+            pending_orders=lambda _symbol: False,
+            quantity_conflict_order_ids=lambda _symbol: (),
+            completed_orders_for_execution_observation=lambda _symbol: [],
+        )
         engine._reconcile_balance = AsyncMock(side_effect=RetryableError("balance unavailable"))
 
         for _ in range(3):
