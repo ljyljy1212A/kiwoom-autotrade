@@ -46,7 +46,8 @@ def _env(prefix: str, key: str) -> str:
 
 def load_accounts(config_path: str = "config/accounts.yaml",
                    account_filter: str | None = None,
-                   market_filter: str | None = None) -> list[AccountContext]:
+                   market_filter: str | None = None,
+                   require_mock_route: bool = False) -> list[AccountContext]:
     with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
@@ -54,6 +55,15 @@ def load_accounts(config_path: str = "config/accounts.yaml",
     selected_market = str(market_filter or "").strip().upper()
     if selected_market and selected_market not in {"KR", "US"}:
         raise RuntimeError(f"market_filter must be KR or US, got {market_filter!r}")
+    if require_mock_route:
+        # Validate this exact YAML snapshot before any credential lookup or
+        # client construction; the earlier catalog check can become stale.
+        routed_accounts = [acc for acc in raw["accounts"] if acc.get("id") == "kr_mock"]
+        if (selected_ids != {"kr_mock"} or selected_market != "KR"
+                or len(routed_accounts) != 1
+                or str(routed_accounts[0].get("market", "")).upper() != "KR"
+                or (routed_accounts[0].get("mode") or os.environ.get("KIWOOM_ENV", "mock")) != "mock"):
+            raise RuntimeError("routed account loader requires one kr_mock / KR / mock entry")
     contexts: list[AccountContext] = []
     for acc in raw["accounts"]:
         if selected_ids and acc["id"] not in selected_ids:

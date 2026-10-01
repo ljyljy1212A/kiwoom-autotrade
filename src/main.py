@@ -22,11 +22,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+from src.core.worker_environment import load_worker_environment, validate_routed_account
 
 from src.core.broker_http import get_fixed_port_degraded_state, restore_fixed_port_degraded_state
 from src.core.process_lock import AccountOrderAuthority, ProcessLock
 from src.core.symbol_keys import canonical_symbol_key
-from src.core.runtime_paths import DATA_DIR, LOG_DIR
+from src.core.runtime_paths import DATA_DIR, LOG_DIR, RUNTIME_ROOT
 from src.core.account_manager import load_accounts
 from src.core.engine import AccountEngine, DispatchClearanceService
 from src.core.realtime_feed import PriceFeed
@@ -39,7 +40,10 @@ from src.utils.logger import get_logger
 # The project .env is the source of truth.  Override inherited/stale shell
 # variables so a dashboard restarted after a credential rotation uses the new
 # App Key and Secret Key.
-load_dotenv(override=True)
+if os.environ.get("KIWOOM_RUNTIME_ROOT", "").strip():
+    load_worker_environment()
+else:
+    load_dotenv(override=True)
 
 _CONTROL_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,11}$")
 
@@ -673,8 +677,13 @@ async def main():
         )
     # Real-account launch is intentionally retained here; AccountOrderAuthority
     # and operator discipline are the safeguards at this boundary.
+    routed = bool(os.environ.get("KIWOOM_RUNTIME_ROOT", "").strip())
+    if routed:
+        validate_routed_account(account_filter, market_filter)
     contexts = load_accounts(
-        "config/accounts.yaml", account_filter=account_filter, market_filter=market_filter,
+        str(RUNTIME_ROOT / "config" / "accounts.yaml") if routed else "config/accounts.yaml",
+        account_filter=account_filter, market_filter=market_filter,
+        require_mock_route=routed,
     )
     if not contexts:
         SYS_LOG.error("No accounts matched the selected account/market filter; worker will not start")
