@@ -406,8 +406,14 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["env"]["PYTHONPATH"], str(target_root))
         self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_RUNTIME_ROOT"], str(default_root.resolve()))
         self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_ENV"], "mock")
-        self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_DIAGNOSTICS_DIR"], str(default_root / "diagnostics"))
-        self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_BACKUP_BASE_DIR"], str(default_root / "backups"))
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["KIWOOM_DIAGNOSTICS_DIR"],
+            str((default_root / "diagnostics").resolve()),
+        )
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["KIWOOM_BACKUP_BASE_DIR"],
+            str((default_root / "backups").resolve()),
+        )
         self.assertEqual(
             popen.call_args.kwargs["env"]["KIWOOM_DATA_DIR"],
             str(data_dir.resolve()),
