@@ -199,7 +199,12 @@ class TradeLedgerStore:
                  filled_at, delta, price, buy_id, _now()))
             if inserted.rowcount != 1:
                 raise RuntimeError(f"Could not record unique fill {row_id}")
-            status = 'filled' if cumulative_qty >= current.requested_qty else 'open'
+            if cumulative_qty >= current.requested_qty:
+                status = 'filled'
+            elif current.status == 'awaiting_execution_history':
+                status = 'awaiting_execution_history'
+            else:
+                status = 'open'
             updated = self.db.execute(
                 "UPDATE pending_orders SET filled_qty=?, status=?, updated_at=? "
                 "WHERE account_id=? AND ord_no=? AND filled_qty=?",

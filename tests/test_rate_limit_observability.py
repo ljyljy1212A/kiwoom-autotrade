@@ -28,6 +28,9 @@ class _CaptureLogger:
         bound._fields = fields
         return bound
 
+    def info(self, _message):
+        pass
+
     def warning(self, message):
         self.warning_messages.append(message)
         if hasattr(self, "_fields"):
@@ -192,6 +195,29 @@ class RateLimitObservabilityTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order.status, "awaiting_execution_history")
         engine.ledger.mark_cancelled.assert_not_called()
         engine.ctx.client.cancel_order.assert_not_awaited()
+
+    async def test_successful_cancel_waits_for_execution_history(self):
+        order = SimpleNamespace(
+            created_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            requested_qty=2,
+            filled_qty=0,
+            status="open",
+            ord_no="order-cancelled",
+            symbol="005930",
+            side="BUY",
+        )
+        engine = self._engine(balance_only=False)
+        engine.pending_order_cancel_after_sec = 1.0
+        engine.ledger = SimpleNamespace(
+            execution_recovery_orders=lambda _symbol: [order],
+            mark_awaiting_execution_history=unittest.mock.Mock(),
+        )
+        engine.ctx.client.cancel_order = AsyncMock(return_value={"accepted": True})
+
+        await engine._cancel_stale_orders()
+
+        engine.ctx.client.cancel_order.assert_awaited_once_with("005930", "order-cancelled", 2)
+        engine.ledger.mark_awaiting_execution_history.assert_called_once_with("order-cancelled")
 
     async def test_order_cancellation_hook_filters_unrelated_errors(self):
         order = SimpleNamespace(
