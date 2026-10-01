@@ -155,6 +155,8 @@ class RateLimitObservabilityTest(unittest.IsolatedAsyncioTestCase):
 
         pending = self._engine(balance_only=False)
         pending.ledger = SimpleNamespace(
+            completed_orders_for_execution_observation=lambda _symbol: [],
+            quantity_conflict_order_ids=lambda _symbol: (),
             pending_orders=lambda _symbol: True,
             execution_recovery_orders=lambda _symbol: [],
         )
@@ -165,7 +167,10 @@ class RateLimitObservabilityTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await pending.sync_broker_state())
 
         normal = self._engine(balance_only=False)
-        normal.ledger = SimpleNamespace(pending_orders=lambda _symbol: False)
+        normal.ledger = SimpleNamespace(
+            completed_orders_for_execution_observation=lambda _symbol: [],
+            pending_orders=lambda _symbol: False, quantity_conflict_order_ids=lambda _symbol: (),
+        )
         normal._reconcile_balance = AsyncMock(side_effect=error)
         self.assertFalse(await normal.sync_broker_state(force_balance=True))
 

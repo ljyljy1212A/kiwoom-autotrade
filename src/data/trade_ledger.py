@@ -29,6 +29,21 @@ class PendingOrder:
     status: str = "open"
 
 
+class FillQuantityExceededError(ValueError):
+    """A cumulative quantity conflicts with the durable order's request."""
+
+    def __init__(self, order: PendingOrder, cumulative_qty: float, reason: str):
+        self.ord_no = order.ord_no
+        self.requested_qty = order.requested_qty
+        self.filled_qty = order.filled_qty
+        self.cumulative_qty = cumulative_qty
+        self.reason = reason
+        super().__init__(
+            f"{reason}: order={self.ord_no}, requested={self.requested_qty}, "
+            f"stored={self.filled_qty}, observed={self.cumulative_qty}"
+        )
+
+
 class TradeLedgerStore:
     def __init__(self, path: str, account_id: str):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +83,15 @@ class TradeLedgerStore:
             filled_at TEXT NOT NULL, qty REAL NOT NULL, price REAL NOT NULL,
             buy_id TEXT, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS execution_quantity_conflicts (
+            account_id TEXT NOT NULL, ord_no TEXT NOT NULL, symbol TEXT NOT NULL,
+            requested_qty REAL NOT NULL, stored_filled_qty REAL NOT NULL,
+            observed_qty REAL NOT NULL, reason TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+            PRIMARY KEY (account_id, ord_no)
+        );
+        CREATE INDEX IF NOT EXISTS idx_quantity_conflict_account_symbol
+            ON execution_quantity_conflicts(account_id, symbol);
         CREATE INDEX IF NOT EXISTS idx_ledger_account_symbol ON trade_ledger(account_id, symbol);
         CREATE INDEX IF NOT EXISTS idx_ledger_account_created ON trade_ledger(account_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_ledger_account_symbol_step_type
@@ -171,14 +195,12 @@ class TradeLedgerStore:
         ).fetchone()
         return row is not None
 
-    def record_fill(self, pending: PendingOrder, cumulative_qty: float, price: float, filled_at: str) -> dict | None:
+    def record_fill(self, pending: PendingOrder, cumulative_qty: float, price: float, filled_at: str,
+                    *, observation_only: bool = False) -> dict | None:
         """Record only the newly-confirmed quantity from a cumulative broker value."""
         cumulative_qty = float(cumulative_qty)
-        price = float(price)
         if not math.isfinite(cumulative_qty) or cumulative_qty < 0:
             raise ValueError("Cumulative fill quantity must be finite and nonnegative")
-        if not math.isfinite(price) or price <= 0:
-            raise ValueError("Execution price must be finite and positive")
         self.db.execute("BEGIN IMMEDIATE")
         try:
             current_row = self.db.execute(
@@ -192,6 +214,42 @@ class TradeLedgerStore:
                 raise ValueError("Stored cumulative fill quantity must be finite and nonnegative")
             if not math.isfinite(current.requested_qty) or current.requested_qty <= 0:
                 raise ValueError("Stored requested quantity must be finite and positive")
+            # The persisted request is the attribution boundary. Never clip an
+            # excess quantity or hide a corrupt counter as a duplicate fill.
+            quantity_error = None
+            if current.filled_qty > current.requested_qty:
+                quantity_error = FillQuantityExceededError(
+                    current, cumulative_qty, "stored_fill_exceeds_requested_quantity",
+                )
+            elif cumulative_qty > current.requested_qty:
+                quantity_error = FillQuantityExceededError(
+                    current, cumulative_qty, "cumulative_fill_exceeds_requested_quantity",
+                )
+            if quantity_error is not None:
+                # Commit only the diagnostic latch before reporting rejection.
+                # A restart must not forget a conflict just because the order
+                # later fills, closes, or belongs to an earlier lifecycle.
+                now = _now()
+                self.db.execute("""INSERT INTO execution_quantity_conflicts
+                    (account_id,ord_no,symbol,requested_qty,stored_filled_qty,observed_qty,
+                     reason,first_seen_at,last_seen_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(account_id,ord_no) DO UPDATE SET last_seen_at=excluded.last_seen_at
+                    """,
+                    (self.account_id, current.ord_no, current.symbol, current.requested_qty,
+                     current.filled_qty, cumulative_qty, quantity_error.reason, now, now))
+                self.db.commit()
+                # The exception handler's rollback cannot undo this committed
+                # latch. Pending orders and confirmed trades were not written.
+                raise quantity_error
+            if observation_only:
+                # Check the latest persisted quantities under the same lock,
+                # independently of price. Never add a trade in this mode.
+                self.db.rollback()
+                return None
+            price = float(price)
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError("Execution price must be finite and positive")
             delta = cumulative_qty - float(current.filled_qty)
             if delta <= 0:
                 self.db.rollback()
@@ -265,13 +323,41 @@ class TradeLedgerStore:
             args.append(symbol)
         return [self._pending_from_row(row) for row in self.db.execute(sql, args).fetchall()]
 
+    def completed_orders_for_execution_observation(self, symbol: str) -> list[PendingOrder]:
+        """Keep completed orders visible for rejection-only late-fill checks.
+
+        Historical orders are observed but never applied to a new lifecycle.
+        Absence from today's broker history is not finality evidence.
+        """
+        rows = self.db.execute(
+            "SELECT * FROM pending_orders WHERE account_id=? AND symbol=? "
+            "AND status='filled' AND filled_qty>0",
+            (self.account_id, symbol),
+        ).fetchall()
+        return [self._pending_from_row(row) for row in rows]
+
+    def quantity_conflict_order_ids(self, symbol: str) -> tuple[str, ...]:
+        """Read sticky conflicts without filtering by order status or lifecycle.
+
+        There is deliberately no automatic resolution method. Evidence-based
+        operator resolution requires a separate reviewed policy.
+        """
+        rows = self.db.execute(
+            "SELECT ord_no FROM execution_quantity_conflicts "
+            "WHERE account_id=? AND symbol=? ORDER BY ord_no",
+            (self.account_id, symbol),
+        ).fetchall()
+        return tuple(str(row["ord_no"]) for row in rows)
+
     def has_unresolved_orders(self, symbol: str) -> bool:
         """True for any order that still needs broker fill attribution."""
         row = self.db.execute(
             "SELECT 1 FROM pending_orders WHERE account_id=? AND symbol=? "
             "AND (status IN ('open','awaiting_execution_history') "
-            "OR (status='filled' AND filled_qty<=0)) LIMIT 1",
-            (self.account_id, symbol),
+            "OR (status='filled' AND filled_qty<=0)) "
+            "UNION ALL SELECT 1 FROM execution_quantity_conflicts "
+            "WHERE account_id=? AND symbol=? LIMIT 1",
+            (self.account_id, symbol, self.account_id, symbol),
         ).fetchone()
         return row is not None
 

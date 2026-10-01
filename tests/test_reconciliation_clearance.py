@@ -349,16 +349,20 @@ def test_clearance_names_all_simultaneous_failures():
 
 
 class _Ledger:
-    def __init__(self, pending=(), recovery=(), open_qty=0):
+    def __init__(self, pending=(), recovery=(), open_qty=0, conflicts=()):
         self.pending = list(pending)
         self.recovery = list(recovery)
         self.open_qty = open_qty
+        self.conflicts = tuple(conflicts)
 
     def pending_orders(self, _symbol):
         return self.pending
 
     def execution_recovery_orders(self, _symbol):
         return self.recovery
+
+    def quantity_conflict_order_ids(self, _symbol):
+        return self.conflicts
 
     def open_tranche_qty(self, _symbol, _step):
         return self.open_qty
@@ -427,6 +431,12 @@ def test_clearance_snapshot_preserves_a_prefixed_us_lifecycle_key(tmp_path):
     snapshot = asyncio.run(engine._build_reconciliation_clearance_snapshot("AAPL", max_balance_age_sec=0))
 
     assert ReconciliationIncompleteReason.STALE_LIFECYCLE_HOLD in snapshot.incomplete_reasons
+
+
+def test_unresolved_order_ids_include_sticky_quantity_conflicts():
+    engine = _classifier_engine()
+    engine.ledger.conflicts = ("CONFLICT",)
+    assert engine._unresolved_reconciliation_order_ids("SOXL") == ("CONFLICT",)
 
 
 def test_unresolved_order_ids_are_deduplicated_nonempty_and_sorted():

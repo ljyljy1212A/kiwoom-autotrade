@@ -451,8 +451,11 @@ def _symbol_has_unresolved_orders(account_id: str, market: str, symbol: str) -> 
         try:
             return db.execute(
                 "SELECT 1 FROM pending_orders WHERE account_id=? AND symbol=? "
-                "AND status IN ('open','awaiting_execution_history') LIMIT 1",
-                (account_id, _strip_kr_symbol_prefix(market, symbol)),
+                "AND status IN ('open','awaiting_execution_history') "
+                "UNION ALL SELECT 1 FROM execution_quantity_conflicts "
+                "WHERE account_id=? AND symbol=? LIMIT 1",
+                (account_id, _strip_kr_symbol_prefix(market, symbol),
+                 account_id, _strip_kr_symbol_prefix(market, symbol)),
             ).fetchone() is not None
         finally:
             db.close()

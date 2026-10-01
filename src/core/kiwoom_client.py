@@ -518,16 +518,52 @@ class KiwoomClient:
         return await self._post("/api/dostk/acnt", "ka10075", body)
 
     async def get_executed_orders(self, symbol: str = "") -> dict:
-        """체결요청 (국내: ka10076). 미국은 ust21150(일별 주문체결내역)."""
+        """Return complete execution pages, without inferring order finality."""
         if self.market == "US":
-            # ust21150 requires both query_tp and slby_tp even when filtering
-            # by symbol. ``0`` requests all execution history and both sides.
-            return await self._post(
+            # Official ust21150 spec: 5 = executed orders in order sequence.
+            # An omitted ord_dt requests today, not all historical dates.
+            path, api_id, body, rows_key = (
                 "/api/us/acnt", "ust21150",
-                {"stk_cd": symbol, "query_tp": "0", "slby_tp": "0", "stex_tp": await self._resolve_exchange(symbol)},
+                {"stk_cd": symbol, "query_tp": "5", "slby_tp": "0",
+                 "stex_tp": await self._resolve_exchange(symbol)}, "result_list",
             )
-        body = {"stk_cd": symbol, "qry_tp": "1" if symbol else "0", "sell_tp": "0", "ord_no": "", "stex_tp": "0"}
-        return await self._post("/api/dostk/acnt", "ka10076", body)
+        else:
+            path, api_id, body, rows_key = (
+                "/api/dostk/acnt", "ka10076",
+                {"stk_cd": symbol, "qry_tp": "1" if symbol else "0",
+                 "sell_tp": "0", "ord_no": "", "stex_tp": "0"}, "cntr",
+            )
+        combined = None
+        continuation, next_key = "N", ""
+        seen_keys: set[str] = set()
+        for _ in range(100):
+            response_headers: dict = {}
+            page = await self._post(
+                path, api_id, body, cont_yn=continuation, next_key=next_key,
+                response_headers=response_headers,
+            )
+            if (not isinstance(page, dict) or not isinstance(page.get(rows_key), list)
+                    or any(not isinstance(row, dict) for row in page[rows_key])):
+                raise ValueError(f"{api_id} returned an invalid execution list")
+            if combined is None:
+                combined = dict(page)
+                combined[rows_key] = list(page[rows_key])
+            else:
+                combined[rows_key].extend(page[rows_key])
+            continuation = str(response_headers.get("cont-yn") or "").upper()
+            response_next_key = str(response_headers.get("next-key") or "")
+            if continuation == "N" or (
+                not continuation and not response_next_key and not page[rows_key]
+            ):
+                combined["_execution_pages_complete"] = True
+                return combined
+            if continuation != "Y":
+                raise ValueError(f"{api_id} returned an invalid continuation indicator")
+            next_key = response_next_key
+            if not next_key or next_key in seen_keys:
+                raise ValueError(f"{api_id} returned an invalid continuation key")
+            seen_keys.add(next_key)
+        raise ValueError(f"{api_id} exceeded the execution page limit")
 
     # ------------------------------------------------------------------
     # 시세 (현재가) — REST 폴백용

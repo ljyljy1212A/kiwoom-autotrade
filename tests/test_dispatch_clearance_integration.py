@@ -1,9 +1,12 @@
 import asyncio
 import os
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from src.core.broker_http import clear_fixed_port_degraded_state, enter_fixed_port_degraded_state, get_fixed_port_degraded_state
 from src.core import dashboard_control_snapshot as control_snapshot
@@ -12,7 +15,7 @@ from src.core.engine import (
     ReconciliationClearanceSnapshot,
 )
 from src.data.order_attempts import OrderAttemptStore
-from src.data.trade_ledger import TradeLedgerStore
+from src.data.trade_ledger import FillQuantityExceededError, PendingOrder, TradeLedgerStore
 from src.utils.exceptions import OrderDispatchBlockedError
 from src.strategy.base import Action, OrderIntent
 from tests.support.telegram_double import make_telegram_double
@@ -50,7 +53,7 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=service)
     engine._control_authority = control_snapshot.ControlAuthority("us_mock", SESSION)
     engine.telegram = make_telegram_double()
-    engine.ledger = SimpleNamespace(add_pending=Mock())
+    engine.ledger = SimpleNamespace(add_pending=Mock(), quantity_conflict_order_ids=lambda _symbol: ())
     engine.sync_broker_state = AsyncMock()
     engine._build_reconciliation_clearance_snapshot = AsyncMock(return_value=snapshot)
     control_snapshot.initialize(data_dir, "us_mock", {}, None)
@@ -62,6 +65,94 @@ def _engine(service, snapshot, *, enabled, data_dir):
         "config": {"symbol": "SOXL", "market": "US", "mode": "mock"},
     })
     return engine
+
+
+def _persist_quantity_conflict(store, symbol="SOXL"):
+    order = PendingOrder("CONFLICT", symbol, "BUY", 2, 10, "BUY", 1, {})
+    store.add_pending(order)
+    with pytest.raises(FillQuantityExceededError):
+        store.record_fill(order, 3, 10, "2026-10-01")
+    return order
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("action", [Action.BUY, Action.SELL])
+def test_persisted_conflict_blocks_dispatch_after_reopen_with_clearance_on_or_off(tmp_path, enabled, action):
+    path = tmp_path / "trades_us_mock.db"
+    store = TradeLedgerStore(path, "us_mock")
+    try:
+        order = _persist_quantity_conflict(store)
+        store.record_fill(order, 2, 10, "2026-10-01")
+    finally:
+        store.close()
+    engine = _engine(None, _snapshot(clear=True), enabled=enabled, data_dir=tmp_path)
+    engine.ledger = TradeLedgerStore(path, "us_mock")
+    try:
+        with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
+            asyncio.run(engine._execute_order(OrderIntent(action, "SOXL", 1, 10.0)))
+        engine.ctx.client.place_order.assert_not_awaited()
+        assert engine.ledger.quantity_conflict_order_ids("SOXL") == ("CONFLICT",)
+    finally:
+        engine.ledger.close()
+
+
+def test_conflict_inspection_failure_blocks_dispatch(tmp_path):
+    engine = _engine(None, _snapshot(clear=True), enabled=False, data_dir=tmp_path)
+    engine.ledger.quantity_conflict_order_ids = Mock(side_effect=sqlite3.OperationalError("read blocked"))
+    asyncio.run(engine._execute_order(OrderIntent(Action.BUY, "SOXL", 1, 10.0)))
+    engine.ctx.client.place_order.assert_not_awaited()
+
+
+def test_conflict_created_during_clearance_blocks_at_final_submission_boundary(tmp_path):
+    store = TradeLedgerStore(tmp_path / "trades_us_mock.db", "us_mock")
+
+    async def check(_engine_arg, _symbol):
+        _persist_quantity_conflict(store)
+
+    service = SimpleNamespace(check=AsyncMock(side_effect=check))
+    engine = _engine(service, _snapshot(clear=True), enabled=True, data_dir=tmp_path)
+    engine.ledger = store
+    try:
+        with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
+            asyncio.run(engine._execute_order(OrderIntent(Action.BUY, "SOXL", 1, 10.0)))
+        service.check.assert_awaited_once()
+        engine.ctx.client.place_order.assert_not_awaited()
+    finally:
+        store.close()
+
+
+def test_passive_clearance_and_generic_pause_clear_reject_conflict_only_order(tmp_path):
+    store = TradeLedgerStore(tmp_path / "trades_us_mock.db", "us_mock")
+    try:
+        order = _persist_quantity_conflict(store)
+        store.record_fill(order, 2, 10, "2026-10-01")
+    finally:
+        store.close()
+    engine = _passive_snapshot_engine(tmp_path, balance_qty=0)
+    engine.ctx.strategy.symbol = "SOXL"
+    engine.ctx.logger = Mock()
+    engine._trading_paused = True
+    engine._pause_reason = "execution_quantity_conflict"
+    engine._balance_gate = SimpleNamespace(engines=[engine], pause_clear_event_id="")
+    engine._pause_clear_event = Mock(return_value=("CLEAR-1", "execution_quantity_conflict"))
+    snapshot = asyncio.run(engine._build_reconciliation_clearance_snapshot("SOXL", max_balance_age_sec=1))
+    assert snapshot.unresolved_order_ids == ("CONFLICT",)
+    asyncio.run(engine._apply_reconciliation_clear_event())
+    assert engine._trading_paused
+    assert engine._pause_reason == "execution_quantity_conflict"
+    assert engine._balance_gate.pause_clear_event_id == ""
+
+
+def test_passive_clearance_does_not_treat_missing_conflict_table_as_clear(tmp_path):
+    store = TradeLedgerStore(tmp_path / "trades_us_mock.db", "us_mock")
+    try:
+        store.db.execute("DROP TABLE execution_quantity_conflicts")
+        store.db.commit()
+    finally:
+        store.close()
+    engine = _passive_snapshot_engine(tmp_path, balance_qty=0)
+    with pytest.raises(RuntimeError, match="read-only reconciliation clearance ledger unavailable"):
+        asyncio.run(engine._build_reconciliation_clearance_snapshot("SOXL", max_balance_age_sec=1))
 
 
 def _passive_snapshot_engine(data_dir, *, balance_qty=1.0):
