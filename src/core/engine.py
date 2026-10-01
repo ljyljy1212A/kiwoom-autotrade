@@ -1993,9 +1993,12 @@ class AccountEngine:
                 # A failed request (especially a quota response) must not make
                 # every other legacy pending order retry in the same tick.
                 return
-            self.ledger.mark_cancelled(order.ord_no)
+            # A successful cancellation response does not establish the
+            # final cumulative fill quantity. Keep recovering this order
+            # so delayed executions cannot be lost after cancellation.
+            self.ledger.mark_awaiting_execution_history(order.ord_no)
             self.ctx.logger.info(
-                f"Cancelled unfilled {order.side} after {self.pending_order_cancel_after_sec:g}s: {order.ord_no}"
+                f"Cancellation accepted for {order.side}; awaiting execution-history reconciliation: {order.ord_no}"
             )
             return
 

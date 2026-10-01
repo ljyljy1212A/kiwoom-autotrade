@@ -37,6 +37,28 @@ def test_cumulative_fills_use_database_quantity_with_a_stale_pending_snapshot(tm
     store.close()
 
 
+def test_cancelled_order_stays_recoverable_through_partial_fill(tmp_path):
+    store = TradeLedgerStore(str(tmp_path / "trades.db"), "account-a")
+    order = PendingOrder("cancel-1", "NVDA", "BUY", 5, 100, "BUY", 3, {})
+    store.add_pending(order)
+    store.mark_awaiting_execution_history(order.ord_no)
+
+    stale_order = store.get_pending(order.ord_no)
+    first = store.record_fill(stale_order, 2, 100, "2026-08-11")
+    current = store.get_pending(order.ord_no)
+
+    assert first["qty"] == 2
+    assert current.status == "awaiting_execution_history"
+    assert [item.ord_no for item in store.execution_recovery_orders("NVDA")] == [order.ord_no]
+    assert store.has_pending_buy("NVDA")
+
+    second = store.record_fill(current, 5, 101, "2026-08-11")
+    assert second["qty"] == 3
+    assert store.get_pending(order.ord_no).status == "filled"
+    assert store.execution_recovery_orders("NVDA") == []
+    store.close()
+
+
 def test_backup_preserves_account_scoped_confirmed_fills(tmp_path):
     store = TradeLedgerStore(str(tmp_path / "trades.db"), "account-a")
     pending = PendingOrder("43", "SOXL", "BUY", 3, 20, "BUY", 1, {})
