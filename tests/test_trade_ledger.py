@@ -1,3 +1,5 @@
+import pytest
+
 from src.data.trade_ledger import PendingOrder, TradeLedgerStore
 
 
@@ -57,6 +59,57 @@ def test_cancelled_order_stays_recoverable_through_partial_fill(tmp_path):
     assert store.get_pending(order.ord_no).status == "filled"
     assert store.execution_recovery_orders("NVDA") == []
     store.close()
+
+
+@pytest.mark.parametrize("quantity,price", [
+    (float("nan"), 100), (float("inf"), 100), (float("-inf"), 100), (-1, 100),
+    (2, float("nan")), (2, float("inf")), (2, float("-inf")), (2, 0), (2, -100),
+])
+def test_invalid_fill_preserves_durable_order_and_ledger(tmp_path, quantity, price):
+    path = str(tmp_path / "trades.db")
+    store = TradeLedgerStore(path, "account-a")
+    order = PendingOrder("invalid-fill", "NVDA", "BUY", 5, 100, "BUY", 3, {})
+    try:
+        store.add_pending(order)
+        store.mark_awaiting_execution_history(order.ord_no)
+        before = "\n".join(store.db.iterdump())
+        with pytest.raises(ValueError):
+            store.record_fill(order, quantity, price, "2026-10-01")
+        assert "\n".join(store.db.iterdump()) == before
+        assert not store.db.in_transaction
+    finally:
+        store.close()
+    restored = TradeLedgerStore(path, "account-a")
+    try:
+        current = restored.get_pending(order.ord_no)
+        assert current.status == "awaiting_execution_history"
+        assert current.filled_qty == 0
+        assert restored.ledger_rows("NVDA") == []
+        assert restored.record_fill(current, 2, 100, "2026-10-01")["qty"] == 2
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("column,value", [
+    ("filled_qty", float("inf")), ("filled_qty", -1),
+    ("requested_qty", float("inf")), ("requested_qty", 0),
+])
+def test_invalid_stored_quantity_rolls_back_fill(tmp_path, column, value):
+    store = TradeLedgerStore(str(tmp_path / "trades.db"), "account-a")
+    order = PendingOrder("invalid-counter", "NVDA", "BUY", 5, 100, "BUY", 3, {})
+    try:
+        store.add_pending(order)
+        # Columns come only from this fixed parameter list.
+        store.db.execute(f"UPDATE pending_orders SET {column}=? WHERE ord_no=?",
+                         (value, order.ord_no))
+        store.db.commit()
+        before = "\n".join(store.db.iterdump())
+        with pytest.raises(ValueError):
+            store.record_fill(order, 2, 100, "2026-10-01")
+        assert "\n".join(store.db.iterdump()) == before
+        assert not store.db.in_transaction
+    finally:
+        store.close()
 
 
 def test_backup_preserves_account_scoped_confirmed_fills(tmp_path):
