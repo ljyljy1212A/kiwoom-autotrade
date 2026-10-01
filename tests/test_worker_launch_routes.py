@@ -143,13 +143,16 @@ class TestWorkerLaunchRoutes:
                 },
             )
 
-    def test_non_repository_fails_closed(self, tmp_path):
+    def test_non_repository_fails_closed(self, tmp_path, monkeypatch):
         target = tmp_path / "candidate"
         (target / "src").mkdir(parents=True)
         (target / "src" / "main.py").write_text("# main\n", encoding="utf-8")
         (target / "src" / "worker_supervisor.py").write_text(
             "# supervisor\n", encoding="utf-8"
         )
+        # CI may place tmp_path under its checkout, whose Git root would
+        # otherwise be discovered as the candidate repository's parent.
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
 
         with pytest.raises(WorkerLaunchRouteError, match="Git verification failed"):
             resolve_worker_root(
