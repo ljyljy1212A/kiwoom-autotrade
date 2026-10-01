@@ -7,6 +7,7 @@ state after a restart.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -172,6 +173,12 @@ class TradeLedgerStore:
 
     def record_fill(self, pending: PendingOrder, cumulative_qty: float, price: float, filled_at: str) -> dict | None:
         """Record only the newly-confirmed quantity from a cumulative broker value."""
+        cumulative_qty = float(cumulative_qty)
+        price = float(price)
+        if not math.isfinite(cumulative_qty) or cumulative_qty < 0:
+            raise ValueError("Cumulative fill quantity must be finite and nonnegative")
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Execution price must be finite and positive")
         self.db.execute("BEGIN IMMEDIATE")
         try:
             current_row = self.db.execute(
@@ -181,7 +188,10 @@ class TradeLedgerStore:
             if current_row is None:
                 raise ValueError(f"No pending order {pending.ord_no} for account {self.account_id}")
             current = self._pending_from_row(current_row)
-            cumulative_qty = float(cumulative_qty)
+            if not math.isfinite(current.filled_qty) or current.filled_qty < 0:
+                raise ValueError("Stored cumulative fill quantity must be finite and nonnegative")
+            if not math.isfinite(current.requested_qty) or current.requested_qty <= 0:
+                raise ValueError("Stored requested quantity must be finite and positive")
             delta = cumulative_qty - float(current.filled_qty)
             if delta <= 0:
                 self.db.rollback()

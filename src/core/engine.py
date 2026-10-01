@@ -1739,6 +1739,15 @@ class AccountEngine:
                         )
                         continue
                     total, price = _number(raw.get("cntr_qty")), _number(raw.get("cntr_pric") or raw.get("cntr_uv"))
+                    if not math.isfinite(total) or not math.isfinite(price):
+                        reason = ("non_finite_cumulative_quantity" if not math.isfinite(total)
+                                  else "non_finite_execution_price")
+                        self._log_skipped_execution_row(
+                            raw, reason, order=order,
+                            total=total if math.isfinite(total) else None,
+                            price=price if math.isfinite(price) else None,
+                        )
+                        continue
                     if total <= order.filled_qty:
                         self._log_skipped_execution_row(
                             raw, "non_incremental_cumulative_quantity",
@@ -1818,7 +1827,10 @@ class AccountEngine:
                     "orderNo": order.ord_no if order is not None else str(raw.get("ord_no", "")),
                     "total": total,
                     "price": price,
-                    "raw": raw,
+                    "raw": {
+                        key: str(value) if isinstance(value, float) and not math.isfinite(value) else value
+                        for key, value in raw.items()
+                    },
                 },
                 ensure_ascii=False,
                 default=str,
