@@ -423,6 +423,80 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             str(log_dir.resolve()),
         )
 
+    def test_same_root_route_preserves_launch_against_runtime_dotenv(self):
+        from src.core import worker_environment
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / ".env").write_text(
+                "ACCOUNT_FILTER=other_mock\nMARKET_INSTANCE=US\nKIWOOM_ENV=real\n"
+                "AUTO_TRADING_ENABLED=true\nPYTHONPATH=wrong-source\n"
+                "SYNTHETIC_ROUTE_SETTING=from_runtime\n",
+                encoding="utf-8",
+            )
+            child = MagicMock(pid=999)
+            child.poll.return_value = None
+            running = {"account": "kr_mock", "pid": 999, "running": True}
+            with patch.dict(os.environ, {
+                "KIWOOM_WORKER_ROOT_KR_MOCK": str(root),
+                "KIWOOM_WORKER_REVISION_KR_MOCK": "a" * 40,
+                "PYTHON_DOTENV_DISABLED": "0",
+            }), patch.object(supervisor, "ROOT", root), \
+                 patch.object(supervisor, "DATA_DIR", root / "data"), \
+                 patch.object(supervisor, "LOG_DIR", root / "logs"), \
+                 patch.object(supervisor, "DIAGNOSTICS_DIR", root / "diagnostics"), \
+                 patch.object(supervisor, "backup_dir", return_value=root / "backups"), \
+                 patch.object(supervisor, "_reject_real_account", return_value=None), \
+                 patch.object(supervisor, "resolve_worker_root", return_value=root), \
+                 patch.object(supervisor, "status", side_effect=[{"running": False}, running]), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor, "_is_started_child", return_value=True), \
+                 patch.object(supervisor, "_clear_intentional_stop"), \
+                 patch.object(supervisor.subprocess, "Popen", return_value=child) as popen, \
+                 patch.object(supervisor.time, "sleep"), \
+                 patch.object(supervisor.time, "monotonic", side_effect=[0, 0.1]):
+                code, payload = supervisor.start("kr_mock", "KR")
+
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["started"])
+            self.assertEqual(popen.call_args.args[0][1:], ["-P", "-m", "src.main", "--market", "KR"])
+            launch = popen.call_args.kwargs["env"]
+            self.assertEqual(launch["PYTHONPATH"], str(root))
+            self.assertEqual(launch["KIWOOM_RUNTIME_ROOT"], str(root))
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, launch, clear=True), \
+                     patch.object(worker_environment, "RUNTIME_ROOT", root):
+                    worker_environment.load_worker_environment()
+                    for key in worker_environment._LAUNCH_KEYS:
+                        self.assertEqual(os.environ[key], launch[key])
+                    self.assertEqual(os.environ["ACCOUNT_FILTER"], "kr_mock")
+                    self.assertEqual(os.environ["KIWOOM_ENV"], "mock")
+                    self.assertEqual(os.environ["AUTO_TRADING_ENABLED"], "false")
+                    self.assertEqual(os.environ["SYNTHETIC_ROUTE_SETTING"], "from_runtime")
+            finally:
+                os.chdir(old_cwd)
+
+    def test_route_configuration_is_account_scoped(self):
+        from src.core.worker_launch_routes import worker_route_configured
+
+        configured = {
+            "KIWOOM_WORKER_ROOT_KR_MOCK": "C:/synthetic-source",
+            "KIWOOM_WORKER_REVISION_KR_MOCK": "a" * 40,
+        }
+        cases = [
+            ("kr_mock", "KR", {}, False),
+            ("kr_mock", "KR", configured, True),
+            ("kr_mock", "KR", {"KIWOOM_WORKER_ROOT_KR_MOCK": "C:/synthetic-source"}, True),
+            ("us_mock", "US", configured, False),
+            ("other_mock", "KR", configured, False),
+            ("kr_mock", "US", configured, False),
+        ]
+        for account, market, environ, expected in cases:
+            with self.subTest(account=account, market=market, environ=environ):
+                self.assertEqual(worker_route_configured(account, market, environ), expected)
+
     def test_start_rejects_invalid_worker_route_before_status_or_spawn(self):
         from src.core.worker_launch_routes import WorkerLaunchRouteError
 

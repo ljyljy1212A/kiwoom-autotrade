@@ -38,6 +38,18 @@ def _git_output(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def worker_route_configured(
+    account: str,
+    market: str,
+    environ: dict[str, str] | None = None,
+) -> bool:
+    """Identify an explicit mock route independently of source-path equality."""
+    if account != _KR_MOCK_ACCOUNT or market != _KR_MARKET:
+        return False
+    values = os.environ if environ is None else environ
+    return bool(values.get(_ROOT_ENV, "").strip() or values.get(_REVISION_ENV, "").strip())
+
+
 def resolve_worker_root(
     account: str,
     market: str,
@@ -45,7 +57,7 @@ def resolve_worker_root(
     environ: dict[str, str] | None = None,
 ) -> Path:
     """Use a pinned KR mock source root when configured; keep other routes local."""
-    if account != _KR_MOCK_ACCOUNT or market != _KR_MARKET:
+    if not worker_route_configured(account, market, environ):
         return default_root
 
     values = os.environ if environ is None else environ

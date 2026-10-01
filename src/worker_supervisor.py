@@ -24,7 +24,11 @@ from src.core.process_lock import ProcessLock
 from src.core.process_inventory import query_win32_processes
 from src.core.control_state import read_auto_trading_enabled
 from src.core.runtime_paths import DATA_DIR, LOG_DIR, DIAGNOSTICS_DIR, backup_dir
-from src.core.worker_launch_routes import WorkerLaunchRouteError, resolve_worker_root
+from src.core.worker_launch_routes import (
+    WorkerLaunchRouteError,
+    resolve_worker_root,
+    worker_route_configured,
+)
 from src.core.account_catalog import is_real_account
 from src.utils.logger import get_logger
 
@@ -411,6 +415,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
         return guard
     try:
         worker_root = resolve_worker_root(account, market, ROOT)
+        routed = worker_root != ROOT or worker_route_configured(account, market)
     except WorkerLaunchRouteError as exc:
         return 9, {
             "account": account,
@@ -450,7 +455,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
-    if worker_root != ROOT:
+    if routed:
         # Keep account state and logs in this supervisor's existing data area
         # while loading worker code from the explicitly pinned source root.
         try:
@@ -477,7 +482,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
         creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         popen_kwargs["creationflags"] = creationflags
     command = [sys.executable, "-m", "src.main", "--market", market]
-    if worker_root != ROOT:
+    if routed:
         # -P removes cwd from the module search path; explicit PYTHONPATH selects
         # the verified code while retaining the existing worker process signature.
         command = [sys.executable, "-P", "-m", "src.main", "--market", market]
