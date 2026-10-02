@@ -334,9 +334,14 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         return parsed.path, parse_qs(parsed.query)
 
-    def _account(self, query: dict[str, list[str]]) -> str:
-        requested = (query.get("account") or [""])[0]
+    def _account(self, query: dict[str, list[str]], *, require_explicit: bool = False) -> str:
+        requested_values = query.get("account") or []
         known = {item["id"] for item in _account_catalog()}
+        if require_explicit:
+            if len(requested_values) != 1 or requested_values[0] not in known:
+                raise ValueError("Exactly one configured account must be selected")
+            return requested_values[0]
+        requested = requested_values[0] if requested_values else ""
         if requested and requested in known:
             return requested
         return _default_accounts()[0] if _default_accounts() else "kr_mock"
@@ -475,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
                 profiles = payload.get("profiles")
                 if not isinstance(profiles, list):
                     raise ValueError("profiles must be a list")
-                account = self._account(query)
+                account = self._account(query, require_explicit=True)
                 if self._reject_real_account(account):
                     return
                 for profile in profiles:
@@ -526,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
-                account = self._account(query)
+                account = self._account(query, require_explicit=True)
                 if self._reject_real_account(account):
                     return
                 _validate_market_config(account, payload.get("config"))

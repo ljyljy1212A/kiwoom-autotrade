@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from dashboard import dashboard_server
 from src.core import dashboard_control_snapshot as control_snapshot
 
@@ -12,12 +14,18 @@ from src.core import dashboard_control_snapshot as control_snapshot
 SESSION = "1" * 32
 
 
-def _post(root: Path, path: str, payload: dict) -> list[tuple[dict, int]]:
+def _post(
+    root: Path,
+    path: str,
+    payload: dict,
+    query: dict[str, list[str]] | None = None,
+) -> list[tuple[dict, int]]:
     body = json.dumps(payload).encode()
     handler = object.__new__(dashboard_server.Handler)
     handler.headers = {"Content-Length": str(len(body))}
     handler.rfile = io.BytesIO(body)
-    handler._path_and_query = lambda: (path, {"account": ["us_mock"]})
+    request_query = {"account": ["us_mock"]} if query is None else query
+    handler._path_and_query = lambda: (path, request_query)
     responses: list[tuple[dict, int]] = []
     handler._json = lambda response, status=200: responses.append((response, status))
     accounts = [{"id": "us_mock", "market": "US", "mode": "mock"}]
@@ -26,6 +34,85 @@ def _post(root: Path, path: str, payload: dict) -> list[tuple[dict, int]]:
     ):
         handler.do_POST()
     return responses
+
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("/api/settings", {"profiles": []}),
+        (
+            "/api/control",
+            {
+                "symbol": "SOXL",
+                "auto_buy": True,
+                "auto_sell": False,
+                "config": {"symbol": "SOXL", "market": "US", "mode": "mock"},
+                "expected_instance_id": SESSION,
+            },
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "query",
+    [
+        {},
+        {"account": [""]},
+        {"account": ["unknown_mock"]},
+        {"account": ["us_mock", "us_mock"]},
+    ],
+)
+def test_settings_and_control_reject_missing_or_invalid_account_before_write(
+    tmp_path: Path,
+    path: str,
+    payload: dict,
+    query: dict[str, list[str]],
+) -> None:
+    with patch.object(dashboard_server, "atomic_write_json") as settings_write, patch.object(
+        control_snapshot, "update"
+    ) as control_write:
+        responses = _post(tmp_path, path, payload, query)
+
+    error = "Invalid settings payload" if path == "/api/settings" else "Invalid control payload"
+    assert responses == [({"error": error}, 400)]
+    settings_write.assert_not_called()
+    control_write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "path,payload,error",
+    [
+        (
+            "/api/settings",
+            {"profiles": [{"config": {"market": "KR"}}]},
+            "Invalid settings payload",
+        ),
+        (
+            "/api/control",
+            {
+                "symbol": "SOXL",
+                "auto_buy": True,
+                "auto_sell": False,
+                "config": {"symbol": "SOXL", "market": "KR", "mode": "mock"},
+                "expected_instance_id": SESSION,
+            },
+            "Invalid control payload",
+        ),
+    ],
+)
+def test_settings_and_control_reject_account_market_mismatch_before_write(
+    tmp_path: Path,
+    path: str,
+    payload: dict,
+    error: str,
+) -> None:
+    with patch.object(dashboard_server, "atomic_write_json") as settings_write, patch.object(
+        control_snapshot, "update"
+    ) as control_write:
+        responses = _post(tmp_path, path, payload)
+
+    assert responses == [({"error": error}, 400)]
+    settings_write.assert_not_called()
+    control_write.assert_not_called()
 
 
 def test_settings_post_uses_atomic_write(tmp_path: Path) -> None:
