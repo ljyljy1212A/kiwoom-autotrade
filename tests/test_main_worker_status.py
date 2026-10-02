@@ -71,6 +71,11 @@ def test_worker_status_schema_includes_active_symbols_and_writes_atomically():
     assert payload["activityState"] == "active"
     assert "updatedAt" in payload
     assert payload["processHeartbeatAt"] == payload["updatedAt"]
+    assert payload["sourceRoot"] is None
+    assert payload["sourceModule"] is None
+    assert payload["sourceRevision"] is None
+    assert payload["sourceWorkingTree"] == "INCOMPLETE"
+    assert payload["sourceVerifiedAt"] is None
 
 
 def test_worker_status_marks_no_active_symbols_as_expected_idle_and_records_controller_cycle():
@@ -126,3 +131,38 @@ def test_registry_records_controller_cycle_per_account():
 
     assert registry.controller_cycle_at("kr_mock") is not None
     assert registry.controller_cycle_at("us_mock") is None
+
+
+def test_worker_source_identity_reports_module_path_revision_and_clean_state():
+    source_root = Path(worker_main.__file__).resolve().parents[1]
+    outputs = [str(source_root), "a" * 40, ""]
+    results = [SimpleNamespace(returncode=0, stdout=value, stderr="") for value in outputs]
+    with patch.object(worker_main.subprocess, "run", side_effect=results) as run:
+        source = worker_main._worker_source_identity()
+
+    assert source.source_root == str(source_root)
+    assert source.source_module == str(Path(worker_main.__file__).resolve())
+    assert source.revision == "a" * 40
+    assert source.working_tree == "CLEAN"
+    assert source.observed_at
+    assert run.call_count == 3
+
+
+def test_worker_source_identity_marks_dirty_source_tree():
+    source_root = Path(worker_main.__file__).resolve().parents[1]
+    outputs = [str(source_root), "b" * 40, " M src/main.py"]
+    results = [SimpleNamespace(returncode=0, stdout=value, stderr="") for value in outputs]
+    with patch.object(worker_main.subprocess, "run", side_effect=results):
+        source = worker_main._worker_source_identity()
+
+    assert source.revision == "b" * 40
+    assert source.working_tree == "DIRTY"
+
+
+def test_worker_source_identity_fails_closed_when_git_is_unavailable():
+    with patch.object(worker_main.subprocess, "run", side_effect=FileNotFoundError):
+        source = worker_main._worker_source_identity()
+
+    assert source.source_module == str(Path(worker_main.__file__).resolve())
+    assert source.revision is None
+    assert source.working_tree == "INCOMPLETE"
