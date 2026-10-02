@@ -15,6 +15,7 @@ import os
 import json
 import re
 import sqlite3
+import subprocess
 import uuid
 from dataclasses import dataclass, replace
 from enum import Enum
@@ -68,6 +69,15 @@ class EngineState(str, Enum):
 
 
 @dataclass(frozen=True)
+class WorkerSourceIdentity:
+    source_root: str
+    source_module: str
+    revision: str | None
+    working_tree: str
+    observed_at: str
+
+
+@dataclass(frozen=True)
 class WorkerIdentity:
     account_id: str
     market: str
@@ -75,10 +85,48 @@ class WorkerIdentity:
     instance_id: str
     started_at: str
     supervisor_launch_id: str | None = None
+    source_identity: WorkerSourceIdentity | None = None
 
     @property
     def log_value(self) -> str:
         return f"pid={self.pid} instance={self.instance_id}"
+
+
+def _worker_source_identity() -> WorkerSourceIdentity:
+    """Describe the imported worker module and its checkout revision at startup."""
+    source_module = Path(__file__).resolve()
+    source_root = source_module.parents[1]
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    def git(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", "-c", f"safe.directory={source_root}", "-C", str(source_root), *arguments],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if result.returncode != 0 or result.stderr.strip():
+            raise RuntimeError("worker source Git identity is unavailable")
+        return result.stdout.strip()
+
+    try:
+        git_root = Path(git("rev-parse", "--show-toplevel")).resolve()
+        if git_root != source_root:
+            raise RuntimeError("worker source module is outside its Git root")
+        revision = git("rev-parse", "HEAD")
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+            raise RuntimeError("worker source revision is malformed")
+        changes = git("status", "--porcelain", "--untracked-files=all", "--", "src", "src.py")
+        working_tree = "DIRTY" if changes else "CLEAN"
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError):
+        revision = None
+        working_tree = "INCOMPLETE"
+
+    return WorkerSourceIdentity(
+        source_root=str(source_root),
+        source_module=str(source_module),
+        revision=revision,
+        working_tree=working_tree,
+        observed_at=observed_at,
+    )
 
 
 @dataclass
@@ -213,6 +261,14 @@ def _write_worker_status(
         "updatedAt": now,
         "processHeartbeatAt": now,
     }
+    source = identity.source_identity
+    payload.update({
+        "sourceRoot": source.source_root if source is not None else None,
+        "sourceModule": source.source_module if source is not None else None,
+        "sourceRevision": source.revision if source is not None else None,
+        "sourceWorkingTree": source.working_tree if source is not None else "INCOMPLETE",
+        "sourceVerifiedAt": source.observed_at if source is not None else None,
+    })
     if controller_cycle_at is not None:
         payload["lastControllerCycleAt"] = controller_cycle_at
     if identity.supervisor_launch_id:
@@ -716,6 +772,7 @@ async def main():
             instance_id=uuid.uuid4().hex,
             started_at=datetime.now(timezone.utc).isoformat(),
             supervisor_launch_id=os.environ.get("KIWOOM_SUPERVISOR_LAUNCH_ID") or None,
+            source_identity=_worker_source_identity(),
         )
         for ctx in contexts:
             _apply_worker_identity(ctx, worker_identity)
