@@ -12,6 +12,15 @@ from src import worker_supervisor
 
 
 class DashboardSupervisorTests(unittest.TestCase):
+    def _post_handler(self, path, payload):
+        body = json.dumps(payload).encode()
+        handler = object.__new__(dashboard_server.Handler)
+        handler.headers = {"Content-Length": str(len(body))}
+        handler.rfile = io.BytesIO(body)
+        handler._path_and_query = lambda: (path, {})
+        handler._json = Mock()
+        return handler
+
     def test_write_startup_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data_dir = Path(tmpdir)
@@ -144,6 +153,92 @@ class DashboardSupervisorTests(unittest.TestCase):
 
         response.assert_called_once_with({"error": "Live accounts are disabled by the dashboard"}, 403)
         supervisor_call.assert_not_called()
+
+    def test_start_and_stop_reject_unknown_accounts_before_supervisor_call(self):
+        catalog = [{"id": "kr_mock", "market": "KR", "mode": "mock"}]
+        for path in ("/api/start", "/api/stop"):
+            with self.subTest(path=path):
+                handler = self._post_handler(path, {"accounts": ["kr_mock", "not_configured"]})
+                with patch.object(dashboard_server, "_account_catalog", return_value=catalog), \
+                     patch.object(dashboard_server, "_supervisor") as supervisor_call:
+                    handler.do_POST()
+
+                handler._json.assert_called_once_with({"error": "Unknown account was selected"}, 400)
+                supervisor_call.assert_not_called()
+
+    def test_start_and_stop_reject_duplicate_accounts_before_supervisor_call(self):
+        catalog = [{"id": "kr_mock", "market": "KR", "mode": "mock"}]
+        for path in ("/api/start", "/api/stop"):
+            with self.subTest(path=path):
+                handler = self._post_handler(path, {"accounts": ["kr_mock", "kr_mock"]})
+                with patch.object(dashboard_server, "_account_catalog", return_value=catalog), \
+                     patch.object(dashboard_server, "_supervisor") as supervisor_call:
+                    handler.do_POST()
+
+                handler._json.assert_called_once_with({"error": "Duplicate accounts are not allowed"}, 400)
+                supervisor_call.assert_not_called()
+
+    def test_start_validates_all_market_counts_before_starting_any_worker(self):
+        catalog = [
+            {"id": "kr_mock", "market": "KR", "mode": "mock"},
+            {"id": "us_mock", "market": "US", "mode": "mock"},
+            {"id": "us_mock_2", "market": "US", "mode": "mock"},
+        ]
+        handler = self._post_handler(
+            "/api/start", {"accounts": ["kr_mock", "us_mock", "us_mock_2"]}
+        )
+        with patch.object(dashboard_server, "_account_catalog", return_value=catalog), \
+             patch.object(dashboard_server, "_supervisor") as supervisor_call:
+            handler.do_POST()
+
+        handler._json.assert_called_once_with(
+            {"error": "US requires exactly one account per worker"}, 400
+        )
+        supervisor_call.assert_not_called()
+
+    def test_start_failure_returns_all_attempted_market_results(self):
+        catalog = [
+            {"id": "kr_mock", "market": "KR", "mode": "mock"},
+            {"id": "us_mock", "market": "US", "mode": "mock"},
+        ]
+        handler = self._post_handler(
+            "/api/start", {"accounts": ["kr_mock", "us_mock"]}
+        )
+        kr_result = {"account": "kr_mock", "started": True}
+        us_result = {"account": "us_mock", "started": False, "reason": "startup-timeout"}
+        with patch.object(dashboard_server, "_account_catalog", return_value=catalog), \
+             patch.object(
+                 dashboard_server,
+                 "_supervisor",
+                 side_effect=[(0, kr_result), (4, us_result)],
+             ) as supervisor_call:
+            handler.do_POST()
+
+        handler._json.assert_called_once_with({
+            "error": "Worker supervisor could not start all requested workers",
+            "code": 4,
+            "detail": us_result,
+            "launches": [
+                {"market": "KR", **kr_result},
+                {"market": "US", **us_result},
+            ],
+        }, 503)
+        self.assertEqual(supervisor_call.call_count, 2)
+
+    def test_start_already_running_is_reported_as_conflict(self):
+        catalog = [{"id": "kr_mock", "market": "KR", "mode": "mock"}]
+        handler = self._post_handler("/api/start", {"accounts": ["kr_mock"]})
+        result = {"account": "kr_mock", "started": False, "reason": "already-running"}
+        with patch.object(dashboard_server, "_account_catalog", return_value=catalog), \
+             patch.object(dashboard_server, "_supervisor", return_value=(3, result)):
+            handler.do_POST()
+
+        handler._json.assert_called_once_with({
+            "error": "Worker supervisor could not start all requested workers",
+            "code": 3,
+            "detail": result,
+            "launches": [{"market": "KR", **result}],
+        }, 409)
 
 
 if __name__ == "__main__":

@@ -295,6 +295,37 @@ def _account_market(account_id: str) -> str:
     return next((item["market"] for item in _account_catalog() if item["id"] == account_id), "")
 
 
+def _validate_lifecycle_selection(
+    requested: object,
+    catalog: dict[str, dict],
+    *,
+    empty_error: str,
+    one_account_per_market: bool = False,
+) -> tuple[list[str], dict[str, list[str]]]:
+    if not isinstance(requested, list) or not requested:
+        raise ValueError(empty_error)
+    if any(not isinstance(account, str) or not account.strip() for account in requested):
+        raise ValueError("Accounts must be non-empty account IDs")
+    if len(set(requested)) != len(requested):
+        raise ValueError("Duplicate accounts are not allowed")
+    if any(account not in catalog for account in requested):
+        raise ValueError("Unknown account was selected")
+
+    accounts_by_market: dict[str, list[str]] = {}
+    for account in requested:
+        market = catalog[account].get("market")
+        if market not in ("KR", "US"):
+            raise ValueError("Account market is unsupported")
+        accounts_by_market.setdefault(market, []).append(account)
+
+    if one_account_per_market:
+        for market, market_accounts in accounts_by_market.items():
+            if len(market_accounts) != 1:
+                raise ValueError(f"{market} requires exactly one account per worker")
+
+    return requested, accounts_by_market
+
+
 def _validate_market_config(account_id: str, config: object) -> None:
     if not isinstance(config, dict):
         return
@@ -584,31 +615,38 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid start payload"}, 400)
                 return
-            requested = payload.get("accounts", _default_accounts())
+            requested = payload["accounts"] if "accounts" in payload else _default_accounts()
             if not isinstance(requested, list) or not requested:
                 self._json({"error": "Select at least one account"}, 400)
                 return
             catalog = {item["id"]: item for item in _account_catalog()}
-            accounts = [str(item) for item in requested if str(item) in catalog]
-            if not accounts:
-                self._json({"error": "No valid account was selected"}, 400)
+            try:
+                accounts, accounts_by_market = _validate_lifecycle_selection(
+                    requested,
+                    catalog,
+                    empty_error="Select at least one account",
+                    one_account_per_market=True,
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
                 return
             if any(catalog[item]["mode"] == "real" for item in accounts) and os.environ.get("ALLOW_LIVE_DASHBOARD", "false").lower() != "true":
                 self._json({"error": "Live accounts are disabled by the dashboard"}, 403)
                 return
-            accounts_by_market: dict[str, list[str]] = {}
-            for account in accounts:
-                accounts_by_market.setdefault(catalog[account]["market"], []).append(account)
             launch_results = []
             for market, market_accounts in accounts_by_market.items():
-                if len(market_accounts) != 1:
-                    self._json({"error": f"{market} requires exactly one account per worker"}, 400)
-                    return
                 code, result = _supervisor("start", market_accounts[0], market)
-                if code not in (0, 3):
-                    self._json({"error": "Worker supervisor could not start the worker", "detail": result}, 503)
+                launch = {"market": market, **result}
+                launch_results.append(launch)
+                if code != 0:
+                    status = 409 if result.get("reason") == "already-running" else 503
+                    self._json({
+                        "error": "Worker supervisor could not start all requested workers",
+                        "code": code,
+                        "detail": result,
+                        "launches": launch_results,
+                    }, status)
                     return
-                launch_results.append({"market": market, **result})
             # A second start request is a refusal, not a successful second
             # launch.  Return the existing worker PID so the caller can make
             # that distinction without consulting dashboard-local state.
@@ -626,14 +664,19 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid stop payload"}, 400)
                 return
-            requested = payload.get("accounts", _active_accounts())
+            requested = payload["accounts"] if "accounts" in payload else _active_accounts()
             if not isinstance(requested, list) or not requested:
                 self._json({"error": "Select at least one running account to stop"}, 400)
                 return
             catalog = {item["id"]: item for item in _account_catalog()}
-            accounts = [str(item) for item in requested if str(item) in catalog]
-            if not accounts:
-                self._json({"error": "No valid account was selected"}, 400)
+            try:
+                accounts, _ = _validate_lifecycle_selection(
+                    requested,
+                    catalog,
+                    empty_error="Select at least one running account to stop",
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
                 return
             if any(catalog[item]["mode"] == "real" for item in accounts) and os.environ.get("ALLOW_LIVE_DASHBOARD", "false").lower() != "true":
                 self._json({"error": "Live accounts are disabled by the dashboard"}, 403)
