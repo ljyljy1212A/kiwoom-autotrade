@@ -23,7 +23,12 @@ from pathlib import Path
 from src.core.process_lock import ProcessLock
 from src.core.process_inventory import query_win32_processes
 from src.core.control_state import read_auto_trading_enabled
-from src.core.runtime_paths import DATA_DIR
+from src.core.runtime_paths import DATA_DIR, LOG_DIR, DIAGNOSTICS_DIR, backup_dir
+from src.core.worker_launch_routes import (
+    WorkerLaunchRouteError,
+    resolve_worker_root,
+    worker_route_configured,
+)
 from src.core.account_catalog import is_real_account
 from src.utils.logger import get_logger
 
@@ -201,7 +206,7 @@ def _scan_unmanaged_worker_processes(account: str, market: str) -> list[dict]:
 def _unmanaged_process_result(account: str, current: dict):
     """Return a detection-only result, or None when no candidate is found."""
     market = current.get("market")
-    logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+    logger = get_logger(account, LOG_DIR / f"{account}.log")
     try:
         matches = _scan_unmanaged_worker_processes(account, market)
     except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -408,6 +413,17 @@ def start(account: str, market: str) -> tuple[int, dict]:
     guard = _reject_real_account(account)
     if guard is not None:
         return guard
+    try:
+        worker_root = resolve_worker_root(account, market, ROOT)
+        routed = worker_root != ROOT or worker_route_configured(account, market)
+    except WorkerLaunchRouteError as exc:
+        return 9, {
+            "account": account,
+            "market": market,
+            "started": False,
+            "reason": "worker-launch-route-invalid",
+            "detail": str(exc),
+        }
     current = status(account)
     if current.get("liveness") == "suspect":
         return 8, {**current, "started": False, "reason": "status-indeterminate"}
@@ -439,6 +455,25 @@ def start(account: str, market: str) -> tuple[int, dict]:
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
+    if routed:
+        # Keep account state and logs in this supervisor's existing data area
+        # while loading worker code from the explicitly pinned source root.
+        try:
+            env["KIWOOM_DATA_DIR"] = str(DATA_DIR.resolve())
+            env["KIWOOM_LOG_DIR"] = str(LOG_DIR.resolve())
+            env["KIWOOM_DIAGNOSTICS_DIR"] = str(DIAGNOSTICS_DIR.resolve())
+            env["KIWOOM_BACKUP_BASE_DIR"] = str(backup_dir().resolve())
+            env["KIWOOM_RUNTIME_ROOT"] = str(ROOT.resolve(strict=True))
+            env["KIWOOM_ENV"] = "mock"
+            env["PYTHONPATH"] = str(worker_root)
+        except (OSError, RuntimeError) as exc:
+            return 9, {
+                "account": account,
+                "market": market,
+                "started": False,
+                "reason": "worker-launch-state-path-invalid",
+                "detail": type(exc).__name__,
+            }
     if os.name == "nt":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         # The supervisor command is intentionally short-lived (batch/API).
@@ -447,6 +482,10 @@ def start(account: str, market: str) -> tuple[int, dict]:
         creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         popen_kwargs["creationflags"] = creationflags
     command = [sys.executable, "-m", "src.main", "--market", market]
+    if routed:
+        # -P removes cwd from the module search path; explicit PYTHONPATH selects
+        # the verified code while retaining the existing worker process signature.
+        command = [sys.executable, "-P", "-m", "src.main", "--market", market]
     child = subprocess.Popen(
         command,
         **popen_kwargs,
@@ -567,7 +606,7 @@ def stop(account, timeout: float | None = None):
         # 2. Timeout exceeded: escalate to a platform-appropriate force-kill.
         mode = "forced"
         if sys.platform == "win32":
-            logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+            logger = get_logger(account, LOG_DIR / f"{account}.log")
             logger.info(f"Graceful stop timed out for {account}, escalating to taskkill: pid={pid} instance={instance_id}")
             result = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -623,7 +662,7 @@ def kill(account: str):
     pid, instance_id = identity
 
     if sys.platform == "win32":
-        logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+        logger = get_logger(account, LOG_DIR / f"{account}.log")
         logger.info(f"Force-killing {account} via taskkill: pid={pid} instance={instance_id}")
         result = subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -670,7 +709,7 @@ def main() -> int:
         code, payload = kill(account)
 
     if code in (3, 4):
-        result_logger = get_logger(account, ROOT / "logs" / f"{account}.log")
+        result_logger = get_logger(account, LOG_DIR / f"{account}.log")
         result_payload = json.dumps(payload, ensure_ascii=False)
         message = f"worker supervisor result: exit_code={code} payload={result_payload}"
         if payload.get("reason") == "already-running":

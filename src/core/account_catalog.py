@@ -12,14 +12,14 @@ from collections.abc import Mapping
 
 import yaml
 
-from src.core.runtime_paths import PROJECT_ROOT
+from src.core.runtime_paths import PROJECT_ROOT, runtime_root
 
 
 def account_catalog() -> list[dict]:
     """Public account metadata only; secrets never leave the caller's process."""
     try:
         raw = yaml.safe_load(
-            (PROJECT_ROOT / "config" / "accounts.yaml").read_text(encoding="utf-8")
+            (runtime_root(PROJECT_ROOT) / "config" / "accounts.yaml").read_text(encoding="utf-8")
         ) or {}
     except (OSError, yaml.YAMLError):
         return []
@@ -64,7 +64,7 @@ def reconciliation_clearance_eligible(
     market: str,
     mode: str,
 ) -> bool:
-    config_path = PROJECT_ROOT / "config" / "accounts.yaml"
+    config_path = runtime_root(PROJECT_ROOT) / "config" / "accounts.yaml"
 
     try:
         document = yaml.load(
