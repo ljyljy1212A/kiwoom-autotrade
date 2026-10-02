@@ -127,6 +127,45 @@ def test_settings_post_uses_atomic_write(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("existing_content", "read_blocked", "expected_status"),
+    [
+        (b"{invalid", False, 400),
+        (b"[]", False, 400),
+        (b'{"profiles": {}}', False, 400),
+        (b'{"profiles": [null]}', False, 400),
+        (b'{"profiles": [{"enabled": false}]}', False, 400),
+        (b'{"profiles": [{"id": "p", "enabled": false}, {"id": "p", "enabled": false}]}', False, 400),
+        (b'{"profiles": []}', True, 503),
+    ],
+)
+def test_settings_post_preserves_existing_file_when_state_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    existing_content: bytes, read_blocked: bool, expected_status: int,
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings_path = data_dir / "dashboard_settings_us_mock.json"
+    settings_path.write_bytes(existing_content)
+    original_read_text = Path.read_text
+
+    if read_blocked:
+        def block_settings_read(path: Path, *args, **kwargs):
+            if path == settings_path:
+                raise PermissionError("settings read blocked")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", block_settings_read)
+
+    with patch.object(dashboard_server, "atomic_write_json") as write:
+        responses = _post(tmp_path, "/api/settings", {"profiles": []})
+
+    assert len(responses) == 1
+    assert responses[0][1] == expected_status
+    write.assert_not_called()
+    assert settings_path.read_bytes() == existing_content
+
+
 def test_control_post_uses_atomic_write_for_account_snapshot(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -171,7 +210,7 @@ def test_settings_post_reports_atomic_write_failure(tmp_path: Path) -> None:
     ):
         responses = _post(tmp_path, "/api/settings", {"profiles": []})
 
-    assert responses == [({"error": "Unable to save settings: disk unavailable"}, 503)]
+    assert responses == [({"error": "Unable to access settings: disk unavailable"}, 503)]
 
 
 def test_control_post_reports_atomic_write_failure(tmp_path: Path) -> None:
