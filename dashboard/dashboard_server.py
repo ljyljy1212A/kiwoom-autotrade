@@ -6,6 +6,7 @@ with ALLOW_LIVE_DASHBOARD=true.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -48,6 +49,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 PORT = int(os.environ.get("DASHBOARD_PORT", "8765"))
 TRADE_HISTORY_LIMIT = max(1, int(os.environ.get("DASHBOARD_TRADE_HISTORY_LIMIT", "1000")))
+MAX_DASHBOARD_POST_BYTES = 1_048_576
 TRADE_HISTORY_DAYS = max(1, int(os.environ.get("DASHBOARD_TRADE_HISTORY_DAYS", "365")))
 _trade_history_cache: dict[str, tuple[tuple[int, int, int, int], dict]] = {}
 _trade_history_cache_lock = Lock()
@@ -326,6 +328,46 @@ def _validate_lifecycle_selection(
     return requested, accounts_by_market
 
 
+def _disable_only_profile_change(existing: dict, incoming: dict) -> bool:
+    """Allow disabling an active profile without changing its strategy."""
+    old_enabled = existing.get("enabled", True)
+    new_enabled = incoming.get("enabled", True)
+    if type(old_enabled) is not bool or old_enabled is not True:
+        return False
+    if type(new_enabled) is not bool:
+        return False
+    if new_enabled != old_enabled and not (old_enabled is True and new_enabled is False):
+        return False
+    old_config = existing.get("config")
+    new_config = incoming.get("config")
+    if not isinstance(old_config, dict) or not isinstance(new_config, dict):
+        return False
+    old_copy = copy.deepcopy(existing)
+    new_copy = copy.deepcopy(incoming)
+    if "enabled" in old_copy:
+        new_copy["enabled"] = old_copy["enabled"]
+    else:
+        new_copy.pop("enabled", None)
+    for side in ("auto_buy", "auto_sell"):
+        old_side = old_config.get(side)
+        new_side = new_config.get(side)
+        if not isinstance(old_side, dict) or not isinstance(new_side, dict):
+            return False
+        old_flag = old_side.get("enabled", False)
+        new_flag = new_side.get("enabled", False)
+        if type(old_flag) is not bool or type(new_flag) is not bool:
+            return False
+        if new_flag != old_flag and not (old_flag is True and new_flag is False):
+            return False
+        if side not in old_config:
+            new_copy["config"].pop(side, None)
+        elif "enabled" not in old_side:
+            new_copy["config"][side].pop("enabled", None)
+        else:
+            new_copy["config"][side]["enabled"] = old_flag
+    return new_copy == old_copy
+
+
 def _validate_market_config(account_id: str, config: object) -> None:
     if not isinstance(config, dict):
         return
@@ -361,6 +403,55 @@ def _control_worker_instance(account: str) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _read_json_object(self) -> dict:
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin", "")
+        try:
+            parsed_host = urlparse(f"http://{host}")
+            parsed_origin = urlparse(origin)
+            host_port = parsed_host.port
+        except ValueError as exc:
+            raise ValueError("Invalid request origin") from exc
+        if (
+            not host
+            or parsed_host.hostname not in {"127.0.0.1", "localhost"}
+            or host_port != PORT
+            or parsed_host.path
+            or parsed_host.query
+            or parsed_host.fragment
+            or parsed_host.username
+            or parsed_host.password
+            or not origin
+            or parsed_origin.scheme != "http"
+            or parsed_origin.netloc.casefold() != host.casefold()
+            or parsed_origin.path
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or parsed_origin.username
+            or parsed_origin.password
+        ):
+            raise ValueError("Request must come from the local dashboard origin")
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise ValueError("Content-Type must be application/json")
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("Transfer-Encoding is not supported")
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("A valid Content-Length is required") from exc
+        if length < 0:
+            raise ValueError("Content-Length must be nonnegative")
+        if length > MAX_DASHBOARD_POST_BYTES:
+            raise ValueError("Request body is too large")
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise ValueError("Request body is incomplete")
+        payload = json.loads(body or b"{}")
+        if not isinstance(payload, dict):
+            raise ValueError("JSON request body must be an object")
+        return payload
+
     def _path_and_query(self) -> tuple[str, dict[str, list[str]]]:
         parsed = urlparse(self.path)
         return parsed.path, parse_qs(parsed.query)
@@ -506,17 +597,25 @@ class Handler(BaseHTTPRequestHandler):
         path, query = self._path_and_query()
         if path == "/api/settings":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
                 profiles = payload.get("profiles")
                 if not isinstance(profiles, list):
                     raise ValueError("profiles must be a list")
                 account = self._account(query, require_explicit=True)
                 if self._reject_real_account(account):
                     return
+                profile_ids = set()
                 for profile in profiles:
                     if not isinstance(profile, dict):
                         raise ValueError("profile must be an object")
+                    profile_id = profile.get("id")
+                    if not isinstance(profile_id, str) or not profile_id.strip():
+                        raise ValueError("profile ID must be a nonempty string")
+                    if profile_id in profile_ids:
+                        raise ValueError("profile IDs must be unique")
+                    profile_ids.add(profile_id)
+                    if "enabled" in profile and type(profile["enabled"]) is not bool:
+                        raise ValueError("profile enabled must be a boolean")
                     _validate_market_config(account, profile.get("config"))
                 selected_id = str(payload.get("selected_profile_id", ""))
                 with account_cleanup_lock(ROOT / "data", account):
@@ -549,9 +648,11 @@ class Handler(BaseHTTPRequestHandler):
                         for profile in profiles
                     }
                     for profile_id, existing_profile in existing_profiles.items():
+                        incoming_profile = incoming_profiles.get(profile_id)
                         if (existing_profile.get("enabled", True) is not False
-                                and incoming_profiles.get(profile_id) != existing_profile):
-                            raise ValueError("Enabled profiles cannot be changed through /api/settings")
+                                and incoming_profile != existing_profile
+                                and not _disable_only_profile_change(existing_profile, incoming_profile or {})):
+                            raise ValueError("Enabled profiles can only be disabled through /api/settings")
                     remove_closed = payload.get(
                         "auto_remove_closed_positions",
                         existing.get("auto_remove_closed_positions", True),
@@ -574,8 +675,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/control":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
                 account = self._account(query, require_explicit=True)
                 if self._reject_real_account(account):
                     return
@@ -610,8 +710,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/start":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid start payload"}, 400)
                 return
@@ -659,8 +758,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/stop":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid stop payload"}, 400)
                 return

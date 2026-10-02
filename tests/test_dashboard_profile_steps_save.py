@@ -42,7 +42,12 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
     def _post_settings(self, root: Path, payload: dict) -> list[tuple[dict, int]]:
         body = json.dumps(payload).encode()
         handler = object.__new__(dashboard_server.Handler)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/json",
+            "Host": f"127.0.0.1:{dashboard_server.PORT}",
+            "Origin": f"http://127.0.0.1:{dashboard_server.PORT}",
+        }
         handler.rfile = io.BytesIO(body)
         handler._path_and_query = lambda: ("/api/settings", {"account": ["us_mock"]})
         responses: list[tuple[dict, int]] = []
@@ -59,7 +64,12 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         payload.setdefault("expected_instance_id", SESSION)
         body = json.dumps(payload).encode()
         handler = object.__new__(dashboard_server.Handler)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/json",
+            "Host": f"127.0.0.1:{dashboard_server.PORT}",
+            "Origin": f"http://127.0.0.1:{dashboard_server.PORT}",
+        }
         handler.rfile = io.BytesIO(body)
         handler._path_and_query = lambda: ("/api/control", {"account": ["us_mock"]})
         responses: list[tuple[dict, int]] = []
@@ -346,6 +356,36 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
 
             self.assertEqual(global_path.read_bytes(), seed_global)
             self.assertEqual(symbol_path.read_bytes(), seed_symbol)
+
+    def test_active_profile_can_disable_one_automation_side_without_changing_strategy(self):
+        existing = _profile(enabled=True, buy_steps=[])
+        existing["config"]["auto_buy"]["enabled"] = True
+        existing["config"]["auto_sell"]["enabled"] = True
+        incoming = json.loads(json.dumps(existing))
+        incoming["config"]["auto_buy"]["enabled"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            settings_path = data / "dashboard_settings_us_mock.json"
+            settings_path.write_text(json.dumps({"profiles": [existing]}), encoding="utf-8")
+            responses = self._post_settings(root, {"profiles": [incoming]})
+            persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(responses[0][1], 200)
+        self.assertEqual(persisted["profiles"], [incoming])
+
+    def test_enabled_profile_can_be_disabled_without_changing_strategy(self):
+        existing = _profile(enabled=True, buy_steps=[])
+        incoming = json.loads(json.dumps(existing))
+        incoming["enabled"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            settings_path = data / "dashboard_settings_us_mock.json"
+            settings_path.write_text(json.dumps({"profiles": [existing]}), encoding="utf-8")
+            responses = self._post_settings(root, {"profiles": [incoming]})
+        self.assertEqual(responses[0][1], 200)
 
     def test_enabled_profile_step_save_is_rejected_without_writing_settings(self):
         existing_profile = _profile(enabled=True, buy_steps=[])

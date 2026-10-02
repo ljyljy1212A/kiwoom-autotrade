@@ -15,7 +15,12 @@ class DashboardSupervisorTests(unittest.TestCase):
     def _post_handler(self, path, payload):
         body = json.dumps(payload).encode()
         handler = object.__new__(dashboard_server.Handler)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/json",
+            "Host": f"127.0.0.1:{dashboard_server.PORT}",
+            "Origin": f"http://127.0.0.1:{dashboard_server.PORT}",
+        }
         handler.rfile = io.BytesIO(body)
         handler._path_and_query = lambda: (path, {})
         handler._json = Mock()
@@ -139,7 +144,12 @@ class DashboardSupervisorTests(unittest.TestCase):
     def test_dashboard_start_without_dashboard_authorization_returns_403(self):
         body = json.dumps({"accounts": ["synthetic_catalog_real"]}).encode()
         handler = object.__new__(dashboard_server.Handler)
-        handler.headers = {"Content-Length": str(len(body))}
+        handler.headers = {
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/json",
+            "Host": f"127.0.0.1:{dashboard_server.PORT}",
+            "Origin": f"http://127.0.0.1:{dashboard_server.PORT}",
+        }
         handler.rfile = io.BytesIO(body)
         handler._path_and_query = lambda: ("/api/start", {})
         response = Mock()
