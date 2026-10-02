@@ -19,10 +19,18 @@ def _post(
     path: str,
     payload: dict,
     query: dict[str, list[str]] | None = None,
+    header_overrides: dict[str, str] | None = None,
+    raw_body: bytes | None = None,
 ) -> list[tuple[dict, int]]:
-    body = json.dumps(payload).encode()
+    body = json.dumps(payload).encode() if raw_body is None else raw_body
     handler = object.__new__(dashboard_server.Handler)
-    handler.headers = {"Content-Length": str(len(body))}
+    handler.headers = {
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json",
+        "Host": f"127.0.0.1:{dashboard_server.PORT}",
+        "Origin": f"http://127.0.0.1:{dashboard_server.PORT}",
+    }
+    handler.headers.update(header_overrides or {})
     handler.rfile = io.BytesIO(body)
     request_query = {"account": ["us_mock"]} if query is None else query
     handler._path_and_query = lambda: (path, request_query)
@@ -113,6 +121,50 @@ def test_settings_and_control_reject_account_market_mismatch_before_write(
     assert responses == [({"error": error}, 400)]
     settings_write.assert_not_called()
     control_write.assert_not_called()
+
+
+def test_settings_post_rejects_duplicate_incoming_profile_ids_before_write(tmp_path: Path) -> None:
+    profile = {"id": "same", "enabled": False,
+               "config": {"symbol": "SOXL", "market": "US", "mode": "mock"}}
+    with patch.object(dashboard_server, "atomic_write_json") as write:
+        responses = _post(tmp_path, "/api/settings", {"profiles": [profile, dict(profile)]})
+    assert responses == [({"error": "Invalid settings payload"}, 400)]
+    write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "headers,body",
+    [
+        ({"Content-Type": "text/plain"}, b'{"profiles": []}'),
+        ({"Origin": "http://evil.example:8765"}, b'{"profiles": []}'),
+        ({"Host": "evil.example:8765", "Origin": "http://evil.example:8765"}, b'{"profiles": []}'),
+        ({}, b"[]"),
+    ],
+)
+def test_settings_post_rejects_invalid_request_boundary_before_write(
+    tmp_path: Path, headers: dict[str, str], body: bytes,
+) -> None:
+    with patch.object(dashboard_server, "atomic_write_json") as write:
+        responses = _post(tmp_path, "/api/settings", {}, header_overrides=headers, raw_body=body)
+    assert responses == [({"error": "Invalid settings payload"}, 400)]
+    write.assert_not_called()
+
+
+def test_control_post_rejects_non_object_body_before_write(tmp_path: Path) -> None:
+    with patch.object(control_snapshot, "update") as write:
+        responses = _post(tmp_path, "/api/control", {}, raw_body=b"[]")
+    assert responses == [({"error": "Invalid control payload"}, 400)]
+    write.assert_not_called()
+
+
+def test_settings_post_rejects_oversized_body_before_read_or_write(tmp_path: Path) -> None:
+    with patch.object(dashboard_server, "atomic_write_json") as write:
+        responses = _post(
+            tmp_path, "/api/settings", {},
+            header_overrides={"Content-Length": str(dashboard_server.MAX_DASHBOARD_POST_BYTES + 1)},
+        )
+    assert responses == [({"error": "Invalid settings payload"}, 400)]
+    write.assert_not_called()
 
 
 def test_settings_post_uses_atomic_write(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ with ALLOW_LIVE_DASHBOARD=true.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -48,6 +49,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 PORT = int(os.environ.get("DASHBOARD_PORT", "8765"))
 TRADE_HISTORY_LIMIT = max(1, int(os.environ.get("DASHBOARD_TRADE_HISTORY_LIMIT", "1000")))
+MAX_DASHBOARD_POST_BYTES = 1_048_576
 TRADE_HISTORY_DAYS = max(1, int(os.environ.get("DASHBOARD_TRADE_HISTORY_DAYS", "365")))
 _trade_history_cache: dict[str, tuple[tuple[int, int, int, int], dict]] = {}
 _trade_history_cache_lock = Lock()
@@ -295,6 +297,77 @@ def _account_market(account_id: str) -> str:
     return next((item["market"] for item in _account_catalog() if item["id"] == account_id), "")
 
 
+def _validate_lifecycle_selection(
+    requested: object,
+    catalog: dict[str, dict],
+    *,
+    empty_error: str,
+    one_account_per_market: bool = False,
+) -> tuple[list[str], dict[str, list[str]]]:
+    if not isinstance(requested, list) or not requested:
+        raise ValueError(empty_error)
+    if any(not isinstance(account, str) or not account.strip() for account in requested):
+        raise ValueError("Accounts must be non-empty account IDs")
+    if len(set(requested)) != len(requested):
+        raise ValueError("Duplicate accounts are not allowed")
+    if any(account not in catalog for account in requested):
+        raise ValueError("Unknown account was selected")
+
+    accounts_by_market: dict[str, list[str]] = {}
+    for account in requested:
+        market = catalog[account].get("market")
+        if market not in ("KR", "US"):
+            raise ValueError("Account market is unsupported")
+        accounts_by_market.setdefault(market, []).append(account)
+
+    if one_account_per_market:
+        for market, market_accounts in accounts_by_market.items():
+            if len(market_accounts) != 1:
+                raise ValueError(f"{market} requires exactly one account per worker")
+
+    return requested, accounts_by_market
+
+
+def _disable_only_profile_change(existing: dict, incoming: dict) -> bool:
+    """Allow disabling an active profile without changing its strategy."""
+    old_enabled = existing.get("enabled", True)
+    new_enabled = incoming.get("enabled", True)
+    if type(old_enabled) is not bool or old_enabled is not True:
+        return False
+    if type(new_enabled) is not bool:
+        return False
+    if new_enabled != old_enabled and not (old_enabled is True and new_enabled is False):
+        return False
+    old_config = existing.get("config")
+    new_config = incoming.get("config")
+    if not isinstance(old_config, dict) or not isinstance(new_config, dict):
+        return False
+    old_copy = copy.deepcopy(existing)
+    new_copy = copy.deepcopy(incoming)
+    if "enabled" in old_copy:
+        new_copy["enabled"] = old_copy["enabled"]
+    else:
+        new_copy.pop("enabled", None)
+    for side in ("auto_buy", "auto_sell"):
+        old_side = old_config.get(side)
+        new_side = new_config.get(side)
+        if not isinstance(old_side, dict) or not isinstance(new_side, dict):
+            return False
+        old_flag = old_side.get("enabled", False)
+        new_flag = new_side.get("enabled", False)
+        if type(old_flag) is not bool or type(new_flag) is not bool:
+            return False
+        if new_flag != old_flag and not (old_flag is True and new_flag is False):
+            return False
+        if side not in old_config:
+            new_copy["config"].pop(side, None)
+        elif "enabled" not in old_side:
+            new_copy["config"][side].pop("enabled", None)
+        else:
+            new_copy["config"][side]["enabled"] = old_flag
+    return new_copy == old_copy
+
+
 def _validate_market_config(account_id: str, config: object) -> None:
     if not isinstance(config, dict):
         return
@@ -330,6 +403,55 @@ def _control_worker_instance(account: str) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _read_json_object(self) -> dict:
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin", "")
+        try:
+            parsed_host = urlparse(f"http://{host}")
+            parsed_origin = urlparse(origin)
+            host_port = parsed_host.port
+        except ValueError as exc:
+            raise ValueError("Invalid request origin") from exc
+        if (
+            not host
+            or parsed_host.hostname not in {"127.0.0.1", "localhost"}
+            or host_port != PORT
+            or parsed_host.path
+            or parsed_host.query
+            or parsed_host.fragment
+            or parsed_host.username
+            or parsed_host.password
+            or not origin
+            or parsed_origin.scheme != "http"
+            or parsed_origin.netloc.casefold() != host.casefold()
+            or parsed_origin.path
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or parsed_origin.username
+            or parsed_origin.password
+        ):
+            raise ValueError("Request must come from the local dashboard origin")
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise ValueError("Content-Type must be application/json")
+        if self.headers.get("Transfer-Encoding"):
+            raise ValueError("Transfer-Encoding is not supported")
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("A valid Content-Length is required") from exc
+        if length < 0:
+            raise ValueError("Content-Length must be nonnegative")
+        if length > MAX_DASHBOARD_POST_BYTES:
+            raise ValueError("Request body is too large")
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise ValueError("Request body is incomplete")
+        payload = json.loads(body or b"{}")
+        if not isinstance(payload, dict):
+            raise ValueError("JSON request body must be an object")
+        return payload
+
     def _path_and_query(self) -> tuple[str, dict[str, list[str]]]:
         parsed = urlparse(self.path)
         return parsed.path, parse_qs(parsed.query)
@@ -475,17 +597,25 @@ class Handler(BaseHTTPRequestHandler):
         path, query = self._path_and_query()
         if path == "/api/settings":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
                 profiles = payload.get("profiles")
                 if not isinstance(profiles, list):
                     raise ValueError("profiles must be a list")
                 account = self._account(query, require_explicit=True)
                 if self._reject_real_account(account):
                     return
+                profile_ids = set()
                 for profile in profiles:
                     if not isinstance(profile, dict):
                         raise ValueError("profile must be an object")
+                    profile_id = profile.get("id")
+                    if not isinstance(profile_id, str) or not profile_id.strip():
+                        raise ValueError("profile ID must be a nonempty string")
+                    if profile_id in profile_ids:
+                        raise ValueError("profile IDs must be unique")
+                    profile_ids.add(profile_id)
+                    if "enabled" in profile and type(profile["enabled"]) is not bool:
+                        raise ValueError("profile enabled must be a boolean")
                     _validate_market_config(account, profile.get("config"))
                 selected_id = str(payload.get("selected_profile_id", ""))
                 with account_cleanup_lock(ROOT / "data", account):
@@ -518,9 +648,11 @@ class Handler(BaseHTTPRequestHandler):
                         for profile in profiles
                     }
                     for profile_id, existing_profile in existing_profiles.items():
+                        incoming_profile = incoming_profiles.get(profile_id)
                         if (existing_profile.get("enabled", True) is not False
-                                and incoming_profiles.get(profile_id) != existing_profile):
-                            raise ValueError("Enabled profiles cannot be changed through /api/settings")
+                                and incoming_profile != existing_profile
+                                and not _disable_only_profile_change(existing_profile, incoming_profile or {})):
+                            raise ValueError("Enabled profiles can only be disabled through /api/settings")
                     remove_closed = payload.get(
                         "auto_remove_closed_positions",
                         existing.get("auto_remove_closed_positions", True),
@@ -543,8 +675,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/control":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
                 account = self._account(query, require_explicit=True)
                 if self._reject_real_account(account):
                     return
@@ -579,36 +710,42 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/start":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid start payload"}, 400)
                 return
-            requested = payload.get("accounts", _default_accounts())
+            requested = payload["accounts"] if "accounts" in payload else _default_accounts()
             if not isinstance(requested, list) or not requested:
                 self._json({"error": "Select at least one account"}, 400)
                 return
             catalog = {item["id"]: item for item in _account_catalog()}
-            accounts = [str(item) for item in requested if str(item) in catalog]
-            if not accounts:
-                self._json({"error": "No valid account was selected"}, 400)
+            try:
+                accounts, accounts_by_market = _validate_lifecycle_selection(
+                    requested,
+                    catalog,
+                    empty_error="Select at least one account",
+                    one_account_per_market=True,
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
                 return
             if any(catalog[item]["mode"] == "real" for item in accounts) and os.environ.get("ALLOW_LIVE_DASHBOARD", "false").lower() != "true":
                 self._json({"error": "Live accounts are disabled by the dashboard"}, 403)
                 return
-            accounts_by_market: dict[str, list[str]] = {}
-            for account in accounts:
-                accounts_by_market.setdefault(catalog[account]["market"], []).append(account)
             launch_results = []
             for market, market_accounts in accounts_by_market.items():
-                if len(market_accounts) != 1:
-                    self._json({"error": f"{market} requires exactly one account per worker"}, 400)
-                    return
                 code, result = _supervisor("start", market_accounts[0], market)
-                if code not in (0, 3):
-                    self._json({"error": "Worker supervisor could not start the worker", "detail": result}, 503)
+                launch = {"market": market, **result}
+                launch_results.append(launch)
+                if code != 0:
+                    status = 409 if result.get("reason") == "already-running" else 503
+                    self._json({
+                        "error": "Worker supervisor could not start all requested workers",
+                        "code": code,
+                        "detail": result,
+                        "launches": launch_results,
+                    }, status)
                     return
-                launch_results.append({"market": market, **result})
             # A second start request is a refusal, not a successful second
             # launch.  Return the existing worker PID so the caller can make
             # that distinction without consulting dashboard-local state.
@@ -621,19 +758,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/stop":
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_json_object()
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid stop payload"}, 400)
                 return
-            requested = payload.get("accounts", _active_accounts())
+            requested = payload["accounts"] if "accounts" in payload else _active_accounts()
             if not isinstance(requested, list) or not requested:
                 self._json({"error": "Select at least one running account to stop"}, 400)
                 return
             catalog = {item["id"]: item for item in _account_catalog()}
-            accounts = [str(item) for item in requested if str(item) in catalog]
-            if not accounts:
-                self._json({"error": "No valid account was selected"}, 400)
+            try:
+                accounts, _ = _validate_lifecycle_selection(
+                    requested,
+                    catalog,
+                    empty_error="Select at least one running account to stop",
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
                 return
             if any(catalog[item]["mode"] == "real" for item in accounts) and os.environ.get("ALLOW_LIVE_DASHBOARD", "false").lower() != "true":
                 self._json({"error": "Live accounts are disabled by the dashboard"}, 403)

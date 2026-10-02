@@ -977,6 +977,7 @@ async function toggleAutoSell(checked){
 }
 
 async function saveSymbolSideAutomation(side, checked){
+  // Active profiles remain immutable except for safety reducing disable changes.
   const symbol=String(state.symbol||'').toUpperCase();
   if(!symbol) return;
   const previous=JSON.stringify(loadProfiles());
