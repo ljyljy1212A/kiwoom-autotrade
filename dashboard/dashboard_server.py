@@ -491,14 +491,28 @@ class Handler(BaseHTTPRequestHandler):
                 with account_cleanup_lock(ROOT / "data", account):
                     settings_path = ROOT / "data" / f"dashboard_settings_{account}.json"
                     try:
-                        existing = json.loads(settings_path.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
+                        existing_text = settings_path.read_text(encoding="utf-8")
+                    except FileNotFoundError:
                         existing = {}
-                    existing_profiles = {
-                        str(profile.get("id", "")): profile
-                        for profile in existing.get("profiles", [])
-                        if isinstance(profile, dict)
-                    }
+                    except OSError as exc:
+                        raise OSError(f"Unable to read existing settings: {exc}") from exc
+                    else:
+                        existing = json.loads(existing_text)
+                        if not isinstance(existing, dict):
+                            raise ValueError("Existing settings must be an object")
+                    existing_profile_rows = existing.get("profiles", [])
+                    if not isinstance(existing_profile_rows, list):
+                        raise ValueError("Existing settings profiles must be a list")
+                    existing_profiles = {}
+                    for profile in existing_profile_rows:
+                        if not isinstance(profile, dict):
+                            raise ValueError("Existing settings profiles must be objects")
+                        profile_id = profile.get("id")
+                        if not isinstance(profile_id, str) or not profile_id.strip():
+                            raise ValueError("Existing settings profile ID must be a nonempty string")
+                        if profile_id in existing_profiles:
+                            raise ValueError("Existing settings profile IDs must be unique")
+                        existing_profiles[profile_id] = profile
                     incoming_profiles = {
                         str(profile.get("id", "")): profile
                         for profile in profiles
@@ -525,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, json.JSONDecodeError):
                 self._json({"error": "Invalid settings payload"}, 400)
             except OSError as exc:
-                self._json({"error": f"Unable to save settings: {exc}"}, 503)
+                self._json({"error": f"Unable to access settings: {exc}"}, 503)
             return
         if path == "/api/control":
             try:
