@@ -129,6 +129,27 @@ def _worker_source_identity() -> WorkerSourceIdentity:
     )
 
 
+def _validate_routed_worker_source_identity(identity: WorkerSourceIdentity) -> None:
+    """Refuse routed startup unless imported code matches the supervisor pin."""
+    expected_root = os.environ.get("KIWOOM_EXPECTED_WORKER_ROOT", "").strip()
+    expected_revision = os.environ.get("KIWOOM_EXPECTED_WORKER_REVISION", "").strip()
+    if not expected_root or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_revision):
+        raise RuntimeError("Worker launch refused: expected source identity is incomplete")
+    try:
+        expected_root_path = Path(expected_root).resolve(strict=True)
+        actual_root_path = Path(identity.source_root).resolve(strict=True)
+        actual_module_path = Path(identity.source_module).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RuntimeError("Worker launch refused: source identity path is unavailable") from exc
+    if (actual_root_path != expected_root_path
+            or actual_module_path != expected_root_path / "src" / "main.py"):
+        raise RuntimeError("Worker launch refused: imported source root does not match the pin")
+    if identity.revision is None or identity.revision.lower() != expected_revision.lower():
+        raise RuntimeError("Worker launch refused: imported source revision does not match the pin")
+    if identity.working_tree != "CLEAN":
+        raise RuntimeError("Worker launch refused: imported source tree is not clean")
+
+
 @dataclass
 class _EngineSlot:
     state: EngineState
@@ -734,8 +755,11 @@ async def main():
     # Real-account launch is intentionally retained here; AccountOrderAuthority
     # and operator discipline are the safeguards at this boundary.
     routed = bool(os.environ.get("KIWOOM_RUNTIME_ROOT", "").strip())
+    source_identity = None
     if routed:
         validate_routed_account(account_filter, market_filter)
+        source_identity = _worker_source_identity()
+        _validate_routed_worker_source_identity(source_identity)
     contexts = load_accounts(
         str(RUNTIME_ROOT / "config" / "accounts.yaml") if routed else "config/accounts.yaml",
         account_filter=account_filter, market_filter=market_filter,
@@ -772,7 +796,8 @@ async def main():
             instance_id=uuid.uuid4().hex,
             started_at=datetime.now(timezone.utc).isoformat(),
             supervisor_launch_id=os.environ.get("KIWOOM_SUPERVISOR_LAUNCH_ID") or None,
-            source_identity=_worker_source_identity(),
+            source_identity=(source_identity if source_identity is not None
+                             else _worker_source_identity()),
         )
         for ctx in contexts:
             _apply_worker_identity(ctx, worker_identity)
