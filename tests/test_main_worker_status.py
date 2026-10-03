@@ -228,3 +228,38 @@ def test_routed_source_mismatch_stops_before_account_loading(monkeypatch, tmp_pa
         asyncio.run(worker_main.main())
 
     loader.assert_not_called()
+
+
+def test_routed_module_mismatch_stops_before_account_loading(monkeypatch, tmp_path):
+    """Reject only a module-path mismatch before entering the account loader."""
+    source_root = tmp_path / "source"
+    expected_module = source_root / "src" / "main.py"
+    actual_module = source_root / "src" / "alternate_main.py"
+    expected_module.parent.mkdir(parents=True)
+    expected_module.write_text("# expected synthetic source\n", encoding="utf-8")
+    actual_module.write_text("# unexpected synthetic module\n", encoding="utf-8")
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    monkeypatch.setenv("KIWOOM_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("KIWOOM_EXPECTED_WORKER_ROOT", str(source_root))
+    monkeypatch.setenv("KIWOOM_EXPECTED_WORKER_REVISION", "a" * 40)
+    monkeypatch.setenv("ACCOUNT_FILTER", "kr_mock")
+    monkeypatch.setenv("MARKET_INSTANCE", "KR")
+    monkeypatch.setattr(sys, "argv", ["worker", "--market", "KR"])
+    identity = worker_main.WorkerSourceIdentity(
+        source_root=str(source_root), source_module=str(actual_module),
+        revision="a" * 40, working_tree="CLEAN", observed_at="synthetic",
+    )
+    catalog_guard = Mock()
+    source_probe = Mock(return_value=identity)
+    loader = Mock(side_effect=AssertionError("Module mismatch reached account loading"))
+    monkeypatch.setattr(worker_main, "validate_routed_account", catalog_guard)
+    monkeypatch.setattr(worker_main, "_worker_source_identity", source_probe)
+    monkeypatch.setattr(worker_main, "load_accounts", loader)
+
+    with pytest.raises(RuntimeError, match="imported source root does not match the pin"):
+        asyncio.run(worker_main.main())
+
+    catalog_guard.assert_called_once_with("kr_mock", "KR")
+    source_probe.assert_called_once_with()
+    loader.assert_not_called()
