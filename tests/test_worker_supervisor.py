@@ -454,6 +454,26 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             str(log_dir.resolve()),
         )
 
+    def test_start_reports_invalid_source_revision_separately_from_path_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {
+                "KIWOOM_WORKER_ROOT_KR_MOCK": str(root),
+                "KIWOOM_WORKER_REVISION_KR_MOCK": "invalid",
+            }), patch.object(supervisor, "ROOT", root / "runtime"), \
+                 patch.object(supervisor, "_reject_real_account", return_value=None), \
+                 patch.object(supervisor, "resolve_worker_root", return_value=root), \
+                 patch.object(supervisor, "worker_route_configured", return_value=True), \
+                 patch.object(supervisor, "status", return_value={"running": False}), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor.subprocess, "Popen") as popen:
+                code, payload = supervisor.start("kr_mock", "KR")
+
+        self.assertEqual(code, 9)
+        self.assertFalse(payload["started"])
+        self.assertEqual(payload["reason"], "worker-source-revision-invalid")
+        popen.assert_not_called()
+
     def test_same_root_route_preserves_launch_against_runtime_dotenv(self):
         from src.core import worker_environment
 

@@ -464,10 +464,15 @@ def start(account: str, market: str) -> tuple[int, dict]:
     if routed:
         # Keep account state and logs in this supervisor's existing data area
         # while loading worker code from the explicitly pinned source root.
+        expected_revision = os.environ.get("KIWOOM_WORKER_REVISION_KR_MOCK", "").strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_revision):
+            return 9, {
+                "account": account,
+                "market": market,
+                "started": False,
+                "reason": "worker-source-revision-invalid",
+            }
         try:
-            expected_revision = os.environ.get("KIWOOM_WORKER_REVISION_KR_MOCK", "").strip()
-            if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_revision):
-                raise RuntimeError("expected source revision is unavailable")
             env["KIWOOM_DATA_DIR"] = str(DATA_DIR.resolve())
             env["KIWOOM_LOG_DIR"] = str(LOG_DIR.resolve())
             env["KIWOOM_DIAGNOSTICS_DIR"] = str(DIAGNOSTICS_DIR.resolve())
