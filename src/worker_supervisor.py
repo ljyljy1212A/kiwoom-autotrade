@@ -12,6 +12,7 @@ import argparse
 import ctypes
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -343,6 +344,11 @@ def status(account: str) -> dict:
         "activityState": metadata.get("activityState"),
         "processHeartbeatAt": metadata.get("processHeartbeatAt"),
         "lastControllerCycleAt": metadata.get("lastControllerCycleAt"),
+        "sourceRoot": metadata.get("sourceRoot"),
+        "sourceModule": metadata.get("sourceModule"),
+        "sourceRevision": metadata.get("sourceRevision"),
+        "sourceWorkingTree": metadata.get("sourceWorkingTree", "INCOMPLETE"),
+        "sourceVerifiedAt": metadata.get("sourceVerifiedAt"),
     }
 
 
@@ -458,6 +464,14 @@ def start(account: str, market: str) -> tuple[int, dict]:
     if routed:
         # Keep account state and logs in this supervisor's existing data area
         # while loading worker code from the explicitly pinned source root.
+        expected_revision = os.environ.get("KIWOOM_WORKER_REVISION_KR_MOCK", "").strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_revision):
+            return 9, {
+                "account": account,
+                "market": market,
+                "started": False,
+                "reason": "worker-source-revision-invalid",
+            }
         try:
             env["KIWOOM_DATA_DIR"] = str(DATA_DIR.resolve())
             env["KIWOOM_LOG_DIR"] = str(LOG_DIR.resolve())
@@ -466,6 +480,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
             env["KIWOOM_RUNTIME_ROOT"] = str(ROOT.resolve(strict=True))
             env["KIWOOM_ENV"] = "mock"
             env["PYTHONPATH"] = str(worker_root)
+            env["KIWOOM_EXPECTED_WORKER_ROOT"] = str(worker_root.resolve(strict=True))
+            env["KIWOOM_EXPECTED_WORKER_REVISION"] = expected_revision
         except (OSError, RuntimeError) as exc:
             return 9, {
                 "account": account,

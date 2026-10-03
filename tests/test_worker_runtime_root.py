@@ -21,6 +21,8 @@ def routed_environment(tmp_path, monkeypatch):
         "KIWOOM_LOG_DIR": str(root / "logs"),
         "KIWOOM_DIAGNOSTICS_DIR": str(root / "diagnostics"),
         "KIWOOM_BACKUP_BASE_DIR": str(root / "backups"),
+        "KIWOOM_EXPECTED_WORKER_ROOT": str(Path(runtime_paths.__file__).resolve().parents[2]),
+        "KIWOOM_EXPECTED_WORKER_REVISION": "a" * 40,
         "ACCOUNT_FILTER": "kr_mock", "MARKET_INSTANCE": "KR",
         "KIWOOM_SUPERVISOR_LAUNCH_ID": "synthetic-launch",
         "KIWOOM_ENV": "mock", "AUTO_TRADING_ENABLED": "false",
@@ -46,7 +48,7 @@ def test_runtime_dotenv_cannot_retarget_launch(routed_environment, monkeypatch):
     assert os.environ["SYNTHETIC_ROUTE_SETTING"] == "from_runtime"
 
 
-@pytest.mark.parametrize("fault", ["missing_env", "missing_launch", "wrong_market", "relative_data", "wrong_cwd"])
+@pytest.mark.parametrize("fault", ["missing_env", "missing_launch", "wrong_market", "relative_data", "wrong_cwd", "invalid_expected_revision", "wrong_expected_source"])
 def test_invalid_runtime_contract_stops_before_dotenv(routed_environment, monkeypatch, fault):
     root, _ = routed_environment
     if fault != "missing_env":
@@ -59,6 +61,10 @@ def test_invalid_runtime_contract_stops_before_dotenv(routed_environment, monkey
         monkeypatch.setenv("KIWOOM_DATA_DIR", "relative")
     elif fault == "wrong_cwd":
         monkeypatch.chdir(root.parent)
+    elif fault == "invalid_expected_revision":
+        monkeypatch.setenv("KIWOOM_EXPECTED_WORKER_REVISION", "invalid")
+    elif fault == "wrong_expected_source":
+        monkeypatch.setenv("KIWOOM_EXPECTED_WORKER_ROOT", str(root))
     calls = []
     monkeypatch.setattr(worker_environment, "load_dotenv", lambda **kwargs: calls.append(kwargs))
     with pytest.raises(RuntimeError):

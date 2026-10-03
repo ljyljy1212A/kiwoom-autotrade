@@ -24,6 +24,32 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             CreationDate=start_time,
         )
 
+    def test_status_exposes_recorded_worker_source_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "status.json"
+            status_path.write_text(json.dumps({
+                "account": "kr_mock", "pid": 123, "instanceId": "instance",
+                "sourceRoot": "C:/synthetic/source",
+                "sourceModule": "C:/synthetic/source/src/main.py",
+                "sourceRevision": "a" * 40,
+                "sourceWorkingTree": "CLEAN",
+                "sourceVerifiedAt": "synthetic-time",
+            }), encoding="utf-8")
+            lock = MagicMock()
+            lock.liveness_result.return_value = {
+                "running": True, "liveness": "confirmed",
+            }
+            with patch.object(supervisor, "_status_path", return_value=status_path), \
+                 patch.object(supervisor, "_pid_path", return_value=Path(tmp) / "missing.pid"), \
+                 patch.object(supervisor, "_worker_lock", return_value=lock):
+                result = supervisor.status("kr_mock")
+
+        self.assertEqual(result["sourceRoot"], "C:/synthetic/source")
+        self.assertEqual(result["sourceModule"], "C:/synthetic/source/src/main.py")
+        self.assertEqual(result["sourceRevision"], "a" * 40)
+        self.assertEqual(result["sourceWorkingTree"], "CLEAN")
+        self.assertEqual(result["sourceVerifiedAt"], "synthetic-time")
+
     def _stopped_status(self):
         return {
             "account": "kr_mock",
@@ -372,7 +398,10 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 "state": "RUNNING",
                 "market": "KR",
             }
-            with patch.object(supervisor, "ROOT", default_root), \
+            with patch.dict(os.environ, {
+                "KIWOOM_WORKER_ROOT_KR_MOCK": str(target_root),
+                "KIWOOM_WORKER_REVISION_KR_MOCK": "a" * 40,
+            }), patch.object(supervisor, "ROOT", default_root), \
                  patch.object(supervisor, "DATA_DIR", data_dir), \
                  patch.object(supervisor, "LOG_DIR", log_dir), \
                  patch.object(supervisor, "DIAGNOSTICS_DIR", default_root / "diagnostics"), \
@@ -404,6 +433,8 @@ class WorkerSupervisorStopTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["cwd"], default_root)
         self.assertEqual(popen.call_args.args[0][1:], ["-P", "-m", "src.main", "--market", "KR"])
         self.assertEqual(popen.call_args.kwargs["env"]["PYTHONPATH"], str(target_root))
+        self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_EXPECTED_WORKER_ROOT"], str(target_root.resolve()))
+        self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_EXPECTED_WORKER_REVISION"], "a" * 40)
         self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_RUNTIME_ROOT"], str(default_root.resolve()))
         self.assertEqual(popen.call_args.kwargs["env"]["KIWOOM_ENV"], "mock")
         self.assertEqual(
@@ -422,6 +453,26 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             popen.call_args.kwargs["env"]["KIWOOM_LOG_DIR"],
             str(log_dir.resolve()),
         )
+
+    def test_start_reports_invalid_source_revision_separately_from_path_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {
+                "KIWOOM_WORKER_ROOT_KR_MOCK": str(root),
+                "KIWOOM_WORKER_REVISION_KR_MOCK": "invalid",
+            }), patch.object(supervisor, "ROOT", root / "runtime"), \
+                 patch.object(supervisor, "_reject_real_account", return_value=None), \
+                 patch.object(supervisor, "resolve_worker_root", return_value=root), \
+                 patch.object(supervisor, "worker_route_configured", return_value=True), \
+                 patch.object(supervisor, "status", return_value={"running": False}), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor.subprocess, "Popen") as popen:
+                code, payload = supervisor.start("kr_mock", "KR")
+
+        self.assertEqual(code, 9)
+        self.assertFalse(payload["started"])
+        self.assertEqual(payload["reason"], "worker-source-revision-invalid")
+        popen.assert_not_called()
 
     def test_same_root_route_preserves_launch_against_runtime_dotenv(self):
         from src.core import worker_environment
@@ -462,6 +513,8 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             self.assertEqual(popen.call_args.args[0][1:], ["-P", "-m", "src.main", "--market", "KR"])
             launch = popen.call_args.kwargs["env"]
             self.assertEqual(launch["PYTHONPATH"], str(root))
+            self.assertEqual(launch["KIWOOM_EXPECTED_WORKER_ROOT"], str(root))
+            self.assertEqual(launch["KIWOOM_EXPECTED_WORKER_REVISION"], "a" * 40)
             self.assertEqual(launch["KIWOOM_RUNTIME_ROOT"], str(root))
             old_cwd = Path.cwd()
             try:

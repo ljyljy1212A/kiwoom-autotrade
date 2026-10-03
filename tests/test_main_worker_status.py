@@ -1,9 +1,13 @@
 import asyncio
 import json
+import os
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from src import main as worker_main
 
@@ -166,3 +170,61 @@ def test_worker_source_identity_fails_closed_when_git_is_unavailable():
     assert source.source_module == str(Path(worker_main.__file__).resolve())
     assert source.revision is None
     assert source.working_tree == "INCOMPLETE"
+
+
+@pytest.mark.parametrize("revision,working_tree,root_matches", [
+    ("a" * 40, "CLEAN", True), ("b" * 40, "CLEAN", True),
+    ("a" * 40, "DIRTY", True), ("a" * 40, "INCOMPLETE", True),
+    ("a" * 40, "CLEAN", False),
+])
+def test_routed_source_identity_checks_expected_pin(revision, working_tree, root_matches, tmp_path):
+    expected_root = tmp_path / "source"
+    actual_root = expected_root if root_matches else tmp_path / "other"
+    expected_module = expected_root / "src" / "main.py"
+    actual_module = actual_root / "src" / "main.py"
+    expected_module.parent.mkdir(parents=True)
+    expected_module.write_text("# expected synthetic source\n", encoding="utf-8")
+    if not root_matches:
+        actual_module.parent.mkdir(parents=True)
+        actual_module.write_text("# other synthetic source\n", encoding="utf-8")
+    identity = worker_main.WorkerSourceIdentity(
+        source_root=str(actual_root), source_module=str(actual_module),
+        revision=revision, working_tree=working_tree, observed_at="synthetic",
+    )
+    with patch.dict(os.environ, {
+        "KIWOOM_EXPECTED_WORKER_ROOT": str(expected_root),
+        "KIWOOM_EXPECTED_WORKER_REVISION": "a" * 40,
+    }):
+        if revision == "a" * 40 and working_tree == "CLEAN" and root_matches:
+            worker_main._validate_routed_worker_source_identity(identity)
+        else:
+            with pytest.raises(RuntimeError, match="Worker launch refused"):
+                worker_main._validate_routed_worker_source_identity(identity)
+
+
+def test_routed_source_mismatch_stops_before_account_loading(monkeypatch, tmp_path):
+    source_root = tmp_path / "source"
+    source_module = source_root / "src" / "main.py"
+    source_module.parent.mkdir(parents=True)
+    source_module.write_text("# synthetic source\n", encoding="utf-8")
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    monkeypatch.setenv("KIWOOM_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("KIWOOM_EXPECTED_WORKER_ROOT", str(source_root))
+    monkeypatch.setenv("KIWOOM_EXPECTED_WORKER_REVISION", "a" * 40)
+    monkeypatch.setenv("ACCOUNT_FILTER", "kr_mock")
+    monkeypatch.setenv("MARKET_INSTANCE", "KR")
+    monkeypatch.setattr(sys, "argv", ["worker", "--market", "KR"])
+    identity = worker_main.WorkerSourceIdentity(
+        source_root=str(source_root), source_module=str(source_module),
+        revision="a" * 40, working_tree="DIRTY", observed_at="synthetic",
+    )
+    loader = Mock()
+    monkeypatch.setattr(worker_main, "validate_routed_account", Mock())
+    monkeypatch.setattr(worker_main, "_worker_source_identity", lambda: identity)
+    monkeypatch.setattr(worker_main, "load_accounts", loader)
+
+    with pytest.raises(RuntimeError, match="source tree is not clean"):
+        asyncio.run(worker_main.main())
+
+    loader.assert_not_called()
