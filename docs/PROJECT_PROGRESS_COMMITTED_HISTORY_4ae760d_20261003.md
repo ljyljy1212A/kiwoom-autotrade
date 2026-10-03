@@ -1,0 +1,1328 @@
+# Project Progress
+
+Last updated: 2026-09-27
+
+## Purpose
+
+This file records routine repository-local progress without modifying canonical
+operational records. Canonical publication is a separate, explicitly approved
+milestone.
+
+## Completed or statically verified
+
+- Windows is the official operational support platform.
+- Ubuntu is retained only as a non-blocking compatibility signal.
+- A Windows validation job was added to the workflow definition.
+- YAML fallback structure validation passed.
+- `actionlint` was not installed and was not executed.
+- `canonical_publisher.ps1` exists and received static safety review.
+- The root-parent handling in `Assert-NonReparseChain` was corrected and
+  statically reviewed.
+- The publisher remains a candidate; no operational publication has been
+  completed.
+
+## Not executed
+
+- Publisher preflight
+- Publisher `-Apply`
+- Canonical publication
+- Workflow execution
+- pytest or other test execution
+- Git operations
+- CI execution
+- Runtime or Scheduler operations
+
+## P0 backlog
+
+- `worker_supervisor` currently treats an unmanaged-process scan failure as
+  `already_stopped` success. This is a fail-closed correctness defect.
+- Direct shared-state file writes remain to be consolidated behind an atomic
+  persistence boundary.
+- `AccountEngine` remains oversized at approximately 2,851 lines and requires
+  characterization tests before staged separation.
+- Dependency lock, lint, type-check, and coverage standards remain incomplete.
+- Canonical record updates remain pending because the repository-to-canonical
+  publication path is blocked by an `apply_patch` path-boundary error.
+
+## Publication status
+
+CANONICAL_PENDING
+
+The repository-local record may be updated during routine development. A
+canonical record must not be described as updated until a separately authorized
+publication succeeds and the final target identity is verified.
+
+## 2026-09-13 — Reconciliation/clearance seam approval checkpoint
+
+### Approved
+
+- `AccountEngine` broker reconciliation and clearance handling were reviewed and
+  approved for staged separation without changing the broker-authoritative balance
+  path, fail-closed pause behavior, pause-clear/clearance ordering, lock
+  boundary, or the existing payload and external behavior contract.
+- The current seam boundary retains the established fail-closed pause semantics and
+  preserves the broker-validated reconciliation gate before any new balance/clearance
+  state is consumed.
+- No order-execution, lifecycle, dashboard-persistence, runtime, Scheduler,
+  process, network, or account behavior changes were introduced under this
+  approval scope.
+
+### Constraints preserved
+
+- Broker-authoritative balance processing remains authoritative.
+- Fail-closed pause behavior remains intact for reconciliation failures.
+- Operator pause-clear and reconciliation clearance still run in the existing
+  order: check the fresh clearance state before clearing the pause.
+- Existing lock boundaries and control-state payload contract remain unchanged.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network,
+  account, or operational execution work was performed under this approval.
+
+### Local validation status
+
+- Focused pytest execution was intentionally deferred by the user in this session,
+  so no claim of pass/fail is recorded for the seam-specific test set.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Startup status atomic persistence checkpoint
+
+### Implemented
+
+- Startup status JSON publication in `src/notify/telegram_control_bot.py`, `dashboard/dashboard_server.py`, and `tools/heartbeat_alert_watchdog.py` now goes through the shared atomic JSON writer boundary.
+- The payload shape, UTF-8 encoding, and startup metadata remain unchanged; the write now preserves the original error state instead of swallowing failures.
+
+### Static review
+
+- The atomic writer boundary was used without changing the surrounding status payload logic or adding any fallback write path.
+- No canonical publication, runtime hooks, or publisher execution was performed.
+
+### Local validation
+
+- Focused startup-status tests were executed locally for the affected components and passed: `3 passed`.
+- CI, deployment, runtime, Scheduler, process, network, and credential workflows were not executed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Startup status writer completion checkpoint
+
+### Implemented
+
+- P1 startup status writer completion for `src/notify/telegram_control_bot.py`, `dashboard/dashboard_server.py`, and `tools/heartbeat_alert_watchdog.py`.
+- All three startup-status publication paths now use the shared atomic JSON persistence boundary without altering the underlying payload schema, UTF-8 encoding, or startup metadata contract.
+- The fix remains repository-local and does not change canonical publication status or operational execution scope.
+
+### Local validation
+
+- Focused pytest run passed locally: `59 passed in 1.50s`
+- Exit code: `0`
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Safety persistence checkpoint
+
+### Implemented and locally tested
+
+- The unmanaged-worker scan failure contract now fails closed: scan failure returns `8 / status_indeterminate` with `reason=unmanaged-scan-failed` and `unmanagedScanStatus=failed`; it does not report `already_stopped` or perform process termination or PID cleanup.
+- Dashboard settings and control JSON publication now uses the shared atomic JSON writer. Focused dashboard and atomic-writer tests passed: `7 passed`.
+- New symbol dashboard-control initialization in `src/main.py` now uses the shared atomic JSON writer. Focused main/atomic-writer tests passed: `4 passed`.
+- `src/core/atomic_write.py` now provides `atomic_write_text` with the same temporary-file, three-attempt `PermissionError` retry (`0.075` seconds), replace, and failed-temporary cleanup contract as the existing JSON writer.
+- `src/core/engine.py` now uses atomic JSON publication for closure-absence and dashboard-settings state, and atomic text publication for `heartbeat.txt`. Focused engine source-contract and atomic-writer tests passed: `4 passed`.
+
+### Remaining P1/P2 persistence backlog
+
+- Resolved P1: startup status publication in `src/notify/telegram_control_bot.py`, dashboard startup status, and `tools/heartbeat_alert_watchdog.py` now uses the shared atomic JSON persistence boundary; this startup-status writer work is complete and has passed focused local pytest verification.
+- Resolved P2: `src/core/control_state.py` pause-clear history artifact direct write is completed and removed from the remaining backlog; its primary control-state files already use atomic JSON writes.
+- `AccountEngine` staged separation, dependency lock, lint, type-check, and coverage standards remain incomplete.
+
+### Validation and publication state
+
+- The listed focused pytest runs passed locally. CI, deployment, runtime, Scheduler, network, and operational validation were not performed.
+- Canonical publication remains `CANONICAL_PENDING`. No canonical file was updated in this checkpoint.
+
+## 2026-09-13 — Pause-clear history atomic persistence checkpoint
+
+### Implemented
+
+- `src/core/control_state.py` was reviewed and the pause-clear history artifact path was checked against the shared atomic text persistence boundary used by the repository-local control-state write flow.
+- The pause-clear event payload and event-id contract remain unchanged; the sidecar history write stays a best-effort persistence artifact with the existing warning fallback on failure.
+- The related control-state and reconciliation tests were implemented and statically reviewed in `tests/test_reconciliation_fail_closed.py` and adjacent control-state coverage for pause-clear reason validation and history-file warning behavior.
+
+### Static review
+
+- The atomic write boundary in `src/core/control_state.py` was confirmed to preserve the main control-state JSON semantics while keeping the pause-clear history artifact as a non-canonical sidecar.
+- The static review confirmed that the pause-clear history write does not bypass the existing reason allowlist, does not alter the primary control-state payload contract, and keeps the warning-only failure path consistent with the repository-local implementation strategy.
+- No source or test rework was performed beyond the repository-local record update itself.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network, account, or operational execution work was performed under this approval.
+
+### Local validation
+
+- The local pytest setup stage failed before any test body executed with `PermissionError: [WinError 5] Access is denied` against the pytest temporary directory path.
+- This was a setup-stage environment failure; the failing process did not reach the corresponding test body and thus no test-case execution result was produced.
+- The test setup failure was observed as a repository-local validation blocker, not as a code-level pass/fail signal for the control-state implementation.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Engine orchestration characterization checkpoint
+
+### Implemented
+
+- Added `tests/test_engine_orchestration_characterization.py` to characterize the `AccountEngine.run()` startup sequence without touching production source files.
+- The characterization covers startup ledger backup, ledger restore, runtime control refresh, dashboard control refresh, initial forced broker sync, tick-to-heartbeat ordering, and final realtime callback/subscription removal.
+- All collaborators are replaced with test doubles; no real broker, ledger, runtime state, data directory, or dashboard control files are used.
+
+### Scope guard
+
+- `src/core/engine.py` and all existing source files were left unchanged.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network, account, or operational execution work was performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Engine orchestration characterization local-validation checkpoint
+
+### Local validation
+
+- One characterization test was collected for the local validation attempt.
+- Pytest exit code: `1`
+- The pytest process failed during basetemp session finalization with `WinError 5 Access denied`.
+- The test-body result remained unconfirmed because the run did not complete a definitive product-level execution result.
+- This result was not treated as a product validation result.
+- No retry, cleanup, or permission change was performed under this checkpoint.
+- A later focused validation rerun was executed using a fresh user-owned basetemp/cache location to avoid the prior Windows temp-directory permission issue.
+- Focused pytest result: `1 passed in 1.01s`
+- Pytest exit code: `0`
+- This rerun succeeded under the fresh user-owned basetemp/cache environment and is recorded as the local validation result for this checkpoint.
+- The earlier harness-stage `WinError 5 Access denied` failure remains preserved as the preceding failure record and was not removed.
+- Existing source and test files were left unchanged; no Git, CI, canonical publication, runtime, Scheduler, process, network, account, or operational execution work was performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — AccountEngine staged separation checkpoint
+
+### Implemented
+
+- Added `_ReconciliationCoordinator` to own account-wide reconciliation failure bookkeeping.
+- Preserved the existing failure counter, threshold-triggered fail-closed pause propagation, and manual-mode success reset logic.
+- `AccountEngine` initializes the coordinator after reconciliation configuration.
+- Existing broker-authoritative balance handling, pause-clear/clearance ordering, lock boundaries, payloads, and external behavior remain unchanged.
+- Updated the reconciliation test double to initialize `_ReconciliationCoordinator` when using the `AccountEngine.__new__()` path.
+
+### Static review
+
+- Reviewed the `engine.py` and `tests/test_reconciliation_fail_closed.py` diffs.
+- No unrelated source or test behavior changes were introduced by this staged separation.
+- Order execution, lifecycle, dashboard persistence, runtime, Scheduler, process, network, account, Git, CI, and canonical publication work were not performed.
+
+### Local validation
+
+- Initial fresh unsandboxed focused run: `10 failed, 17 passed`; failures were isolated to the uninitialized coordinator in `AccountEngine.__new__()` test doubles.
+- After the test-double initialization correction: `27 passed in 1.33s`, exit code `0`.
+- Validation covered only:
+  - `tests/test_reconciliation_fail_closed.py`
+  - `tests/test_engine_orchestration_characterization.py`
+- No full-suite pytest or CI validation was performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Worker supervisor test-contract correction checkpoint
+
+### Test-only correction
+
+- Updated `tests/test_round1577_liveness.py` to isolate the no-unmanaged-candidate condition by patching `_unmanaged_process_result()` to return `None`.
+- Updated `tests/test_worker_killswitch.py` so the non-graceful mock worker `stop` path verifies the current forced-stop success contract: return code `0`, `stopped=True`, child termination, and lock release.
+- No production source was changed.
+
+### Static review
+
+- Reviewed both test-file diffs.
+- The changes match the current fail-closed unmanaged-process behavior and forced-stop behavior.
+- No runtime, Scheduler, process, network, account, Git, CI, or canonical publication action was performed.
+
+### Full local validation
+
+- Full pytest was run once with a fresh unsandboxed user-owned basetemp/cache path.
+- Result: `444 passed, 4 skipped, 1 xfailed, 12 warnings in 59.23s`
+- Pytest exit code: `0`
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-13 — Canonical publication completion
+
+- The earlier `CANONICAL_PENDING` entries preserve the publication status at their respective implementation checkpoints.
+- `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` was published with the verified implementation checkpoint at SHA-256 `C7F303CFBA97271EC6539DC02B25D6D31B47BE68756AC476971C76CB2A54C1F9` (50,495 bytes).
+- A status-correction publication then recorded that completion at SHA-256 `E3AF678D2C74D64BC8A143829361D10C6486F0DD20AC3B9042C640127D47CA2E` (51,187 bytes).
+- Independent post-readback passed for both publications. The three pre-existing legacy publisher artifacts remain preserved pending separately authorized cleanup.
+- No additional pytest, Git, CI, runtime, Scheduler, process, network, or account work was performed for publication completion.
+
+## 2026-09-13 — Unique pytest basetemp wrapper
+
+- Added `tools/run_pytest_unique_basetemp.ps1`.
+- The wrapper generates a unique repository-local `.pytest-tmp-<GUID>` basetemp and isolated cache directory for each run.
+- Static review passed: PowerShell parser errors `0`.
+- Full local pytest through the wrapper: `444 passed, 4 skipped, 1 xfailed, 12 warnings, 13 subtests passed` in `56.81s`; exit code `0`.
+- Evidence: `tools/pytest-unique-wrapper-20260913-v1`.
+- No Git, CI, runtime, Scheduler, process, network, account, or canonical publication action was performed.
+
+## 2026-09-13 — Cross-platform CI test-only correction validation
+
+### Test-only correction
+
+- Updated `tests/test_scheduled_task_healthcheck_mock_mode.py` to use `PureWindowsPath(task.target_path).name`, preserving Windows-path basename assertions on Linux CI.
+- Updated the two unmanaged-scan failure tests in `tests/test_worker_supervisor.py` to patch the cross-platform `_scan_unmanaged_worker_processes` seam directly.
+- No production source behavior was changed.
+
+### Static review
+
+- `git diff --check` passed.
+- AST syntax validation passed for both corrected test files.
+- No unrelated source, test, Git, CI, runtime, Scheduler, process, network, or account work was performed.
+
+### Local validation
+
+- Focused pytest through the unique-basetemp wrapper: `44 passed, 1 skipped in 1.82s`; exit code `0`.
+- Full pytest through the unique-basetemp wrapper: `444 passed, 4 skipped, 1 xfailed, 12 warnings, 13 subtests passed in 63.90s`; exit code `0`.
+- Successful focused-run evidence: `tools/pytest-focused-unique-basetemp-20260913-v4`.
+- Successful full-run evidence: `tools/pytest-full-unique-basetemp-20260913-v1`.
+- The managed sandbox denied access to newly created pytest basetemp directories; the successful runs used the same wrapper outside that sandbox with process-scoped `ExecutionPolicy Bypass`. No persistent execution-policy or ACL change was made.
+- Earlier failed evidence bundles remain preserved; no cleanup was performed.
+- CI, canonical publication, runtime, Scheduler, process, network, and account validation were not performed.
+
+## 2026-09-14 — Base-Python bypass full validation checkpoint
+
+### Environment diagnosis
+
+- Existing `.venv` and newly created sibling venv both fail during native-extension initialization with `ImportError: DLL initialization routine failed` for `_ssl` and `_ctypes`.
+- The verified base interpreter remains functional.
+- A process-local base-Python bypass using the existing `.venv\Lib\site-packages` successfully imported `ssl`, `_ctypes`, and pytest 9.1.1.
+- No venv deletion, repair, ACL change, package installation, or cleanup was performed.
+
+### Local validation
+
+- Authorized concurrent regression tests: `2 passed in 6.24s`; exit code `0`.
+- Full local pytest through the base-Python bypass: `446 passed, 4 skipped, 1 xfailed, 12 warnings`; `451 collected`; exit code `0`; duration `61.48s`.
+- Full-run evidence: `tools/pytest-full-basepython-20260914-v1`.
+- Bound source/test SHA-256 values matched the preflight values for:
+  - `src/core/engine.py`
+  - `tests/test_dispatch_clearance_integration.py`
+  - `tests/test_main_account_authority.py`
+  - `tests/test_worker_supervisor.py`
+
+### Scope boundary
+
+- Source and test files were not modified during validation.
+- Git, CI, canonical publication, runtime, Scheduler, process, network, account, credential, and cleanup actions were not performed.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-14 — CI validation after atomic writer and reconciliation test fixes
+
+- Pushed commits:
+  - `6e92ad2` — passive ledger and concurrency regression checkpoint
+  - `d653aba` — atomic text writer implementation
+  - `b3958a2` — reconciliation coordinator test setup
+  - `6f81c3f` — pause-clear history atomic writer
+- GitHub Actions run `34802983476` for `6f81c3f` completed successfully.
+- Linux CI executed `436` tests with no failures.
+- Dependency installation and pytest completed successfully.
+- The reported CI job was Linux `test`; Windows validation was not reported and remains unverified.
+- Local working-tree changes outside these commits remain preserved.
+- Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-14 — Canonical publication completion
+
+- Canonical target `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` was repaired and verified after the CI checkpoint append.
+- Verified target length: `53,587` bytes.
+- Verified SHA-256: `4AED8F4101F8E9ABCB41253109DDAD3F54DB10328BDA147118DF01F3302B52BD`.
+- Strict UTF-8, no BOM, EOF LF, CRLF `3`, LF-only `810`, and bare CR `0` were verified.
+- The `CANONICAL_PENDING` text inside the published checkpoint is historical pre-publication status; this entry records verified completion.
+
+## 2026-09-14 — Windows CI rerun success
+
+- GitHub Actions run `34806898003`, Attempt `#2`, commit `1afc661`을 재실행했다.
+- Ubuntu compatibility signal: 성공 (`1m 4s`).
+- Windows validation: 성공 (`1m 58s`).
+- 전체 workflow: 성공 (`2m 3s`).
+- 원격 `master` HEAD는 `1afc661e3d3cc9d42bfe8281e8edea9f415ffee8`로 확인되었다.
+- source/test, canonical publication, runtime, Scheduler, process, network, account 작업은 수행하지 않았다.
+
+## 2026-09-14 — Broker HTTP delayed close loopback churn local-validation checkpoint
+
+### Targeted test
+
+- `tests/test_broker_http.py::BrokerHTTPCloseTest::test_delayed_close_loopback_churn_waits_before_each_rebind`
+
+### Execution environment
+
+- Windows
+- Python
+- Fresh user-owned basetemp/cache path
+
+### Local validation
+
+- Result: `1 passed, 1 warning in 1.92s`
+- Status: local focused test passed
+- No CI success or operational validation claim is recorded for this checkpoint.
+- No Git, CI, canonical publication, runtime, Scheduler, process, network, or account execution work was performed under this validation record.
+
+## 2026-09-14 — Broker close timing test stabilization and CI verification
+
+- Test-only correction applied to `tests/test_broker_http.py`.
+- Replaced the predicted `time.monotonic() + 0.05` release deadline with the
+  actual observed release timestamp.
+- Production source was not modified.
+- Focused local Windows test passed: `1 passed in 1.95s`, exit code `0`.
+- Commit created and pushed:
+  `ca86e76fa1532a91a2793116948a5540fd1ed165`
+  (`Stabilize broker close timing test`)
+- GitHub Actions run `34811187957` completed successfully.
+- Ubuntu compatibility signal: `417 passed, 18 skipped, 1 xfailed`.
+- Windows validation: `430 passed, 5 skipped, 1 xfailed`.
+- POSIX watchdog integration remains outside the verified support scope.
+- Canonical publication, runtime, Scheduler, process, account, and credential
+  validation were not performed.
+
+## 2026-09-14 — Reconciliation coordinator extraction and local validation
+
+- Extracted `_ReconciliationCoordinator` from `src/core/engine.py` into
+  `src/core/reconciliation.py` without changing its fail-closed propagation,
+  threshold, or manual-mode reset behavior.
+- Updated `tests/test_reconciliation_fail_closed.py` to import the extracted
+  coordinator.
+- Focused reconciliation tests passed: `26 passed in 4.17s`, exit code `0`,
+  empty stderr.
+- Full local pytest passed: `446 passed, 4 skipped, 1 xfailed, 12 warnings,
+  13 subtests passed in 61.21s`, exit code `0`, empty stderr.
+- Evidence bundles are preserved at:
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-reconciliation-coordinator-20260914-v2`
+  and
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-full-reconciliation-extract-20260914-v2`.
+- CI, Git commit/push, canonical publication, runtime, Scheduler, process,
+  network, account, and credential validation were not performed.
+
+## 2026-09-14 — Clean clone isolation and full local validation
+
+- Created a clean clone at
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-autotrade-clean-e8023b9`
+  from commit `e8023b9ed160e040c371032a02c88da48b099a0d`.
+- The clone and its `.git` directory were verified as non-reparse paths, with
+  a clean detached HEAD at the approved commit.
+- Focused reconciliation tests passed: `26 passed in 1.60s`, exit code `0`.
+- Full local pytest passed: `430 passed, 5 skipped, 1 xfailed, 12 warnings,
+  12 subtests passed in 57.53s`, exit code `0`.
+- Pytest evidence was captured under the repository-independent path
+  `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-pytest-runs`.
+- This milestone records local validation in the clean clone only. Git commit,
+  push, CI, canonical publication, runtime, Scheduler, process, network,
+  account, and credential validation were not performed after this record.
+
+## 2026-09-14 — GitHub master CI merge gate created
+
+- GitHub ruleset `master CI merge gate` was created and verified as Active.
+- Ruleset ID: `23281651`.
+- The ruleset targets the repository default branch, currently `master`.
+- Pull requests are required before merging.
+- Required status check: `Windows validation (pending merge gate)` from GitHub Actions.
+- Branches are not required to be up to date before merging.
+- Force pushes are blocked and the bypass list is empty.
+- This records repository-policy configuration only; no source, test, Git, canonical, runtime, Scheduler, process, network, account, or credential work was performed in this checkpoint.
+
+## 2026-09-15 — Dashboard startup-status and task-XML delivery
+
+- Commit `52272af5cb3e5b0ca6312b075a2829814823e974`
+  (`Preserve dashboard startup status and fix task XML encoding`) was created
+  from the approved hunks in `dashboard/dashboard_server.py` and
+  `ops/installer/scheduled_task_healthcheck_task.xml`.
+- Local validation for this commit passed: full pytest reported `446 passed,
+  4 skipped, 1 xfailed, 12 warnings` in `61.49s`; focused dashboard tests,
+  XML parsing, AST syntax validation, and Git diff checks also passed.
+- Pull request #2 was created and merged after GitHub Actions runs
+  `34904861185` and `34905080344` each reported successful Windows validation
+  and successful non-blocking Ubuntu compatibility checks.
+- The verified merge commit is `062f07b435af722b6abc2f593cc6b1e0784f1183`.
+  Local `master` was fast-forwarded to that same `origin/master` revision.
+- Existing tracked modifications and untracked evidence remain preserved; the
+  source branch was not deleted. No canonical publication, runtime, Scheduler,
+  process, network, account, or credential validation was performed by this
+  delivery record.
+
+## 2026-09-15 — Worker startup identity handshake delivery
+
+- Implemented a unique supervisor launch ID propagated through the worker
+  environment and status payload. ACK/final worker-state matching now prefers
+  the launch token, while legacy status retains PID fallback compatibility.
+- Updated `src/main.py`, `src/worker_supervisor.py`, and
+  `tests/test_worker_supervisor.py`; unrelated atomic-write changes remained
+  unstaged and outside this delivery.
+- Focused local pytest passed: `38 passed, 1 skipped in 4.78s`, exit code `0`.
+- Full local pytest passed: `457 passed, 4 skipped, 1 xfailed, 12 warnings`
+  in `127.91s`, exit code `0`.
+- Commit `340d8fa` (`Fix worker startup identity handshake`) was pushed to the
+  feature branch and delivered through pull request #7.
+- GitHub Actions verified all 4 checks passed.
+- Pull request #7 was merged into `master` with merge commit
+  `645b8fd7a3bd6614e7e2ef4fa8e61d1a9fcc6ece`.
+- Canonical publication, runtime, Scheduler, process, network, account, and
+  credential validation remain outside this record.
+
+## 2026-09-16 — Windows mutex access delivery and mock runtime validation
+
+- Updated `src/core/process_lock.py` to create account mutexes with an
+  explicit security descriptor and to probe an existing mutex before creation.
+  The existing fail-closed refusal path for inaccessible mutexes remains
+  intact.
+- Focused process-lock tests passed: `9 passed, 2 skipped`, exit code `0`.
+- Commit `de4b4ce` (`Fix Windows process mutex access`) was pushed to the
+  feature branch and delivered through pull request #9.
+- GitHub Actions run `35033315885` verified Windows validation and the
+  non-blocking Ubuntu compatibility signal successfully.
+- Pull request #9 was merged into `master` with merge commit
+  `6f3633d64d007809a431d219c9a55e571acbf980`; local `master` was synchronized
+  to the same `origin/master` revision without changing the dirty worktree.
+- `Kiwoom Heartbeat Alert` was verified as `Enabled` and `Ready` with last
+  result `0`.
+- KR mock PID `5708` and US mock PID `18352` were verified as `RUNNING` with
+  confirmed liveness and expected-idle activity state. No real account,
+  credential, or order execution was involved.
+- The existing Canonical `CURRENT_STATE.md` was read-only hash-verified at
+  `1D0F9DCB2A79A9188EE95BEAF1112629617578E27E744A278F891154E2151143`.
+  No Canonical Apply was performed in this milestone.
+
+## 2026-09-16 — Canonical publication and fresh mock-runtime verification
+
+- Pull request #10 recorded the worker-identity and mutex delivery milestones;
+  it was merged into `master` with merge commit
+  `940a606e78da4ff12b8c1e908d01f8f7b05d0826` after GitHub Actions runs
+  `35037289765` and `35037501996` completed successfully.
+- The approved append candidate was published to
+  `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` through the fixed-target
+  publisher. Strict UTF-8 readback verified `58,270` bytes and SHA-256
+  `372E455CFFA6FB06DB933E6DE0A5201138FD861A9E4A66271AF5FADBF67DEAF2`;
+  operation lock, backup, and temporary artifacts were absent afterward.
+- Fresh read-only validation confirmed KR mock PID `5708` and US mock PID
+  `18352` as `RUNNING`, mutex liveness `confirmed`, and `expected-idle`.
+  `Kiwoom Heartbeat Alert` was Enabled and Ready with last result `0`.
+- This operational validation was limited to KR/US mock workers. No real
+  account, credential, or order execution was accessed or performed.
+
+## 2026-09-16 — Zero-age balance cache reuse fix delivery
+
+- `src/core/engine.py` now treats a non-positive balance cache interval as
+  fetch-always, preventing a same-tick stale zero-balance snapshot from being
+  reused during lifecycle re-entry.
+- Added a deterministic regression test in
+  `tests/test_manual_tranche_lifecycle.py`.
+- Focused regression test passed: `1 passed`.
+- Full lifecycle test file passed: `12 passed`.
+- Full local pytest passed: `459 passed, 4 skipped, 1 xfailed`,
+  with `13 warnings` and `13 subtests`.
+- Commit `4ef695cc60df069d0d49e6bc926fccf5072c6269`
+  (`Fix zero-age balance cache reuse`) was pushed to the feature branch.
+- GitHub Actions run `35041876183` passed for push validation:
+  Windows `444 passed, 5 skipped, 1 xfailed`; Ubuntu
+  `431 passed, 18 skipped, 1 xfailed`.
+- Pull request #12 passed its PR checks and was merged into `master` with merge
+  commit `400cce895d68c6a848eb58200716aefb65fc6b20`.
+- Local `master` and `origin/master` were synchronized to the same merge
+  revision without changing the dirty worktree.
+- No real account, credential, order execution, runtime, Scheduler, or
+  Canonical publication was performed for this delivery.
+
+## 2026-09-16 — Dashboard control atomic initialization and Phase C process inventory delivery
+
+- `src/main.py` now writes newly created
+  `dashboard_control_<account>_<symbol>.json` files through
+  `atomic_write_json` instead of `Path.write_text`, removing a non-atomic
+  control-file initialization path.
+- `src/core/process_inventory.py` gained POSIX process inventory support, and
+  the worker process provider uses the platform-appropriate inventory path.
+- Smaller changes included trade-ledger formatting, Ruff cleanup, and scoped
+  Mypy configuration across the affected source and test files.
+- Regression coverage was added for atomic dashboard control initialization
+  and POSIX worker process inventory behavior.
+- CI configuration was updated in `.github/workflows/linux-smoke.yml`,
+  `pyproject.toml`, `requirements-dev.txt`, and `requirements.txt`.
+- Local pytest results and CI (GitHub Actions) check-run outcomes for this
+  delivery were not independently verified and are not recorded here.
+- Pull request #13 was merged into `master` with merge commit
+  `8c73d082b6d6ccc89a21fe88ca181aa1e7ccdd0d`.
+- Canonical publication status for this delivery was not independently
+  verified and is not recorded here.
+- Operational validation status for this delivery was not independently
+  verified and is not recorded here.
+
+## 2026-09-16 — Dashboard control persistence delivery
+
+- Dashboard settings and control persistence now use the shared atomic JSON
+  write boundary and return a fail-closed `503` response on persistence
+  failure.
+- Added focused regression coverage for control persistence, path traversal
+  rejection, and pause behavior in `tests/test_dashboard_profile_steps_save.py`.
+- Focused local pytest passed: `8 passed`.
+- Commit `0e45cede5a695cf643ba35c9c887991fbe57e7c8`
+  (`Harden dashboard control persistence`) was pushed to the feature branch.
+- Pull request #14 passed all 6 checks and was merged into `master` with merge
+  commit `040d311218136faae7bceadfb605a7faaeb25b38`.
+- Local `master` and `origin/master` were synchronized to the same merge
+  revision; the original dirty feature checkout was preserved.
+- Canonical publication and operational validation were not performed for
+  this delivery.
+
+## 2026-09-17 — Mock dashboard control snapshot local implementation
+
+- Applied the reviewed mock-only per-account control snapshot candidate to
+  `dashboard/dashboard_server.py`, `src/main.py`, `src/core/engine.py`, and
+  the new `src/core/dashboard_control_snapshot.py`.
+- The local dashboard UI now confirms the current worker instance and sends
+  `expected_instance_id` with account-scoped control requests. Its existing
+  bytes outside the edited function block were preserved.
+- Mock startup does not import or create legacy control authority. Snapshot
+  initialization requires an explicitly disabled, unbound baseline; worker
+  instance and side permissions are checked at the final dispatch boundary.
+- Updated the two production regression test files for the snapshot contract,
+  including missing-baseline rejection, stale-instance rejection, persistence
+  failure preservation, and reconciliation pause behavior.
+- Focused production pytest: `11 passed, 1 subtests passed`; exit code `0`.
+  Raw evidence: `tools/production-snapshot-targeted-pytest-evidence-20260917-v3`.
+- Scratch UI contract test: `UI_CONTROL_CONTRACT_OK`; exit code `0`.
+  Raw evidence: `tools/snapshot-ui-rebase-node-evidence-20260917-v5`.
+- Local implementation and focused validation are complete. CI, Git delivery,
+  runtime baseline initialization, operational validation, and Canonical
+  publication have not been performed for this candidate.
+## 2026-09-22 — Snapshot/UI/LF delivery successor record
+
+- PR #17 snapshot-control delivery was merged into `master` at
+  `70cf9a6be61c10502bbbcbdddc63821f5fa7871a`; its post-resolution CI checks
+  passed Quality, Ubuntu compatibility, and Windows validation.
+- PR #18 added `dashboard/index.html` to Git tracking and was merged at
+  `c4106eec472342950730f954050d19485e324db7`; focused mock UI/control
+  validation reported `15 passed, 1 subtests passed`.
+- PR #19 added the narrow LF checkout policy
+  `dashboard/index.html text eol=lf` and was merged at
+  `8981ab2b0ca21e99ce192975dc1a655e528b4a3b`; its Quality, Ubuntu
+  compatibility, and Windows validation CI checks passed.
+- A new Windows fresh clone of current `master` with `core.autocrlf=true`
+  confirmed `dashboard/index.html` is tracked, has `eol=lf`, contains
+  `LF=2214`, `CRLF=0`, `BARE_CR=0`, and has no UTF-8 BOM. Clone HEAD and
+  `origin/master` were both `8981ab2b0ca21e99ce192975dc1a655e528b4a3b`.
+- These facts establish remote/Git and fresh-clone checkout evidence only.
+  The original dirty Windows checkout and local `master` were not
+  synchronized; no post-merge local full pytest, Canonical publication,
+  mock runtime validation, Scheduler/process action, credential use, or
+  order execution was performed.
+
+## 2026-09-22 — Snapshot milestone post-merge validation successor
+
+- PR #20 was merged into `master` at
+  `568273aaad8c149f592f452b9b74a557e044d18c`; Quality, Ubuntu
+  compatibility, and Windows validation CI checks completed successfully.
+- A clean isolated worktree at that merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings in 57.20s`. The prior
+  non-elevated run's `WinError 5` was a sandbox temp-directory boundary and
+  is not recorded as a product regression.
+- Canonical publication completed through the fixed append candidate under
+  operation ID `7f4b2e1a-9c65-4d0f-8e21-6ab3c5d7f901`. Canonical readback
+  matched candidate SHA-256
+  `4B0624FC16090D3FFB1F7051CFFB58D0ACDB3598CE6D66A71ADCBDACE030240A`.
+- Mock-only operational validation initialized explicit disabled/unbound
+  baselines for `kr_mock` and `us_mock`; confirmed stale-instance `409`,
+  an all-disabled `us_mock` control update with `200` and snapshot readback,
+  and lock-induced persistence failure `503` with an unchanged snapshot.
+  The observed `us_mock` order-attempt database hash did not change across
+  the controlled update.
+- Validation used temporary localhost dashboard processes only; they were
+  stopped afterward. Existing mock workers remained running. No real-account
+  access, credential activity, order execution, Scheduler change, or worker
+  restart was performed.
+
+## 2026-09-22 — PR #21 merge, checkout synchronization, and regression verification
+
+- PR #21 was merged into `master` at
+  `922c0430c448eb5c82a9e85e26ff1b83cf8ebc48`; its Quality, Ubuntu
+  compatibility, and Windows validation checks passed.
+- The original dirty checkout was synchronized to its remote feature branch at
+  `135bd0ae0e55d6dff651fd6e8763c2c10678c41e` with local/upstream
+  ahead-behind `0/0`. Existing tracked dirty and untracked files were
+  preserved; no cleanup or normalization was performed.
+- A clean synchronized clone completed the full Windows pytest suite with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings in 63.14s`.
+- The stale empty cherry-pick metadata was cleared without changing the
+  existing dirty file set. No runtime, Scheduler, credential, real-account,
+  or order activity was performed.
+
+## 2026-09-22 — Dashboard LF checkout policy and Canonical publication
+
+- Dashboard LF checkout policy was implemented in `.gitattributes` and
+  delivered in commit `d6c85d6baa2e2254f09147dce6e8354d0186731d`; focused
+  dashboard tests passed `14` tests, and PR #23 merged into `master` at
+  `42a62f4d6953d5f962e0456113c4a891cdc1e19c` with successful CI checks.
+- The clean post-merge worktree completed the full pytest suite with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`; the
+  checkout policy read back as `eol: lf`, with `CRLF=0`, `BareCR=0`, and a
+  trailing LF in `dashboard/index.html`.
+- Canonical publication completed through operation ID
+  `c1f4b1a6-7a7f-4ee5-9a3f-90f1a7b52c61`; the published
+  `CURRENT_STATE.md` candidate SHA-256 is
+  `281ED0ADB6F25222FA45CA667B6AA8882983B2BEB99EE8AE054D79F48FB403AD`.
+  No runtime, Scheduler, credential, real-account, or order activity was
+  performed.
+
+## 2026-09-22 — PR #24 post-merge verification
+
+- PR #24 merged into `master` at
+  `be74e7bd19a386172f30303439baf209350d6346`; all recorded Quality,
+  Ubuntu compatibility, and Windows validation checks passed.
+- A clean detached worktree at the merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`.
+- The dashboard LF policy remained verified as `eol: lf` with `CRLF=0`,
+  `BareCR=0`, trailing LF, and no UTF-8 BOM. Test-created paths produced
+  access-denied visibility warnings; no cleanup or permission change was
+  performed. No runtime, Scheduler, credential, real-account, or order
+  activity was performed.
+
+## 2026-09-22 — PR #25 Canonical publication
+
+- The PR #25 post-merge verification record was published to Canonical
+  `CURRENT_STATE.md` through operation ID
+  `a5c7e4d1-82b6-4f39-9a10-6d3e8c2f7b41`; the final target SHA-256 is
+  `0308054129D260070C7AC2709D97345F86FAA32FFA2CCFF272B52D67B8805832`.
+- Post-Apply verification confirmed append suffix equality, `BareCR=0`, EOF
+  LF, no UTF-8 BOM, and no operation-specific lock, backup, or temp artifact.
+- No runtime, Scheduler, credential, real-account, or order activity was
+  performed.
+
+## 2026-09-22 — PR #26 post-merge verification
+
+- PR #26 merged into `master` at
+  `12dc0704e28ddc4125d688b4a3aef6a36a486d45`; all recorded Quality,
+  Ubuntu compatibility, and Windows validation checks passed.
+- A clean detached worktree at the merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`.
+- The dashboard LF policy remained verified as `eol: lf` with `CRLF=0`,
+  `BareCR=0`, trailing LF, and no UTF-8 BOM. Test-created paths produced
+  access-denied visibility warnings; no cleanup or permission change was
+  performed. No runtime, Scheduler, credential, real-account, or order
+  activity was performed.
+
+## 2026-09-22 — PR #27 post-merge verification
+
+- PR #27 merged into `master` at
+  `5a3f9c9f8a6bd45730480699c7e7ad28fb79200e`; all recorded Quality,
+  Ubuntu compatibility, and Windows validation checks passed.
+- A clean detached worktree at the merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`.
+- The dashboard LF policy remained verified as `eol: lf` with `CRLF=0`,
+  `BareCR=0`, trailing LF, and no UTF-8 BOM. Test-created paths produced
+  access-denied visibility warnings; no cleanup or permission change was
+  performed. No runtime, Scheduler, credential, real-account, or order
+  activity was performed.
+
+## 2026-09-22 — PR #28 post-merge verification
+
+- PR #28 merged into `master` at
+  `74ca2e7cc479239a0b004d5ab53068e560d099dd`; all recorded Quality,
+  Ubuntu compatibility, and Windows validation checks passed.
+- A clean detached worktree at the merge commit completed full pytest with
+  `460 passed, 4 skipped, 1 xfailed, 13 warnings, 13 subtests passed`.
+- The dashboard LF policy remained verified as `eol: lf` with `CRLF=0`,
+  `BareCR=0`, trailing LF, and no UTF-8 BOM. Test-created paths produced
+  access-denied visibility warnings; no cleanup or permission change was
+  performed. No runtime, Scheduler, credential, real-account, or order
+  activity was performed.
+
+## 2026-09-22 — KR/US mock read-only burn-in observation
+
+- A 30-minute read-only burn-in observation covered `kr_mock` and `us_mock`
+  from `13:02:13` to `13:32:36` KST at 60-second intervals, for 30 polls.
+- PID, instance ID, supervisor launch ID, mutex-backed supervisor liveness,
+  worker state, and activity state remained stable: KR PID `21192`, US PID
+  `19980`, both `liveness=confirmed`, `running=true`, `state=RUNNING`, and
+  `activityState=expected-idle`. Both process heartbeats advanced throughout
+  the observation.
+- KR and US control snapshots remained unchanged. Their observed SHA-256
+  values were respectively
+  `945B75B3AC48058B6B33C56030C93B38985C5B3EAB9B3EFB2413BB84C35FB8AF` and
+  `7699EF547DC730558CF609EFE379D81724D9D87B64708230C37388BEFCA37A4F`.
+- No fixed-port degraded marker appeared for either mock account. The US
+  order-attempt database SHA-256 remained
+  `644DC911CC9AD040A6198B7336FE9308B867C02F76CBF2CEBB5EF4BE91E5B69B`, with
+  `0` total and `0` unresolved order attempts at the final read.
+- The comparison reported `static_anomalies=0` and `heartbeat_issues=0`.
+  No worker, Scheduler, network, account, credential, order, file, or
+  permission state was changed. This is limited mock operational observation,
+  not real-account validation or a claim of indefinite runtime health.
+
+## 2026-09-22 — PR #30 mock burn-in Canonical publication
+
+- The approved KR/US mock read-only burn-in append was published to
+  `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` through the fixed-target
+  publisher under operation ID
+  `d5b3f6aa-2e5d-4a8f-9f0f-3a2c7e1b64d9`.
+- Post-Apply readback verified candidate SHA-256
+  `5F6DC4993FB1EFA3A354DC855F43DEA21A06067AC355059F06C2225D56C05788`,
+  strict UTF-8, `CRLF=3`, `BareCR=0`, EOF LF, no UTF-8 BOM, append suffix
+  equality, and absence of the operation-specific lock, backup, and temp
+  artifacts.
+- No Git, runtime, Scheduler, network, account, credential, or order activity
+  was performed for this publication record.
+
+## 2026-09-23 — Documentation routing and next-chat handoff review
+
+- Read the repository instructions, Canonical current-state record, repository
+  progress log, Canonical publication workflow, and project-analysis baseline
+  to classify their documentation roles.
+- Confirmed the documented routing: routine repository progress belongs in
+  `docs/PROJECT_PROGRESS.md`; `docs/PROJECT_ANALYSIS.md` is a static source
+  analysis baseline; Canonical updates are reserved for stable, meaningful
+  milestones and require separate authorization.
+- Recommended using the repository progress log for routine session handoffs,
+  preserving historical records, and creating or refreshing a Canonical
+  handoff only when a current handoff is specifically needed.
+- PR #32 merge and remote post-merge verification details were supplied by the
+  user in this conversation. They were not independently rechecked during this
+  update and are not recorded here as independently verified GitHub facts.
+- This entry records documentation-routing review only. Read-only
+  `git diff` and `git diff --check` inspected the target document.
+  No source or test files were changed, and no tests were run. No Git
+  state-changing or delivery actions, CI, Canonical publication, runtime,
+  Scheduler, network, account, credential, or order actions were performed.
+
+## 2026-09-23 — P0 backlog current-state review
+
+- Reassessed the P0 list above against the current source, tests, configuration,
+  and later repository and Canonical records. The original list is retained as
+  a historical checkpoint; these findings clarify its current status.
+- The unmanaged-process scan failure item is resolved in the current source:
+  stop/kill return `status_indeterminate` with code 8 and
+  `reason=unmanaged-scan-failed`. Existing tests cover both paths and verify
+  that termination and PID cleanup do not proceed after scan failure. Tests
+  were not run during this review.
+- Atomic persistence work is recorded for startup status, dashboard/control
+  state, pause-clear history, and selected engine state. No exhaustive inventory
+  of all shared-state writes was performed, so the broader item remains
+  incomplete pending a bounded inventory.
+- `src/core/engine.py` currently has 2,689 physical lines. Characterization
+  coverage and `_ReconciliationCoordinator` separation are recorded, including
+  a historical focused result of `27 passed`; further separation scope remains
+  to be defined.
+- Dependency and quality work remains incomplete. Development requirements
+  specify minimum versions, Ruff is advisory, Mypy is scoped to
+  `src/core/process_inventory.py`, and coverage has no configured threshold.
+  The tracked-path check found no lockfile under the checked conventional
+  names; this was not a broader packaging audit.
+- The old blanket statement that Canonical updates remain pending because of a
+  path-boundary error is stale as a current summary: later publication records
+  appear in the repository and Canonical files. This review did not publish or
+  independently revalidate those earlier operations.
+- This was a read-only review and documentation update. No tests were run; no
+  Git state-changing or delivery operations, CI, Canonical publication,
+  runtime, Scheduler, network, account, credential, or order actions occurred.
+
+## 2026-09-23 — Orphan-cleanup crash-recovery design review
+
+- Read `AGENTS.md`, Canonical `CURRENT_STATE.md`, `docs/PROJECT_PROGRESS.md`, and `docs/CANONICAL_PUBLICATION_WORKFLOW.md` before reviewing the cleanup path.
+- Read-only inspection covered `src/core/orphan_cleanup.py`, its relevant `src/core/engine.py` and `src/main.py` call paths, balance normalization in `src/core/reconciliation.py` and `src/core/us_market.py`, and `tests/test_orphan_cleanup.py`.
+- Confirmed the existing orphan-candidate rule: a complete recognized broker balance with zero quantity, no unresolved order, and at least one tranche base, symbol control file, or open/pending lifecycle. The sweep requires two confirmations. Dashboard settings profiles enumerate symbols but do not independently qualify a symbol for cleanup.
+- Static review found that `_reconcile_balance()` passes the normalization `recognized` flag as the cleanup completeness flag, while the inspected recognizers check for balance-list field presence. Malformed list contents may therefore require stricter completeness validation before cleanup can treat an absent symbol as zero. The default shared-balance path may also reuse a cached response.
+- The per-account balance gate is shared by symbol engines and the balance monitor. The inspected gate serializes balance fetches, while the cleanup state file is also account-scoped; account-wide serialization of cleanup state updates was not present in the inspected path. Concurrent sweeps may race on confirmation and intent state.
+- Proposed design only: preserve the existing candidate rule; count two distinct complete broker observations; serialize account-scoped confirmation and cleanup state; persist a versioned cleanup intent before the first destructive step; use deterministic archive destinations and idempotent replay; and require a new complete broker balance plus a fresh no-unresolved-orders check before replay. Settings-only profiles remain ineligible, and changed or conflicting state should stop for manual review.
+- Identified focused regression cases for settings-only preservation, duplicate observation suppression, intent-before-mutation, interrupted-step replay, fixed archive destinations, invalid or nonzero balance, unresolved-order/read failures, profile changes, and concurrent cleaners.
+- This was a proposed design and static review only. No source or test files were changed; no tests were run. No Git state-changing or delivery actions, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order actions were performed.
+
+## 2026-09-23 — Orphan-cleanup crash-recovery and exchange-scoped balance implementation successor
+
+- Implemented the reviewed orphan-cleanup crash-recovery design in `src/core/orphan_cleanup.py`, `src/core/engine.py`, and `src/core/kiwoom_client.py`. The candidate rule remains unchanged: dashboard settings profiles enumerate symbols but do not independently qualify them for cleanup.
+- Added account-scoped cleanup serialization, persisted balance-generation confirmation state, versioned pending cleanup intents, deterministic control-file archive destinations, replay final-state checks, and manual-review retention for conflicting or changed cleanup targets.
+- Cleanup balance observation now requests each supported broker venue separately: KRX and NXT for real KR accounts, KRX for KR mock accounts, and ND, NY, and NA for US accounts. A positive quantity in any venue blocks zero-balance cleanup; duplicated venue rows are not summed.
+- Added fail-closed validation for explicit venue responses, pagination completion, holding-list rows, quantities, and market-valid symbol strings. An incomplete cleanup observation, nonzero quantity, unresolved order, or unresolved-order inspection failure blocks replay and retains the pending intent.
+- Corrected the active reconciliation path so an unrecognized normal balance records a fail-closed cleanup sweep. Headerless empty holdings pages may complete; a nonempty page without an explicit continuation indicator is rejected.
+- Updated `tests/test_orphan_cleanup.py`, `tests/test_manual_tranche_lifecycle.py`, and `tests/test_tranche_rebuild_ambiguous.py` with focused crash-recovery, venue coverage, malformed response, and current shared-balance fixture coverage.
+- Statically reviewed the changed cleanup, engine, client, and test paths. A local pytest run over `tests/test_orphan_cleanup.py`, `tests/test_manual_tranche_lifecycle.py`, `tests/test_reconciliation_clearance.py`, `tests/test_reconciliation_fail_closed.py`, `tests/test_tranche_rebuild_ambiguous.py`, and `tests/test_us_market.py` completed with `109 passed, 13 warnings in 6.17s`. The warnings came from `pandas_market_calendars`.
+- CI-verified, committed, pushed, merged, canonically published, and operationally validated are `INCOMPLETE`. Git and PR state were not inspected in this implementation sequence. No CI, Canonical publication, runtime, Scheduler, account, credential, or order action was performed.
+
+## 2026-09-24 — Orphan-cleanup writer lock integration successor
+
+- Statically mapped cleanup-target writers in `src/core/orphan_cleanup.py`, `src/core/engine.py`, `src/main.py`, and `dashboard/dashboard_server.py`. The separate mock dashboard control snapshot remains outside this cleanup-target lock contract. A broader tools search encountered access-denied directories, so operator-tool coverage remains INCOMPLETE.
+- Added a shared account cleanup lock helper using the existing `orphan_cleanup_<account>.lock` path. Reentrant acquisition by one thread uses one OS lock handle; other threads and processes serialize on the same path.
+- Wrapped engine tranche-base read-modify-write operations, lifecycle writes, confirmed-closure settings removal, full-close state retirement, dashboard settings updates, and real-account symbol-control initialization in this lock. Account lock acquisition precedes the engine tranche in-process lock.
+- Lifecycle persistence now merges only the engine's symbol into the latest account file while holding the lock. A changed same-symbol disk state or malformed lifecycle object raises instead of overwriting it.
+- Updated the existing tranche-base test fixture with the account ID and data directory required by the shared lock.
+- The four source files and one fixture were changed. Exact preimage and postimage SHA-256 values were checked for each source write. Static Python syntax parsing succeeded for the four source files; they remain UTF-8 with LF and EOF LF. No local test suite was run for this successor.
+- Live Kiwoom venue completeness, independent operator writers, cross-process runtime behavior, CI, Git delivery, Canonical publication, and operational validation remain INCOMPLETE. No runtime, Scheduler, network, account, credential, or order action was performed.
+- Engine tranche-base writes also compare the current on-disk lifecycle with the engine's saved same-symbol baseline under the account lock; a conflicting cleanup or lifecycle change stops the cache write.
+
+## 2026-09-24 — Orphan-cleanup writer lock regression verification
+
+- The first seven-file pytest run exposed one regression: after the orphan cleaner persisted a closed lifecycle, the engine retained a stale lifecycle baseline and blocked a valid dashboard reactivation.
+- Updated the cleanup-completion path to reload and validate the persisted closed lifecycle under the account lock before refreshing the engine baseline.
+- Re-ran `tests/test_orphan_cleanup.py`, `tests/test_manual_tranche_lifecycle.py`, `tests/test_reconciliation_clearance.py`, `tests/test_reconciliation_fail_closed.py`, `tests/test_tranche_rebuild_ambiguous.py`, `tests/test_us_market.py`, and `tests/test_tranche_base_persistence.py`: 114 passed, 13 warnings in 5.28s. Warnings came from `pandas_market_calendars`.
+- This is local pytest evidence only. CI, Git delivery, live Kiwoom response coverage, independent operator-writer coverage, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Emergency-stop settings writer joins the cleanup lock
+
+- Read-only writer inventory identified `ops/emergency_stop.ps1` as a direct writer of `dashboard_settings_<account>.json` without the account cleanup lock. The script's control-state target is separate from the orphan-cleanup targets.
+- The emergency-stop script now locks byte zero of `orphan_cleanup_<account>.lock` before reading or writing settings. It rechecks target existence under the lock, keeps the control-disable operation first, and fails explicitly after a bounded two-second lock wait. The lock handle is released and disposed on every acquired path.
+- Added a temporary-repository regression case that holds the Python cleanup lock in one process while invoking the PowerShell script in another. It confirms that control is disabled, settings remain unchanged on lock timeout, and a subsequent invocation completes after release.
+- Focused local pytest over `tests/test_emergency_stop_allowlist.py` completed with 10 passed in 7.16s. This verifies local Python/PowerShell byte-range lock interoperability and the script's existing allowlist paths in isolated mock fixtures.
+- No live account, credential, order, Scheduler, service, or runtime operation was performed. CI, Git delivery, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Bounded operator-writer inventory follow-up
+
+- Read-only search covered operational scripts under `ops` and 15 top-level `tools` scripts for cleanup-target names and file-write calls. The only production cleanup-target writer found in this scope was `ops/emergency_stop.ps1`, now covered by the shared account lock.
+- `tools/dashboard_isolated_validation_20260917_v1.py` writes dashboard settings/control fixtures under its isolated validation root. Installer writes found under `ops/installer` target environment, task configuration, or a temporary probe, not orphan-cleanup targets.
+- Deeper `tools` content remains SEARCH_INCOMPLETE because access was denied for pytest/evidence directories. This search does not establish global absence of another writer.
+
+## 2026-09-24 — Combined cleanup-lock regression run
+
+- Ran the seven orphan-cleanup, lifecycle, reconciliation, tranche rebuild, market, and tranche-base persistence test files together with `tests/test_emergency_stop_allowlist.py`.
+- The combined local pytest run completed with 124 passed, 13 warnings in 12.07s. Warnings came from `pandas_market_calendars`.
+- This confirms the combined selected local regression scope only. CI, full-repository pytest, Git delivery, live Kiwoom responses, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Repository pytest coverage follow-up
+
+- Attempted the repository test suite with the default static coverage test enabled. Collection reached `tests/test_notify_interface_coverage.py`, whose recursive source scan did not produce further progress during the bounded observation window; the run was interrupted, so it has no completed suite result.
+- Re-ran the discovered suite excluding only `tests/test_notify_interface_coverage.py`: 480 tests were collected; result was `2 failed, 473 passed, 4 skipped, 1 xfailed, 14 warnings` in 69.80 seconds. This is partial local pytest evidence, not a full-suite pass.
+- `tests/test_retry_boundary_reproduction.py::RetryBoundaryReproductionTest::test_real_post_retry_exhaustion_exception_type` failed because the observed exception was `TypeError` while the test expected `RetryableError`; the stack showed the mocked `headers()` call receiving `cont_yn`. Cause and relation to the cleanup-lock changes are not established.
+- `tests/test_worker_killswitch.py::SupervisorKillTests::test_stop_stops_mock_lock_holder_and_releases_lock` failed because the stop operation returned 6 with a forced-stop payload reporting `stopped: false` and `running: true`. Cause and relation to the cleanup-lock changes are not established. No process inspection or termination follow-up was performed.
+- The two failures require separate diagnosis. The skipped recursive coverage test, CI status, Git delivery, live Kiwoom response coverage, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Retry fixture and Windows supervisor stop follow-up
+
+- The retry-exhaustion test fixture supplied a `_headers` replacement that accepted only the API ID, while `KiwoomClient._post_once()` now passes `cont_yn` and `next_key`. Updated only that replacement signature in `tests/test_retry_boundary_reproduction.py`; the retry test then passed.
+- A focused pre-change rerun reproduced the Windows supervisor stop failure: the retry test passed, while the mock lock-holder stop test returned 6 with `running: true` and `stopped: false`. The account-specific supervisor log recorded `taskkill` return code 1. A separate temporary Python child confirmed that `taskkill /PID <child> /T /F` returned `ERROR: Access denied` in this environment; the diagnostic child was then killed and waited for by its parent.
+- Added to `src/worker_supervisor.py::stop()` the same Windows `SIGTERM` fallback already present in `kill()`, used only when the target PID remains alive after `taskkill`. The existing PID and account-mutex exit confirmation still controls success; failure remains fail closed. The source preimage SHA-256 was `C27EE333FB94ABF2A749EC614C462894E63F8F071AF5704EFD39671FB37AA37F` and the exact postimage SHA-256 was `065F7DF32A222BBB942E558D6B8A27888E4C9E68BC2ED8DAC5E58636527A6BFA`.
+- The normal patch tool rejected the source path as containing a reparse point. An initial exact-byte writer received `Permission denied`; a subsequent explicitly scoped elevated write succeeded with the preimage and unique-anchor checks. The verified source postimage remains strict UTF-8, LF only, with EOF LF.
+- One test command used an incorrect supervisor test class name and collected no tests. The corrected focused run of the retry test, both Windows mock kill/stop tests, and the supervisor stop escalation unit test completed with `4 passed in 14.36s`. The new stop log recorded `taskkill` return code 1 followed by the `SIGTERM` fallback.
+- This is local isolated-mock evidence. The earlier 480-item suite result remains historical and was not rerun after this change. CI, Git delivery, live process behavior, Canonical publication, and operational validation remain INCOMPLETE.
+
+## 2026-09-24 — Full local suite after Windows stop and retry repairs
+
+- The previously excluded static notification coverage test recursively traversed generated evidence, caches, and virtual environments beneath `tools`. Restricted its `tools` search to top-level Python scripts while retaining recursive searches under `src` and `dashboard`. The two coverage tests then passed in 0.47s. The test source preimage SHA-256 was `AE894D949B03FEADFE1772BD00C3963CB30AB31B9177F2FF67A91652ABBE4B36`; exact postimage SHA-256 was `B8279653842A5B2CBCB67116A7F195987719D4653350111E3B1708B959482C3D`.
+- Re-ran the prior 480-item suite with only `tests/test_notify_interface_coverage.py` excluded after the retry and supervisor repairs: `475 passed, 4 skipped, 1 xfailed, 14 warnings in 60.07s`.
+- Ran the complete repository test suite with no excluded test files: `477 passed, 4 skipped, 1 xfailed, 14 warnings in 60.98s`. The warnings originated in `pandas_market_calendars`. This establishes a passing full local pytest run for the current checkout.
+- All test runs used an isolated writable basetemp and disabled pytest cache writes. The changed files in this follow-up are `src/worker_supervisor.py`, `tests/test_retry_boundary_reproduction.py`, `tests/test_notify_interface_coverage.py`, and this appended progress document.
+- This is local test evidence. Git/PR state, CI, live worker stop behavior, live Kiwoom response completeness, independent writer coverage, Canonical publication, and operational validation remain INCOMPLETE. No live account, credential, order, Scheduler, or production runtime operation was performed.
+
+## 2026-09-24 — PR #35 CI failure repair
+
+- PR #35 required Windows CI reported two failures in `test_replay_is_blocked_by_each_fail_closed_broker_condition`: replay was blocked as stale when intent creation and the simulated balance-fetch start received equal timestamps. The test now supplies a deterministic fetch-start time after the intent in its immediate replay scenarios. Production replay freshness rules were not changed.
+- PR #35 Ubuntu CI reported one failure in `test_cleanup_lock_contention_disables_control_and_preserves_settings`: on Linux, opening the held cleanup lock file itself raised an `IOException` before the prior retry loop. `Enter-CleanupTargetLock` now retries both file open and byte-range lock for up to 2000 ms, disposes failed streams, retries only the underlying `IOException`, and otherwise fails closed.
+- Changed files: `ops/emergency_stop.ps1` (SHA-256 `BD0FEBA902472244EA40FCC512A0C5AE92643EFEBF78D03B09A3FE5D8F009564`) and `tests/test_orphan_cleanup.py` (SHA-256 `00ACC21E7B315D17099C08276E3706D62E48BCB56D1021F80EE4CC71E894A5DA`). Both postimages are strict UTF-8 without BOM, LF only, and have EOF LF. `git diff --check` passed for both files.
+- The repository `.venv` could not collect tests because its `_ssl` extension could not load. With the verified system Python 3.14 interpreter, `tests/test_orphan_cleanup.py` and `tests/test_emergency_stop_allowlist.py` completed with 28 passed and 9 subtests passed in 9.92 seconds, using an isolated basetemp and disabled pytest cache writes.
+- This is a focused local test result. The PR CI result has not yet been refreshed after these changes. Full-suite retesting, Git delivery, Canonical publication, live Kiwoom responses, runtime, Scheduler, account, credential, and order validation remain INCOMPLETE at this point.
+
+## 2026-09-24 — PR #35 CI-verified delivery successor
+
+- The preceding repair record is a historical checkpoint. After it, the three scoped files `docs/PROJECT_PROGRESS.md`, `ops/emergency_stop.ps1`, and `tests/test_orphan_cleanup.py` were committed as `1512b007aa7d081ea4501697d79bcd46d3000380` and pushed to `codex/startup-sync-failure-characterization` at `git@github.com:ljyljy1212A/kiwoom-autotrade.git`. The staged set contained only those three files, and `git diff --cached --check` passed.
+- The focused local pytest run using system Python completed with 28 passed and 9 subtests passed in 9.92 seconds for `tests/test_orphan_cleanup.py` and `tests/test_emergency_stop_allowlist.py`. An earlier attempt with the repository `.venv` failed before collection because `_ssl` could not load; it is not a product test result. No full local suite was run for this repair.
+- GitHub Actions push run `35940357649` and pull_request run `35940360961` both completed successfully for head `1512b007aa7d081ea4501697d79bcd46d3000380`. The PR check query showed all six checks passing: Windows validation, Ubuntu compatibility, and Quality advisory for each run. At the last direct PR query, PR #35 was OPEN, MERGEABLE, and pointed to that head commit.
+- The first `gh pr checks` query returned HTTP 401 while `GH_TOKEN` was present in the command environment. Removing that variable only in a subsequent command process allowed the CI query; no stored credential or user setting was changed.
+- Other tracked changes remained outside the scoped commit. The untracked inventory was incomplete because Git could not read some directories. This successor edit itself is repository-local and is not staged, committed, pushed, merged, or canonically published under this request. Live Kiwoom response completeness, independent operator-writer coverage, runtime, Scheduler, account, credential, order, and operational validation remain INCOMPLETE.
+
+## 2026-09-25 — PR #35 merge and post-merge CI successor
+
+- PR #35 was merged into `master` with merge commit `d824b1ccf2009cdcc22c9ac69d05cb3e8463fea1`. Its source head was `1512b007aa7d081ea4501697d79bcd46d3000380` on `codex/startup-sync-failure-characterization`; the source branch was retained.
+- All six PR checks had passed before merge. The automatic `master` push run `36064356942` for merge commit `d824b1ccf2009cdcc22c9ac69d05cb3e8463fea1` completed with `success`.
+- The PR description reported full local pytest as `477 passed, 4 skipped, 1 xfailed, 14 warnings`; this is pre-merge local test evidence. No separate local test run was performed after merge.
+- Live Kiwoom venue completeness, coordination with non-cooperating external writers, and operational validation remain `INCOMPLETE`.
+- This successor is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No tests, runtime, Scheduler, account, credential, or order actions were performed for this update.
+
+## 2026-09-25 — PR #35/#36 Canonical publication successor
+
+- Prepared the append candidate in `tools/CURRENT_STATE_20260925_PR35_PR36_DELIVERY_APPEND_CANDIDATE.md` (SHA-256 `2C30588FE12516D861BB9E9A8AFE4888D0E0952639C499E455AF7973D8FDCB65`). The candidate records PR #35 merge `d824b1ccf2009cdcc22c9ac69d05cb3e8463fea1`, PR #36 merge `f8277b8c35c98d4acffc643565dd207add960853`, their reported CI results, and remaining verification boundaries.
+- Canonical preflight passed for `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md` using operation ID `8e822287-142e-45c0-acac-3e5b0b2f9885`. The target preimage SHA-256 was `5F6DC4993FB1EFA3A354DC855F43DEA21A06067AC355059F06C2225D56C05788`; the expected candidate SHA-256 was `5D856539CDCB93CCC65719BF9F622B48D07D0F2BD0EBE15174D1591E72A8B1B5`.
+- The separately approved Canonical Apply completed with `Publish: PASS`. Readback confirmed 70,929 bytes and the expected candidate SHA-256. The original 69,498-byte prefix hash matched the preimage; the appended suffix matched the candidate byte for byte. The result is strict UTF-8, has no BOM, ends in LF, and preserves three pre-existing CRLF sequences. Publisher lock, backup, and temporary files were absent after completion.
+- This progress successor is a local documentation edit only; it has not been staged, committed, or pushed. No tests, new CI, runtime, Scheduler, account, credential, or order actions were performed for this update. Live Kiwoom venue completeness and coordination with non-cooperating external writers remain unverified. Access-denied directories continue to make the untracked-file inventory incomplete.
+
+## 2026-09-25 — PR #37 merge and master CI successor
+
+- PR #37, `docs: record PR #35/#36 canonical publication`, merged into `master` at `7c31f221cfcab7087534db4f0ca09aa3801ca9cc`. Its head was `5dcd78b126b6fe248a2b5bbef330e6e720514e62`; the base was `f8277b8c35c98d4acffc643565dd207add960853`.
+- PR pull_request CI run `36072983874` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory. The automatic `master` push CI run `36073399328` also completed successfully for all three jobs.
+- The merged change contains this progress record and the 26-line Canonical append candidate, for 33 additions across two files. The Canonical `CURRENT_STATE.md` publication was verified in the preceding successor; this delivery follow-up made no Canonical changes.
+- No local tests were run after the merge. Live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified. No cleanup or permission changes were made; access-denied directories still prevent a complete untracked-file inventory.
+- This successor is a repository-local progress update only. No further Git delivery, CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #38 merge and master CI successor
+
+- PR #38, `docs: record PR #37 merge and master CI`, merged into `master` at `5a0984bb291600bd6ce7638dbe0a9bb1b7c0070a`. Its head was `96a825539c98f70f6dfbd00e89d77f922feee8f5`; the base was `7c31f221cfcab7087534db4f0ca09aa3801ca9cc`.
+- PR pull_request CI run `36074989371` and automatic `master` push CI run `36075666741` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory passed in both runs.
+- This successor records repository delivery and CI evidence only. No local tests were run for this documentation update; live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified.
+- This is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No additional CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #39 merge and master CI successor
+
+- PR #39, `docs: record PR #38 merge and master CI`, merged into `master` at `0bea33c708fe227aa91bb8600195b4e9b17f33e5`. Its head was `8da3a7fe9daa8d790b5884d62c291023fe29f13f`; the base was `5a0984bb291600bd6ce7638dbe0a9bb1b7c0070a`.
+- PR pull_request CI run `36076817779` and automatic `master` push CI run `36077146320` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory passed in both runs.
+- This successor records repository delivery and CI evidence only. No local tests were run for this documentation update; live Kiwoom venue completeness, coordination with non-cooperating external writers, runtime, Scheduler, account, credential, order, and operational validation remain unverified.
+- This is a repository-local progress update only. It has not been staged, committed, pushed, or canonically published. No additional CI, Canonical Apply, runtime, Scheduler, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #40 merge and master CI successor
+
+- PR #40, `docs: record PR #39 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `928d804c8061ea6e3f1410f650e367d24357f8b1` against `master` at `0bea33c708fe227aa91bb8600195b4e9b17f33e5`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 7 additions.
+- A direct PR metadata query returned `open` and `mergeable: true`. The pull_request workflow run `36078489381` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #40 was merged with the `merge` method after its head SHA was rechecked as `928d804c8061ea6e3f1410f650e367d24357f8b1`. The merge commit is `c4275d3ef210828f579b5178b4fc2ae83159ffe0`.
+- The automatic `master` push workflow run `36078729943` for merge commit `c4275d3ef210828f579b5178b4fc2ae83159ffe0` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run in this conversation. This successor records GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update. No Git stage, commit, or push was performed for this entry. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-25 — PR #41 merge and master CI successor
+
+- PR #41, `docs: correct PR #40 progress successor placement`, was created from `codex/startup-sync-failure-characterization` at head `cacc35c0740ad8f5d66562988e9b9ea338438d81` against `master` at `c4275d3ef210828f579b5178b4fc2ae83159ffe0`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 9 additions.
+- The PR pull_request workflow run `36081344995` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #41 was merged with the `merge` method after its head SHA was rechecked as `cacc35c0740ad8f5d66562988e9b9ea338438d81`. The merge commit is `b630310e134d48baee05d51273c7f144a51a1ff4`.
+- The automatic `master` push workflow run `36082068579` for merge commit `b630310e134d48baee05d51273c7f144a51a1ff4` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation correction. This successor records GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-25 — PR #42 merge and master CI successor
+
+- PR #42, `docs: record PR #41 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `81e40bd9da99439502acae0aed263df1c24689ff` against `master` at `b630310e134d48baee05d51273c7f144a51a1ff4`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 9 additions.
+- The PR pull_request workflow run `36084289257` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #42 was merged with the `merge` method after its head SHA was rechecked as `81e40bd9da99439502acae0aed263df1c24689ff`. The merge commit is `f3a9065f9bd0abb425d398fbb496be7416330009`.
+- The automatic `master` push workflow run `36085041082` for merge commit `f3a9065f9bd0abb425d398fbb496be7416330009` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+## 2026-09-26 — PR #43 merge and master CI successor
+
+- PR #43, `docs: record PR #42 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `42f7682b004cd3d5533b1703c6718f97bc5bec1e` against `master` at `f3a9065f9bd0abb425d398fbb496be7416330009`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 8 additions.
+- The PR pull_request workflow run `36091887454` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #43 was merged with the `merge` method after its head SHA was rechecked as `42f7682b004cd3d5533b1703c6718f97bc5bec1e`. The merge commit is `0790ed812c9cf101fba09859b3c1a6d3626d2adb`.
+- The automatic `master` push workflow run `36092192061` for merge commit `0790ed812c9cf101fba09859b3c1a6d3626d2adb` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+## 2026-09-26 — PR #44 merge and master CI successor
+
+- PR #44, `docs: record PR #43 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `8f905c3cf7c5628344ba260957ad9b8d62758b4e` against `master` at `0790ed812c9cf101fba09859b3c1a6d3626d2adb`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 8 additions.
+- The PR pull_request workflow run `36180335168` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #44 was merged with the `merge` method after its head SHA was rechecked as `8f905c3cf7c5628344ba260957ad9b8d62758b4e`. The merge commit is `0999bad372d5cd2a71a647348da1a5a43432abbc`.
+- The automatic `master` push workflow run `36181181633` for merge commit `0999bad372d5cd2a71a647348da1a5a43432abbc` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+## 2026-09-26 — PR #45 merge and master CI successor
+
+- PR #45, `docs: record PR #44 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `8c7dde56d01aba0674dd355fa4350559511dad60` against `master` at `0999bad372d5cd2a71a647348da1a5a43432abbc`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 8 additions.
+- The PR pull_request workflow run `36182149331` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #45 was merged with the `merge` method after its head SHA was rechecked as `8c7dde56d01aba0674dd355fa4350559511dad60`. The merge commit is `ccac9e666249789189e28aebaa347bb6321f17ab`.
+- The automatic `master` push workflow run `36182647295` for merge commit `ccac9e666249789189e28aebaa347bb6321f17ab` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+## 2026-09-26 — PR #46 merge and master CI successor
+
+- PR #46, `docs: record PR #45 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `15baad6a1b41b86378fd6c71822d23f6d047d24f` against `master` at `ccac9e666249789189e28aebaa347bb6321f17ab`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 8 additions.
+- The PR pull_request workflow runs `36184286058` and `36184407227` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #46 was merged with the `merge` method after its head SHA was rechecked as `15baad6a1b41b86378fd6c71822d23f6d047d24f`. The merge commit is `a8497c361cd144e996559bc60a772cf17973faea`.
+- The automatic `master` push workflow run `36184766756` for merge commit `a8497c361cd144e996559bc60a772cf17973faea` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-26 — PR #47 merge and master CI successor
+
+- PR #47, `docs: record PR #46 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `29495fa7b5927c2d606424eb848f16b85c6d5fa2` against `master` at `a8497c361cd144e996559bc60a772cf17973faea`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 8 additions.
+- The PR pull_request workflow runs `36185751036` and `36185838565` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #47 was merged with the `merge` method after its head SHA was rechecked as `29495fa7b5927c2d606424eb848f16b85c6d5fa2`. The merge commit is `6c7a7587fefc7d7c0321bea72f197d0afce50d3f`.
+- The automatic `master` push workflow run `36186144884` for merge commit `6c7a7587fefc7d7c0321bea72f197d0afce50d3f` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-26 — PR #48 merge and master CI successor
+
+- PR #48, `docs: record PR #47 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `fc4ec00b7795bd97d51a8f26f714fc816232a627` against `master` at `6c7a7587fefc7d7c0321bea72f197d0afce50d3f`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 9 additions.
+- The PR pull_request workflow runs `36187100180` and `36187164801` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #48 was merged with the `merge` method after its head SHA was rechecked as `fc4ec00b7795bd97d51a8f26f714fc816232a627`. The merge commit is `dbd5e7c42fdaad9bf7ffd39c81a2c84035b79bb6`.
+- The automatic `master` push workflow run `36187560164` for merge commit `dbd5e7c42fdaad9bf7ffd39c81a2c84035b79bb6` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-26 — PR #49 merge and master CI successor
+
+- PR #49, `docs: record PR #48 merge and master CI`, was created from `codex/startup-sync-failure-characterization` at head `789ddde5dcc4018856e0fa3b3c8c5bb49011f036` against `master` at `dbd5e7c42fdaad9bf7ffd39c81a2c84035b79bb6`. Its change set contained one file, `docs/PROJECT_PROGRESS.md`, with 9 additions.
+- The PR pull_request workflow runs `36188407626` and `36188479408` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #49 was merged with the `merge` method after its head SHA was rechecked as `789ddde5dcc4018856e0fa3b3c8c5bb49011f036`. The merge commit is `49b2ec708ce155ac55a9b3eb9da1e30d7d9d7517`.
+- The automatic `master` push workflow run `36189007005` for merge commit `49b2ec708ce155ac55a9b3eb9da1e30d7d9d7517` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- No local tests were run for this documentation successor. This record captures GitHub PR delivery and CI evidence only; it does not establish local working-tree state or operational validation.
+- This successor is a repository-local progress update only. No Canonical Apply, runtime, Scheduler, network, account, credential, or order action was performed for this entry.
+
+## 2026-09-27 — Startup-status failure-path test coverage
+
+- Added focused tests in `tests/test_telegram_control_bot.py` and `tests/test_heartbeat_alert_watchdog.py` for a mocked `PermissionError` from startup-status atomic publication. They verify that Telegram polling and watchdog worker checks do not begin after the write fails.
+- The two new Windows tests passed locally with an isolated pytest basetemp outside the checkout: `2 passed in 0.25s` (Python 3.14.7, pytest 9.1.1). This is a focused local result, not CI or operational validation.
+- After transfer to a clean branch based on PR #50's merge commit, the related focused Windows suite passed with an isolated external basetemp: `59 passed in 3.28s`.
+- The patch tool twice reported `path contains a reparse point` for the Telegram test file. Read-only file-attribute and `fsutil` checks did not identify a reparse point. A separately authorized exact-byte write applied the test-only changes after preimage checks; both test files retain LF-only endings and EOF LF.
+- No production source, Git index or refs, CI, Canonical record, runtime, Scheduler, network, account, credential, or order action was changed for this checkpoint.
+
+## 2026-09-27 — PR #51 startup-status failure-path test delivery successor
+
+- In a clean managed worktree based on PR #50's merge commit, the focused Windows suite for atomic writes, Telegram control bot, heartbeat watchdog, and recovery symbol configuration passed: `59 passed in 3.28s` (Python 3.14.7, pytest 9.1.1). This is focused local test evidence only.
+- The test-coverage and repository-progress changes were committed as `86861d3588602e7a63071a1e155af4f65be24995` (`test: cover startup status write failures`) and pushed to `codex/startup-status-failure-test-coverage`.
+- PR #51, `test: cover startup status write failures`, was created from that branch. Its pull-request run `36293875729` and push run `36293823439` completed successfully for Windows validation, Ubuntu compatibility, and Quality advisory.
+- PR #51 was merged with the `merge` method after its head SHA was rechecked as `86861d3588602e7a63071a1e155af4f65be24995`. The merge commit is `cf4f31080ce6ba931733a0b0a782a4060f3bcc24`.
+- No post-merge `master` CI query, Canonical action, runtime, Scheduler, network, account, credential, or order action was performed in this checkpoint. CI success does not establish operational validation.
+
+## 2026-09-27 — PR #51 merge and master CI successor
+
+- The automatic `master` push workflow run `36294048676` for merge commit `cf4f31080ce6ba931733a0b0a782a4060f3bcc24` completed with conclusion `success` (`push`, branch `master`). The run was created at `2026-09-27T04:21:03Z` and last updated at `2026-09-27T04:23:27Z`.
+- The workflow run's overall conclusion was verified, but its individual job results could not be fetched because the job-detail query returned `HTTP 401: Bad credentials`. Per-job CI results therefore remain unverified.
+- No local tests were run for this progress update. This record captures the run-level GitHub Actions result only and does not establish individual job results or operational validation. No Canonical Apply, runtime, Scheduler, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #52 merge and master CI successor
+
+- PR #52, `docs: record PR #51 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `c01739d84f579ec638f7427d844dbc00b8e0ea84`. The merge commit is `7d984cb9c5a5eb93d0daf288c3b5f06b245a2c77`.
+- The automatic `master` push workflow run `36296649680` for merge commit `7d984cb9c5a5eb93d0daf288c3b5f06b245a2c77` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #53 merge and master CI successor
+
+- PR #53, `docs: record PR #52 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `983a8c2773c3ad366aea5f2bd10db3f4916936ca`. The merge commit is `9cefb2009258a479de39482875672e57d8eda33f`.
+- The automatic `master` push workflow run `36298111128` for merge commit `9cefb2009258a479de39482875672e57d8eda33f` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #54 merge and master CI successor
+
+- PR #54, `docs: record PR #53 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `b1d59e68a1b5b98b8dca31773a9e0d7c1159800f`. The merge commit is `fcae38c0c24dc3ed38469ca0365b873c0879fb09`.
+- The automatic `master` push workflow run `36298787389` for merge commit `fcae38c0c24dc3ed38469ca0365b873c0879fb09` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #55 merge and master CI successor
+
+- PR #55, `docs: record PR #54 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `0e62763618c0a8058deeb4443cf5720db2811829`. The merge commit is `1c89b3793cf1ee9e08d6f132f0ca690e5a210145`.
+- The automatic `master` push workflow run `36299436687` for merge commit `1c89b3793cf1ee9e08d6f132f0ca690e5a210145` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #56 merge and master CI successor
+
+- PR #56, `docs: record PR #55 merge and master CI`, was merged with the `merge` method after its head SHA was rechecked as `4d456ac23cb498dab576b058b3be01d72048dd1e`. The merge commit is `1b77ab1fb4efc3a9ea41f5af4524f96585d307ff`.
+- The automatic `master` push workflow run `36300427176` for merge commit `1b77ab1fb4efc3a9ea41f5af4524f96585d307ff` completed successfully. Windows validation, Ubuntu compatibility signal, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #57 merge and master CI successor
+
+- PR #57, `docs: record PR #56 merge and master CI`, was merged into `master` with the `merge` method after its head SHA was rechecked as `61d8b98464f604ef2203c7f1d5718bf8e3702b7e`. The merge commit is `dae8c432163fc0b07986e1cb4ab354a59178a771`.
+- The automatic `master` push workflow run `36301309418` for merge commit `dae8c432163fc0b07986e1cb4ab354a59178a771` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #58 merge and master CI successor
+
+- PR #58, `docs: record PR #57 merge and master CI`, was merged into `master` with the `merge` method after its head SHA was rechecked as `4882a1a8732c0ac0cd8ac2a829ccf3b8d6c5c4cd`. The merge commit is `536f47de41d5be3cdd2721af4b77190b08354aca`.
+- The automatic `master` push workflow run `36302002810` for merge commit `536f47de41d5be3cdd2721af4b77190b08354aca` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — PR #59 merge and master CI successor
+
+- PR #59, `docs: record PR #58 merge and master CI`, was merged into `master` with the `merge` method after its head SHA was rechecked as `f6cc0b0f3bf5754dfabbfee8314c6b10f4ae4b0c`. The merge commit is `91f77594e0f1d37092d2f94a73739442204da0df`.
+- The automatic `master` push workflow run `36302550816` for merge commit `91f77594e0f1d37092d2f94a73739442204da0df` completed successfully. Windows validation, Ubuntu compatibility, and Quality advisory all completed with conclusion `success`.
+- No local tests were run for this progress update. This record captures GitHub PR and CI evidence only; it does not establish operational validation. No Canonical Apply, runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — Account control-state writer serialization
+
+- Added an account-scoped `control_state_{account}.lock` shared by Python control-state writers and `ops/emergency_stop.ps1`. The control switch and fixed-port/pause event writers now retain unrelated fields while serializing their read-modify-write operations.
+- `ops/emergency_stop.ps1` now acquires the same bounded control-state lock and atomically replaces the existing control file. It fails closed before either target is changed when that lock is unavailable.
+- Focused Windows validation passed: `60 passed in 12.74s` with Python 3.14.7 and pytest 9.1.1 across runtime-control, emergency-stop, fixed-port, and reconciliation tests. This is local test evidence only; it does not establish CI verification, Canonical publication, or operational validation. No runtime, Scheduler, network, account, credential, or order validation was performed.
+
+## 2026-09-27 — Emergency-stop settings atomic replacement implementation
+
+- In a managed worktree at master commit `2a033ccd2464f0fd62e47e3c639f6f690398cd44`, `ops/emergency_stop.ps1` now stages settings bytes in a unique same-directory temporary file under the existing account cleanup lock, verifies the staged bytes, and replaces the settings target with `File.Replace`. The temporary file is removed on failure; no fallback write is used.
+- Added a Windows mock-account regression test that holds the settings file without delete sharing to force replacement failure, then checks that the original settings bytes remain and the temporary file is removed.
+- The focused `tests/test_emergency_stop_allowlist.py` run was attempted twice. Both attempts exited with code 1 and showed 13 error markers; pytest's session cleanup raised `PermissionError: [WinError 5]` while enumerating the selected basetemp. Individual test outcomes were not available, so local test status is `INCOMPLETE` and no passing test result is claimed.
+- No source changes were made in the original checkout. No staging, commit, push, PR, CI, Canonical, runtime, Scheduler, network beyond the master fetch, account, credential, or order operation was performed.
+
+## 2026-09-27 — Emergency-stop settings atomic replacement focused validation
+
+- An elevated focused run exposed three failures: Windows PowerShell's `File.Replace` rejected a null backup path. The implementation now supplies a unique same-directory backup path and removes it after replacement; failure cleanup also removes any remaining temporary or backup file.
+- The focused Windows mock-account suite then passed: `13 passed in 11.67s` for `tests/test_emergency_stop_allowlist.py`. This is local focused test evidence only; CI and operational validation were not performed.
+- The two earlier sandboxed attempts ended with basetemp `WinError 5`; they produced no test summaries. The later elevated run returned individual results and resolved that evidence gap.
+
+## 2026-09-27 — Emergency-stop RuntimeRoot argument collision fix
+
+- Windows PowerShell treats variable names case-insensitively. The local `$runtimeRoot` assignment overwrote the optional `$RuntimeRoot` argument before validation, so an explicitly supplied root was ignored. Renamed the internal selection variable to `$selectedRuntimeRoot` while retaining the fixed root allowlist and the existing account and file safety checks.
+- Added mock-only tests for an explicitly allowed script root and for rejecting an unapproved root before writes. The focused `tests/test_emergency_stop_allowlist.py` suite passed in an isolated Windows Temp directory: `15 passed in 13.00s`. PowerShell parsing reported zero errors. This is local test evidence only; CI, Canonical publication, and operational validation were not performed.
+
+## 2026-09-28 — Lifecycle persistence seam extraction implementation
+
+- Added `src/core/lifecycle_persistence.py` to validate, compare, merge, and atomically write one symbol lifecycle while the caller holds the existing account cleanup lock. `AccountEngine` still updates its in-memory lifecycle map and disk markers only after persistence succeeds and before releasing that lock.
+- Updated the lifecycle persistence characterization tests to inject atomic-write failures at the new module boundary. The suite contains eight cases, including removal of only the current symbol while preserving other symbols.
+- The eight-test characterization suite passed after extraction: `8 passed in 0.96s`. This is local focused test evidence only and does not establish CI verification, Canonical publication, or operational validation. No Git, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed.
+
+## 2026-09-28 — Tranche-base persistence focused test and review successor
+
+- After the source extraction, the focused `tests/test_tranche_base_persistence.py` suite was executed in the managed worktree with Python 3.14.7 and pytest 9.1.1. The elevated isolated run completed with `8 passed in 1.00s` and exit code 0. Two unelevated attempts in separate temporary directories ended during pytest cleanup with `WinError 5` access denied; those attempts did not establish a product result.
+- Read-only review of the managed worktree found exactly three source and test changes: `src/core/engine.py`, new `src/core/tranche_base_persistence.py`, and `tests/test_tranche_base_persistence.py`. The review confirmed the existing account-cleanup then tranche-base lock order, lifecycle-anchor guard, injected `atomic_write_json` path, OSError warning handling, and cache assignment only after helper success. The characterization tests cover stale lifecycle-anchor rejection and preservation of the source file and in-memory cache for store and remove write failures.
+- Managed-worktree `git diff --check` passed. No source or test edits were made during this review. No stage, commit, push, PR, CI, merge, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed for this successor.
+- This successor records implementation, static review, and focused local test evidence only. The change is not canonically published or operationally validated.
+
+## 2026-09-28 — Lifecycle cache guard extraction successor
+
+- Added `assert_symbol_lifecycle_current()` to `src/core/lifecycle_persistence.py` and delegated the lifecycle file read and same-symbol anchor comparison from `AccountEngine._assert_lifecycle_current_for_cache_write()`. The engine retains the no-lifecycle test-fixture boundary and current strategy-symbol validation.
+- Added lifecycle guard characterization for an expected missing anchor, disappearance of a previously observed anchor, malformed JSON, a non-object JSON value, and a lifecycle read permission error. Added a tranche-base integration case proving a lifecycle read error does not call the atomic tranche-base writer and preserves the lifecycle file, tranche-base file, and in-memory tranche cache.
+- The focused `tests/test_lifecycle_persistence_characterization.py` and `tests/test_tranche_base_persistence.py` suites passed: `22 passed in 1.27s` (Python 3.14.7, pytest 9.1.1). Read-only review confirmed the existing engine symbol guard and error behavior remain in place; `git diff --check` passed.
+- This change is implemented, statically reviewed, and locally tested. No stage, commit, push, PR, CI, merge, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed for this successor. It is not canonically published or operationally validated.
+
+## 2026-09-28 — Lifecycle startup read extraction successor
+
+- Added lifecycle read characterization in `tests/test_lifecycle_persistence_characterization.py` for `AccountEngine` initialization and the post-symbol-key-migration refresh. Cases cover valid objects, a missing file, malformed JSON, a non-object JSON value, `OSError`, per-symbol disk-anchor calculation, and an independent copy of the observed anchor. The first elevated run had `18 passed, 5 failed` because the startup fixture lacked `ctx.logger`; after adding the logger stub, the characterization suite passed before extraction.
+- Added `load_symbol_lifecycles()` to `src/core/lifecycle_persistence.py` and routed the initialization and migration reads through it. It preserves the former behavior: `OSError`, JSON decode errors, and non-object values produce an empty mapping. Per-symbol anchor calculation remains in the engine. The strict orphan-cleanup read was not changed.
+- After extraction, the focused test file passed with `23 passed, 5 warnings in 1.19s`. The warnings were `pandas_market_calendars` notices about discontinued market times. Read-only review of the helper, call sites, and characterization cases found no issues. Git diff review showed only `src/core/engine.py`, `src/core/lifecycle_persistence.py`, and `tests/test_lifecycle_persistence_characterization.py`; `git diff --check` passed.
+- Those three files were committed as `6073069428148776237ef096a01d1bc49bb194d7` (`refactor: extract lifecycle loading`) and pushed to `codex/extract-tranche-base-persistence`. This progress successor is being added to that branch for the same functional PR. No PR or CI for this change has been performed. No Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed; operational validation is not established.
+
+## 2026-09-28 — Orphan-cleanup lifecycle verification extraction successor
+
+- Added four characterization cases in `tests/test_manual_tranche_lifecycle.py` for `AccountEngine` after `OrphanStateCleaner` reports a cleaned symbol. They cover refresh from a persisted `closed` marker, a missing marker, malformed lifecycle JSON, and a lifecycle read `PermissionError`; failures preserve the in-memory lifecycle cache and disk anchor.
+- The initial focused run exposed a missing `_fx_rate_krw` fixture attribute before reaching the target branch. After adding that fixture value, the four selected cases passed: `4 passed, 17 deselected in 1.09s` with Python 3.14.7 and pytest 9.1.1.
+- Added `load_closed_symbol_lifecycles()` to `src/core/lifecycle_persistence.py` and routed the orphan-cleanup lifecycle read through it in `src/core/engine.py`. The engine retains the account cleanup lock and updates its lifecycle cache and disk anchor only after validation. The helper preserves strict JSON/read-error propagation and requires the selected symbol to have an object with `status` equal to `closed`.
+- Post-extraction validation passed: the four selected cases, `4 passed, 17 deselected in 1.13s`; `tests/test_lifecycle_persistence_characterization.py`, `23 passed, 5 warnings in 1.10s`; and the full `tests/test_manual_tranche_lifecycle.py`, `21 passed, 13 warnings in 2.68s`. Warnings were `pandas_market_calendars` notices about discontinued market times. Managed-worktree `git diff --check` passed.
+- This change is implemented, statically reviewed, and locally tested. No Git stage, commit, push, PR, CI, or merge action has been performed for this successor. No Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed; operational validation is not established.
+
+## 2026-09-28 — Dashboard profile side-config fail-closed correction successor
+
+- Read-only review found that `or {}` converted falsy non-object `auto_buy` and `auto_sell` values into dictionaries before type validation. The engine now validates the stored values directly and returns closed on non-dictionaries. Added characterization cases for `None`, an empty list, and an empty string; those cases keep the current strategy fingerprint and open lifecycle stable so they exercise the side-configuration guard directly.
+- The selected settings-profile test passed: `1 passed, 10 deselected in 1.41s`. The complete `tests/test_dashboard_profile_steps_save.py` file passed: `11 passed in 1.73s`, using Python 3.14.7 and pytest 9.1.1. Managed-worktree `git diff --check` passed.
+- This correction is implemented, statically reviewed, and locally tested. No stage, commit, push, PR, CI, merge, Canonical preflight or Apply, runtime, Scheduler, network, account, credential, or order action was performed. It is not canonically published or operationally validated.
+
+## 2026-09-28 — Account snapshot writer serialization
+
+- The passive balance monitor and active reconciliation publisher now use one account balance publication lock. The shared account gate records the broker observation time after a successful write and rejects an older observation before it can replace a newer snapshot. The passive publisher reads its prior snapshot and persisted metadata while holding the publication lock.
+- Evaluated quote diagnostics now hold an account quote lock from the existing-file read through atomic replacement, preserving entries published by other symbol engines.
+- Added focused tests for reverse-order balance observations, a failed balance write that must not advance the observation watermark, and concurrent quote publication for two symbols. Python 3.14.7 focused and related regression tests passed: `58 passed, 15 subtests passed in 4.43s`. After extending the passive-publisher case to exercise a successful write, the focused file passed again: `3 passed in 1.60s`. `git diff --check` passed after the code and test changes.
+- This is implemented and locally tested. CI verification, Canonical publication, and operational validation are not established.
+
+
+## 2026-09-28 — Worker mutex ownership evidence successor
+
+- On top of master commit `0e9e744681e7cfc240d3a9d8363fed334dc9bcc8`, added diagnostic mutex ownership to worker status publication. The Windows query reports `CONFIRMED` only when the calling thread owns the worker mutex, the mutex state is consistent, and the lock’s cached process identity matches; status publication also binds the observed PID and account to the worker identity. Query failures and identity mismatches remain `INCOMPLETE`. Startup, heartbeat, and pre-release `STOPPING` updates pass the worker lock.
+- `NtQueryMutant` is an undocumented Windows native API. The focused test passed in the current Windows environment; behavior on other Windows versions remains unverified. The observation is diagnostic and does not grant order authority.
+- Remote review confirmed PR #70 (`fix: serialize account snapshot publishers`) was merged at `0e9e744681e7cfc240d3a9d8363fed334dc9bcc8`; the listed Windows validation, Ubuntu compatibility, and Quality checks succeeded. Its snapshot serialization changes are inherited by this worktree.
+- Focused Windows validation passed with Python 3.14.7 and pytest 9.1.1: `20 passed, 2 skipped` across `tests/test_process_lock.py`, `tests/test_main_worker_status.py`, `tests/test_account_snapshot_serialization.py`, and `tests/test_main_account_authority.py`. The two skipped tests are POSIX-only. `git diff --check` passed. Raw evidence: `C:\Users\Public\Documents\ESTsoft\CreatorTemp\kr-mutex-owner-evidence-run-20260928-01`.
+- This change is implemented, statically reviewed, and locally tested in managed worktree branch `codex/worker-mutex-owner-evidence`. This entry was recorded before creating a PR or running CI for this change. No live runtime/restart validation or Canonical publication has been performed.
+
+## 2026-09-28 — Mock snapshot operational evidence carry-forward
+
+- GitHub reads confirmed PR #70 (`0e9e744681e7cfc240d3a9d8363fed334dc9bcc8`) and PR #71 (`6323da17b242b74a6903d6729ac9ea88d905c37c`) merged into `master`. Current `master` is `6323da17b242b74a6903d6729ac9ea88d905c37c`. Its `process_lock.py`, `main.py`, and three focused test blobs match the pushed runtime checkout commit `aa4434ec30ac2f30fa2719b6852ddd8cd119437c`; the balance and quote publication and lock function bodies in `engine.py` and `orphan_cleanup.py` also match. Other changes in current `master` make those two full files differ.
+- In the runtime checkout, an earlier `kr_mock/KR` worker observation reported `mutexOwnership.state=CONFIRMED` with the running worker PID as owner, advancing controller cycles, no active symbols, and auto trading disabled. During a bounded 24-second external hold of `account_balance_snapshot_lock`, the live balance file modification time stayed unchanged across two samples five seconds apart and advanced after release. This supports that the live mock balance publisher honored the lock during that observation. It does not establish two simultaneous live balance writers.
+- Separate synthetic Windows probes used two processes for both account snapshot locks and preserved both writers' JSON entries. A two-process probe of the actual `_record_evaluated_quote` method retained both synthetic symbol entries. A two-process probe of the actual `_publish_passive_balance_snapshot` method kept the second writer out of its atomic write while the first held the lock; the final JSON parsed and preserved metadata. These are local synthetic results, not live quote publication.
+- The focused local run of `tests/test_account_snapshot_serialization.py`, `tests/test_process_lock.py`, and `tests/test_main_worker_status.py` on commit `aa4434e` returned `13 passed, 2 skipped` with Python 3.14.7. Two earlier invocations were blocked by `WinError 5` on pytest temporary paths and supplied no code verdict. This local result does not imply CI verification of `aa4434e`.
+- The reused `codex/startup-sync-failure-characterization` branch was pushed to `aa4434e`, but no PR has that head commit. All 43 PRs returned for that branch were historical and merged. GitHub comparison reported the branch six commits ahead and 79 behind `master`, with three files outside this work. A PR from that branch would carry unrelated changes and older source behavior, so no PR was created from it.
+- Live quote publication by the idle `kr_mock/KR` worker remains `INCOMPLETE`: no active symbol engine was observed, and no strategy, trading control, account, credential, or order setting was changed to induce a quote. This is a repository-local progress candidate; Canonical publication and current CI state remain separate.
+
+## 2026-09-29 — Python 3.11 dependency lock implementation
+
+- In the isolated `codex/master-aligned-followup` worktree based on `bc293286a8a2919bd9aaa4318ff582263614a478`, generated `requirements.lock` and `requirements-dev.lock` from the existing runtime and development inputs with Python 3.11.9 and pip-tools 7.6.1. The verbose compile logs for both files reported `Using indexes: https://pypi.org/simple`.
+- Identified a pip-tools 7.6.1 generated-header defect: its parsed `no_index` option was `False`, but the normalized command header printed `--no-index`. The final locks use the supported `CUSTOM_COMPILE_COMMAND` header setting; neither header nor lock body contains `--no-index`.
+- Changed Docker to install `requirements.lock` with `--require-hashes` and all three `linux-smoke` jobs to install `requirements-dev.lock` with `--require-hashes`. Added `docs/DEPENDENCY_LOCKS.md` with the lock scope and update procedure. The one-time migration requirements remain outside these locks.
+- Static readback found strict UTF-8 without BOM or CRLF in both generated locks. The runtime lock contains 44 pinned package entries and 1,120 SHA-256 hashes; the development lock contains 56 entries, including one extra-qualified requirement, and 1,519 hashes. Every pinned entry has at least one SHA-256 hash. `git diff --check` passed for the tracked Docker and workflow edits before this progress append.
+- A wheel-only `pip install --dry-run --ignore-installed --require-hashes` against each lock in the isolated Python 3.11 environment returned exit code 0, showing 44 runtime and 56 development distributions. This did not install packages or execute the application test suite.
+- This is implemented and statically reviewed with a successful Windows dependency dry-run. No actual dependency installation, Docker build, local test suite, CI run, Git stage/commit/push, PR, Canonical publication, runtime, Scheduler, account, credential, or order action was performed. Linux installation and CI verification remain `INCOMPLETE`; Canonical publication remains `CANONICAL_PENDING`.
+
+## 2026-09-29 — Linux validation environment access check
+
+- A read-only local capability check found no `docker.exe`. `wsl.exe` was present, but `wsl.exe --list --quiet` returned `Wsl/EnumerateDistros/Service/E_ACCESSDENIED`. No WSL distribution or Linux runtime was accessed, and no elevation or alternate execution route was attempted.
+- Linux dependency installation and Docker build validation remain `INCOMPLETE`. No CI or repository source action was performed in this check.
+
+## 2026-09-29 — Dependency-lock GitHub Actions verification
+
+- Pushed commit dfe9bc34d51a735a54bbd94aa50c8771515323fa on codex/master-aligned-followup. GitHub Actions run 36514401830 completed with conclusion success.
+- The Ubuntu compatibility job installed requirements-dev.lock with --require-hashes and completed the pytest step successfully. The Windows validation job completed the same locked development installation and test step successfully. The Quality advisory job completed its locked installation, Ruff check, and mypy check successfully.
+- Ubuntu remains a non-blocking compatibility signal. This CI run does not verify the Docker image build or installation of the runtime-only requirements.lock in Docker; those remain unverified. No runtime, Scheduler, account, credential, order, Canonical publication, PR creation, or merge action was performed.
+
+## 2026-09-29 — Control-state lock timeout local verification
+
+- During this chat, `src/core/orphan_cleanup.py` was changed so the account control-state lock uses a two-second bounded wait, while the shared helper's default behavior for other account locks remains unchanged. `tests/test_runtime_control.py` was extended with same-process thread-contention and cross-process file-lock-contention timeout coverage.
+- Two non-elevated attempts to run `tests/test_runtime_control.py` and `tests/test_emergency_stop_allowlist.py` could not create their requested isolated pytest basetemp directories and each ended with 19 setup errors caused by `PermissionError: [WinError 5]`. Those attempts provide no product-test verdict.
+- One explicitly authorized elevated run of the same two files with `C:\auto\pytest_tmp_control_lock_20260929_v2` as basetemp completed `19 passed in 19.16s` on Python 3.14.7 and pytest 9.1.1. This is local focused-test evidence only.
+- In the managed test worktree, `git diff --check -- src/core/orphan_cleanup.py tests/test_runtime_control.py` passed and status showed only those two modified files. Current Git and PR state for `C:\auto\kiwoom-autotrade` was not queried in this record-update scope and remains `INCOMPLETE`.
+- No Git delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed in this record-update scope.
+
+## 2026-09-29 — Control-state lock timeout merge and CI verification
+
+- PR #75, `fix: bound account control-state lock wait`, merged into `master` at `2026-09-29T10:08:02Z` with merge commit `774e0a15401ea90bb3ab5839b84bbe9b09a058cd`. Its feature head was `7f9e5c36657eac60c56129622f705ad50359c368`.
+- Pull-request workflow run `36552602890` and post-merge `master` push run `36553653003` completed successfully. The post-merge run's Windows validation, Ubuntu compatibility signal, and Quality advisory jobs each completed with conclusion `success`.
+- The managed worktree was fetched from `origin/master` and moved to the merge commit in detached HEAD state. Its post-move status was clean. The original `C:\auto\kiwoom-autotrade` checkout was left unchanged; its Git status showed pre-existing dirty and untracked paths, and permission-denied directories prevented a complete untracked inventory.
+- The focused local test result remains the previously recorded `19 passed` for `tests/test_runtime_control.py` and `tests/test_emergency_stop_allowlist.py`. No post-merge local test, runtime, Scheduler, account, credential, or order validation was performed.
+- This is a repository-local delivery record. No Canonical publication was performed; Canonical publication remains `INCOMPLETE`.
+
+## 2026-09-30 — PR #76 merge and post-merge CI verification
+
+- PR #76, `docs: record PR #75 merge and master CI`, merged into `master` at `2026-09-29T21:34:18Z` with merge commit `0b6e0b19ef3811d13612a16debcfeca652c0b250`. Its feature head was `6dbbc816b835e887ebdc66caae073944484c0f82`.
+- Pull-request workflow run `36633526075` and post-merge `master` push run `36634160487` completed successfully. The post-merge run's Windows validation, Ubuntu compatibility signal, and Quality advisory jobs each completed with conclusion `success`.
+- This merge and CI result is recorded in this repository-local successor. No follow-up PR was created for this entry.
+- No additional local tests, runtime, Scheduler, account, credential, or order validation were performed. No Canonical publication or operational validation is claimed.
+
+## 2026-09-30 — PR #77 merge and post-merge CI verification
+
+- PR #77, `docs: record PR #76 merge verification`, merged into `master` at `2026-09-29T22:14:25Z` with merge commit `59c3095d9cf26e654d8ef1f9b6dfcee4cb4f4438`. Its head commit was `96009d57dfab98c38d9bf961a67b478f406fa441`.
+- PR-triggered workflow run `36637465165` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
+- Post-merge `master` push run `36638376114` for merge commit `59c3095d9cf26e654d8ef1f9b6dfcee4cb4f4438` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), and Quality advisory each completed with conclusion `success`.
+- This is a repository-local progress record. No local tests, Canonical publication, or operational validation were performed while recording this checkpoint.
+
+## 2026-09-30 — PR #78 CI recovery and PR #79 manual-dispatch delivery
+
+- PR #78 merged into `master` as `cddcfdf5e9ec2792b9e5da48e4c8c02a598be65d`. Its workflow file included both `push` and `pull_request` triggers, Actions was enabled, and the workflow was active. Its merge commit had no Actions run, check run, or check suite; the underlying GitHub event-delivery cause was not established.
+- To verify the exact merged code, branch `codex/pr78-merge-ci-verify` was created at `cddcfdf5e9ec2792b9e5da48e4c8c02a598be65d`. Its push workflow run `36647224181` completed successfully: Docker image build, Ubuntu compatibility signal (non-blocking), Quality advisory, and Windows validation each concluded `success`. This verifies the merge SHA on the verification branch; it does not create or prove a delayed `master` run for PR #78.
+- Commit `2fbabaf26786998fede446a895c97e7917eb9ba8` (`ci: add manual workflow dispatch fallback`) added only `workflow_dispatch` to `.github/workflows/linux-smoke.yml`. PR #79 merged into `master` as `29f0d39d21a538624a216cb07570b71c57fa7d98`.
+- PR #79's push run `36647949296`, pull-request run `36648082811`, and post-merge `master` push run `36648513145` each completed successfully. In each run, Docker image build, Ubuntu compatibility signal (non-blocking), Quality advisory, and Windows validation concluded `success`.
+- The `workflow_dispatch` trigger provides a manual recovery path for a future missing automatic workflow run. It does not establish the cause of PR #78's missing `master` push run.
+- No local test, Canonical publication, runtime, Scheduler, account, credential, or order action was performed during this progress-record update.
+
+## 2026-09-30 — Pending-ledger failure price-cache fix
+
+- Moved the BUY price-cache update in `src/core/engine.py` to after `ledger.add_pending` returns successfully. A pending-ledger write failure now leaves `_last_auto_buy_price` unchanged for that attempt.
+- Extended `test_pending_ledger_failure_keeps_order_attempt_unresolved` in `tests/test_dispatch_clearance_integration.py` to assert the price cache remains empty when `add_pending` raises.
+- The focused test ran with `python -m pytest -p no:cacheprovider --basetemp C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-price-cache-20260930-v2 C:\auto\kiwoom-autotrade\tests\test_dispatch_clearance_integration.py::test_pending_ledger_failure_keeps_order_attempt_unresolved` and reported `1 passed in 1.05s` on Python 3.14.7 / pytest 9.1.1. This is local focused-test evidence only.
+- No Git status/diff or delivery, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed for this follow-up. Those states are `INCOMPLETE`.
+
+## 2026-09-30 — Codex sandbox recovery and progress-path diagnosis
+
+- The sandbox log reported repeated JSON parse failures for `%USERPROFILE%\.codex\.sandbox\deny_read_acl_state.json` (`expected value at line 1 column 1`). Read-only byte inspection reported 22 bytes, all NUL. Under explicit approval, the file was moved to `C:\Users\jhkhjk\.codex\.sandbox\deny_read_acl_state.json.backup-20260930-164809.bak`; readback confirmed 22 bytes and 22 NUL bytes. A subsequent sandboxed PowerShell read succeeded and returned the regenerated state `{"principals": {}}`.
+- Direct read-only filesystem checks reported `ReparsePoint=False` for `C:\`, `C:\auto`, `C:\auto\kiwoom-autotrade`, `docs`, and `docs\PROJECT_PROGRESS.md`. Immediately before this append, the progress file was 163945 bytes with SHA-256 `80EC397C38306F193326D5B19BE374C9BCED9B6C3450F2772A393DC65D18DC95`; it was strict UTF-8 without BOM, had `CRLF=0`, `BareCR=0`, and ended in LF.
+- An earlier `apply_patch` failure reported `path contains a reparse point`, but the direct filesystem checks did not observe a reparse point in the path chain. The discrepancy's cause remains unresolved; one `apply_patch` invocation for this approved update succeeded after the sandbox recovery and did not reproduce that earlier error.
+- This entry records only the directly observed sandbox recovery and path diagnosis. No project source, test, Git, CI, Canonical publication, runtime, Scheduler, network, account, credential, or order action was performed for this record update.
+
+## 2026-09-30 — Isolated unresolved-order delivery scope recovery
+
+- Fetched `origin/master` at `3a1ea997b09601c198873523121f7eda524dd5e3` and created `codex/unresolved-order-dispatch-delivery` in an isolated managed worktree. Selected commits `8d9b6fa`, `d00c327`, and `ae7b693` were applied as `7976a35`, `79385c9`, and `e8eadac`. The only cherry-pick conflict was the progress-file append; both existing master history and the selected successor were preserved. `git range-diff` showed only the changed documentation context for the first commit; the other two patches were unchanged.
+- Before this checkpoint append, the isolated branch was three commits ahead of master, with ten changed files, 355 insertions, 39 deletions, and no file deletions. The original checkout's pre-existing tracked progress-file modification was preserved; the original untracked inventory was not rescanned.
+- Local mock-only verification ran `python -m pytest -p no:cacheprovider` with isolated data, log, backup, and basetemp directories under `C:\Users\Public\Documents\ESTsoft\CreatorTemp`. The nine files were `tests/test_fixed_port_holdoff.py`, `tests/test_dispatch_clearance_integration.py`, `tests/test_order_attempts.py`, `tests/test_order_submission_guard.py`, `tests/test_tranche_base_persistence.py`, `tests/test_lifecycle_persistence_characterization.py`, `tests/test_manual_tranche_lifecycle.py`, `tests/test_tranche_rebuild_ambiguous.py`, and `tests/test_dashboard_profile_steps_save.py`. Python 3.14.7 / pytest 9.1.1 reported `134 passed, 18 warnings in 19.93s`; warnings concerned discontinued market-calendar break times.
+- The committed range passed `git diff --check`; all ten changed files were strict UTF-8 without BOM, LF-only, and final-LF terminated. Before this append, the progress file was 125311 bytes with SHA-256 `3F5067496DE29AC75B64004286A8F6950B89F0BD2FDC7B1D832EDE021CCB807B`, and the complete master progress-file byte prefix was preserved.
+- A GitHub CLI authentication check succeeded through the user's Windows keyring in an elevated execution after removing token overrides only in that child process. Stored credentials, SSH settings, and ACLs were not changed. PR and CI evidence for the isolated branch remains `INCOMPLETE` at this checkpoint. No Canonical publication or operational validation was performed.
+
+## 2026-09-30 — PR #81 delivery, canonical checkpoint, and handoff record
+
+- During this conversation, PR #81 (`fix: block dispatch until unresolved order attempts are reconciled`) was created from the isolated branch `codex/unresolved-order-dispatch-delivery`, then merged into `master` as `741a7eaa493f64313876fecd6ecb6a24e3b1899d`. Its head commit was `d7b1e95ed429bfb3d75669468c19ef5b36fc955f`.
+- The local mock-only verification for the isolated delivery branch reported `134 passed, 18 warnings in 19.93s` on Python 3.14.7 / pytest 9.1.1. This is local test evidence only.
+- GitHub Actions push run `36690454083`, pull-request run `36690622544`, and post-merge master push run `36691223000` each completed successfully. Windows validation, Ubuntu compatibility signal, Docker image build, and Quality advisory succeeded. Ubuntu remains a non-blocking compatibility signal.
+- During this conversation, the verified PR #81 merge and CI checkpoint was appended to `C:\auto\AI_DEVELOPMENT_SYSTEM\CURRENT_STATE.md`. Exact byte readback subsequently matched the candidate: 77405 bytes and SHA-256 `49F388059D9F7810544EF94192E74EF661B23AD3EA9477D3364A9FD599A6EF0E`.
+- This successor update did not query current Git or pull-request state, run tests or CI, or perform Canonical, runtime, Scheduler, network, account, credential, or order work. Current Git/PR state is `INCOMPLETE`. Operational validation remains `INCOMPLETE`.
+
+## 2026-10-01 — PR #83 unresolved-order recovery and tranche fill-quantity delivery
+
+- Under separately approved source, test, Git, and delivery scopes, `src/core/engine.py` now keeps orders marked `awaiting_execution_history` eligible for fill recovery instead of retiring them solely because time elapsed. `src/data/trade_ledger.py` now calculates a newly observed fill from the latest persisted cumulative quantity inside a write transaction, so repeated processing with a stale pending-order snapshot does not over-record quantity.
+- Regression coverage added a terminal-order recovery case, cumulative fills of 2 then 5 with a stale pending snapshot, and the tranche case where step 3 sells only its 5 filled shares before step 2 later sells only its 3 filled shares. The final focused local run reported `18 passed in 1.60s` on Python 3.14.7 / pytest 9.1.1. Local Ruff verification was `INCOMPLETE` because the active Python environment had no `ruff` module.
+- Commit `1595196552bff741bd0389a40338367b747855da` delivered the recovery and quantity changes. Follow-up commit `7aa5cc704df1ac416247a84dd1aef5175d7c3933` removed an unused cancellation-age assignment found by the first Quality advisory run. PR #83 merged into `master` at `2026-09-30T23:43:58Z` with merge commit `ad64901b26527b1de9dd7ea5b83c2438d6db176f`.
+- The corrected head's push run `36789263637` and pull-request run `36789269892` each completed successfully with Windows validation, Ubuntu compatibility signal (non-blocking), Quality advisory, and Docker image build. Post-merge master push run `36792599171` for `ad64901b26527b1de9dd7ea5b83c2438d6db176f` also completed successfully with those four jobs.
+- Canonical files were not updated for PR #83. No runtime, Scheduler, broker, real-account, credential, or live-order validation was performed. Operational validation remains `INCOMPLETE`.
+
+## 2026-10-01 — PR #86 non-finite execution value rejection
+
+- `src/core/engine.py` now skips execution-history rows with non-finite cumulative quantities or execution prices before applying fills. Skipped-row diagnostics serialize non-finite float fields as strings so the warning remains valid JSON. `src/data/trade_ledger.py` validates incoming fill values and persisted quantity counters, rolling back invalid records without changing ledger state.
+- Regression coverage exercises non-finite KR execution rows, US normalization behavior, invalid direct ledger calls, invalid persisted counters, and state preservation after rejected fills.
+- The full local suite on Python 3.14.7 / pytest 9.1.1 reported `549 passed, 4 skipped, 1 xfailed, 19 warnings`. Local Ruff was `INCOMPLETE` because the active environment had no Ruff module; the CI Quality advisory Ruff step passed.
+- PR #86 (`https://github.com/ljyljy1212A/kiwoom-autotrade/pull/86`) head `ac1b3f54d4ab438301a2931db582c7f0d04f82dd` merged into `master` at `2026-10-01T02:27:17Z` as merge commit `4d810fb5429d7013c29ce5b76cb8f05f6143c387`.
+- Pull-request CI run `36805624861` and post-merge master CI run `36805911510` completed successfully. Windows validation, Ubuntu compatibility signal (non-blocking), Quality advisory, and Docker image build passed in both runs.
+- No Canonical file was updated. Broker, real-account, credential, runtime, Scheduler, and live-order validation were not performed; operational validation remains `INCOMPLETE`. This is the terminal repository progress checkpoint for PR #86. Delivery of this record is verified in GitHub and the chat; its merge and CI results do not trigger another progress-record PR.
+
+## 2026-10-01 — Durable execution quantity conflict and completed-order observation
+
+- Implemented locally in the managed worktree `C:\Users\jhkhjk\.codex\worktrees\73d1\kiwoom-autotrade`, whose reviewed baseline was detached HEAD `4d810fb5429d7013c29ce5b76cb8f05f6143c387`. The original checkout `C:\auto\kiwoom-autotrade` and its existing dirty progress record were not edited. This successor describes local changes, not publication to current master.
+- `src/data/trade_ledger.py` rejects quantities above the latest persisted request and commits a separate account/order/symbol conflict record without changing confirmed trades or order counters. Conflicts survive reopen, completion, cancellation, and lifecycle changes. A diagnostic write failure rolls back and blocks synchronization. Completed-order history uses an observation-only transaction path that cannot apply a fill, including with stale snapshots.
+- `src/core/engine.py` checks the persistent conflict before synchronization, generic resume, and BUY/SELL dispatch, including a second check after awaited clearance. Read-only clearance, cleanup inspection, and `src/main.py` recovery-profile discovery retain conflicts even when the order has completed. Missing schema or unreadable evidence fails closed. Completed orders remain candidates for late excess detection without becoming pending cancellation candidates.
+- The Kiwoom Securities official public REST specification was reviewed on 2026-10-01 at `https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom/_data/kiwoom_api_spec.json`. `src/core/kiwoom_client.py` now uses the documented US executed-order query type `5` instead of undocumented type `0`, and combines all domestic/US execution pages before returning rows. Invalid lists, continuation indicators, missing/repeated keys, and a 100-page limit reject partial results. An incomplete-history error blocks synchronization.
+- Regression files changed: `tests/test_trade_ledger.py`, `tests/test_execution_row_skip_logging.py`, `tests/test_execution_history_pagination.py` (new), `tests/test_dispatch_clearance_integration.py`, `tests/test_reconciliation_clearance.py`, `tests/test_recovery_symbol_configs.py`, `tests/test_rate_limit_observability.py`, and `tests/test_reconciliation_fail_closed.py`. The earlier six-file run had a new fixture failure (104 passed, 1 failed); correcting its missing strategy symbol produced 105 passed. The subsequent seven-file run reported 117 passed. Full-suite v1 reported 589 passed, 4 skipped, 1 xfailed; the final observation-only regression and implementation were then added.
+- Final local verification: `python -m pytest -p no:cacheprovider --basetemp C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-quantity-conflict-full-20261001-v2` reported `590 passed, 4 skipped, 1 xfailed, 24 warnings in 118.78s`, exit 0, on Windows / Python 3.14.7 / pytest 9.1.1. Warnings concerned discontinued market-calendar break times. No source edits followed that run. Strict UTF-8/no BOM, LF-only, final LF, trailing-whitespace checks, Python AST parsing, and `git diff --check` passed for the reviewed changes.
+- New `docs/EXECUTION_QUANTITY_CONFLICT_POLICY.md` records the implementation, official-spec findings, and unresolved resolution gate. No automatic latch deletion or resolution operation is implemented: current history does not establish prior-date coverage, unique order identity across dates, all row aggregation/cumulative-price/sign semantics, or a broker-supported terminal condition for cancelled remainder. Those policies and operational validation remain `INCOMPLETE`.
+- Before this EOF successor, this progress file was 130954 bytes with SHA-256 `D04809F9DF43DB7E296697017AE62101000626AC2C41C43E03991D5800383F8F`, strict UTF-8 without BOM, LF-only, final-LF terminated, and the new heading absent. Verification must preserve that exact byte prefix.
+- Git stage/commit/push, PR creation/merge, current remote-master or CI verification, Canonical publication, live broker/account/credential access, Scheduler changes, and operational runtime/order execution were not performed. Public documentation network research and local test fixtures do not establish live operational readiness. PowerShell public-spec retrieval failed with a TLS authentication error; the same official specification was successfully read through the web tool without changing authentication settings.
+
+## 2026-10-01 — Price-independent execution quantity conflict detection
+
+- The user approved the immediately proposed scope: edit `src/core/engine.py`, `src/data/trade_ledger.py`, `tests/test_trade_ledger.py`, and `tests/test_execution_row_skip_logging.py`, run the two focused regression files, and append this managed-worktree progress successor. No Git, CI, remote delivery, Canonical, runtime, account, credential, or broker execution gate was included.
+- Static review found that a finite excess quantity accompanied by a zero or non-finite execution price skipped the quantity-conflict transaction. Direct ledger calls also rejected the price before checking quantity. Both paths could leave the observed quantity conflict without a durable latch.
+- The ledger now checks the latest persisted quantities before parsing or validating the price. Observation-only calls do not use the price and cannot insert a confirmed trade. Normal fill application still requires a finite positive execution price; invalid-price calls without a quantity conflict roll back without changing economic state.
+- The engine performs quantity-only observation before its price rejection paths, including completed-order observations. A conflict commits the diagnostic latch, preserves pending counters and confirmed trades, and stops the synchronization cycle before cancellation or balance success. Non-finite prices in conflict logs are represented as null, preserving valid JSON.
+- Ledger regressions cover invalid prices (zero, NaN, positive/negative infinity, unparseable text, and null), observation/application modes, observed excess and corrupt stored counters, unchanged economic rows, and persistence after reopen. The engine's 96-case local fixture matrix covers KR/US, BUY/SELL, recovering/completed orders, observed excess/corrupt counters, and six invalid price representations. A separate regression verifies conflict-write failure with a NaN price. The test fixture disables execution-query waiting for its local simulated responses only.
+- Focused verification ran `python -m pytest -p no:cacheprovider --basetemp C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-price-independent-quantity-20261001-v1 tests/test_trade_ledger.py tests/test_execution_row_skip_logging.py`: `71 passed, 8 warnings in 15.78s`, exit 0, on Windows / Python 3.14.7 / pytest 9.1.1. Warnings concern discontinued market-calendar break times. AST parsing, strict UTF-8/no BOM, LF-only, final LF, and trailing-whitespace checks passed for the four source/test files. This is focused local test evidence; the earlier 590-pass full-suite result predates these edits.
+- Before this EOF append, the progress file was 135377 bytes with SHA-256 `0D0832FE6109B17601998A8DCD7AA6159E919DCA598C3CEF6CD0D8D31AEA0DA7`; its exact byte prefix must remain unchanged. Existing managed-worktree changes were retained. The original checkout and Canonical files were not edited.
+- Full-suite verification of this new revision, Git diff/status verification, Ruff, CI, publication, broker field/finality policies, prior-date recovery, and operational validation remain `INCOMPLETE`. No latch-resolution or deletion operation was introduced. No external network request or actual order was performed in this step.
+
+## 2026-10-01 — Price-independent quantity conflict full-suite verification
+
+- On the locally modified managed worktree revision, full-suite pytest ran as `python -m pytest -p no:cacheprovider --basetemp C:\Users\Public\Documents\ESTsoft\CreatorTemp\kiwoom-price-independent-quantity-full-20261001-v1` and exited 0: `620 passed, 4 skipped, 1 xfailed, 26 warnings in 93.44s` on Windows / Python 3.14.7 / pytest 9.1.1. Warnings were the existing `pandas_market_calendars` discontinued `break_start` and `break_end` configuration notices.
+- The test run followed the 71-pass focused regression of price-independent conflict handling. It included tests for invalid prices across KR/US, BUY/SELL, recovering/completed orders, persistence after restart, and failed diagnostic writes. This is local test evidence; it is not CI or live-broker evidence.
+- This progress entry only records that test result. No source or test files were changed by the full-suite run. Git status/diff, Ruff, Git delivery, CI, Canonical publication, runtime, Scheduler, account, credential, and actual order actions were not performed. Broker finality semantics, prior-date recovery, and operational validation remain `INCOMPLETE`.
+- Before this append, this file was 138650 bytes with SHA-256 `1544456474C7AAFB78CD756950C4F9132580F3130B152200505B53826EF862BC`, strict UTF-8 without BOM, LF-only, final-LF terminated, and this successor heading absent. Preserve its exact byte prefix.
