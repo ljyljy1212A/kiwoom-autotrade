@@ -454,6 +454,65 @@ class WorkerSupervisorStopTests(unittest.TestCase):
             str(log_dir.resolve()),
         )
 
+    def test_us_source_route_preserves_runtime_and_uses_its_own_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            runtime = base / "runtime"
+            source = base / "source"
+            runtime.mkdir()
+            source.mkdir()
+            child = MagicMock(pid=999)
+            child.poll.return_value = None
+            running = {"account": "us_mock", "pid": 999, "running": True}
+            with patch.dict(os.environ, {
+                "KIWOOM_WORKER_ROOT_US_MOCK": str(source),
+                "KIWOOM_WORKER_REVISION_US_MOCK": "b" * 40,
+                "KIWOOM_WORKER_REVISION_KR_MOCK": "a" * 40,
+            }), patch.object(supervisor, "ROOT", runtime), \
+                 patch.object(supervisor, "DATA_DIR", runtime / "data"), \
+                 patch.object(supervisor, "LOG_DIR", runtime / "logs"), \
+                 patch.object(supervisor, "DIAGNOSTICS_DIR", runtime / "diagnostics"), \
+                 patch.object(supervisor, "backup_dir", return_value=runtime / "backups"), \
+                 patch.object(supervisor, "_reject_real_account", return_value=None), \
+                 patch.object(supervisor, "resolve_worker_root", return_value=source), \
+                 patch.object(supervisor, "status", side_effect=[{"running": False}, running]), \
+                 patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
+                 patch.object(supervisor, "_is_started_child", return_value=True), \
+                 patch.object(supervisor, "_clear_intentional_stop"), \
+                 patch.object(supervisor.subprocess, "Popen", return_value=child) as popen, \
+                 patch.object(supervisor.time, "sleep"), \
+                 patch.object(supervisor.time, "monotonic", side_effect=[0, 0.1]):
+                code, payload = supervisor.start("us_mock", "US")
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["started"])
+            self.assertEqual(popen.call_args.args[0][1:], ["-P", "-m", "src.main", "--market", "US"])
+            self.assertEqual(popen.call_args.kwargs["cwd"], runtime)
+            env = popen.call_args.kwargs["env"]
+            self.assertEqual(env["ACCOUNT_FILTER"], "us_mock")
+            self.assertEqual(env["MARKET_INSTANCE"], "US")
+            self.assertEqual(env["KIWOOM_ENV"], "mock")
+            self.assertEqual(env["AUTO_TRADING_ENABLED"], "false")
+            self.assertEqual(env["PYTHONPATH"], str(source))
+            self.assertEqual(env["KIWOOM_EXPECTED_WORKER_REVISION"], "b" * 40)
+            self.assertEqual(env["KIWOOM_EXPECTED_WORKER_ROOT"], str(source.resolve()))
+            self.assertEqual(env["KIWOOM_RUNTIME_ROOT"], str(runtime.resolve()))
+            for name, subdir in (("KIWOOM_DATA_DIR", "data"), ("KIWOOM_LOG_DIR", "logs"),
+                                 ("KIWOOM_DIAGNOSTICS_DIR", "diagnostics"), ("KIWOOM_BACKUP_BASE_DIR", "backups")):
+                self.assertEqual(env[name], str((runtime / subdir).resolve()))
+
+    def test_us_wrong_market_route_stops_before_status_or_spawn(self):
+        with patch.dict(os.environ, {
+            "KIWOOM_WORKER_ROOT_US_MOCK": "C:/synthetic-source",
+            "KIWOOM_WORKER_REVISION_US_MOCK": "b" * 40,
+        }), patch.object(supervisor, "_reject_real_account", return_value=None), \
+             patch.object(supervisor, "status") as status, \
+             patch.object(supervisor.subprocess, "Popen") as popen:
+            code, payload = supervisor.start("us_mock", "KR")
+        self.assertEqual(code, 9)
+        self.assertEqual(payload["reason"], "worker-launch-route-invalid")
+        status.assert_not_called()
+        popen.assert_not_called()
+
     def test_start_reports_invalid_source_revision_separately_from_path_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

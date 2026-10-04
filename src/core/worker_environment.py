@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from src.core.account_catalog import account_catalog
 from src.core.runtime_paths import RUNTIME_ROOT
+from src.core.worker_launch_routes import worker_route_environment_keys
 
 
 _LAUNCH_KEYS = (
@@ -23,11 +24,15 @@ _LAUNCH_KEYS = (
 
 
 def validate_routed_account(account: str | None, market: str | None) -> None:
-    selected = [item for item in account_catalog() if item["id"] == "kr_mock"]
-    if (account != "kr_mock" or market != "KR"
-            or len(selected) != 1 or selected[0]["market"] != "KR"
+    if worker_route_environment_keys(account, market) is None:
+        raise RuntimeError("routed worker account configuration has an unsupported mock scope")
+    try:
+        selected = [item for item in account_catalog() if item["id"] == account]
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+        raise RuntimeError("routed worker account configuration is unavailable or invalid") from exc
+    if (len(selected) != 1 or selected[0]["market"] != market
             or selected[0]["mode"] != "mock"):
-        raise RuntimeError("routed worker account configuration must be kr_mock / KR / mock")
+        raise RuntimeError("routed worker account configuration requires one matching mock entry")
 
 
 def load_worker_environment() -> None:
@@ -38,10 +43,9 @@ def load_worker_environment() -> None:
     launch = {key: os.environ.get(key) for key in _LAUNCH_KEYS}
     if any(value is None or not value.strip() for value in launch.values()):
         raise RuntimeError("routed worker launch environment is incomplete")
-    if (launch["ACCOUNT_FILTER"] != "kr_mock"
-            or launch["MARKET_INSTANCE"] != "KR"
+    if (worker_route_environment_keys(launch["ACCOUNT_FILTER"], launch["MARKET_INSTANCE"]) is None
             or launch["KIWOOM_ENV"] != "mock"):
-        raise RuntimeError("routed worker launch must be kr_mock / KR / mock")
+        raise RuntimeError("routed worker launch requires a supported account / market / mock scope")
     if not re.fullmatch(r"[0-9a-fA-F]{40}", launch["KIWOOM_EXPECTED_WORKER_REVISION"]):
         raise RuntimeError("routed worker expected source revision is invalid")
     try:

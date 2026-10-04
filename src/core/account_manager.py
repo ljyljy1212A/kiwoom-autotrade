@@ -14,6 +14,7 @@ import yaml
 
 from src.core.kiwoom_client import KiwoomClient
 from src.core.runtime_paths import DATA_DIR
+from src.core.worker_launch_routes import worker_route_environment_keys
 from src.data.dedup_store import DedupStore
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
@@ -58,12 +59,22 @@ def load_accounts(config_path: str = "config/accounts.yaml",
     if require_mock_route:
         # Validate this exact YAML snapshot before any credential lookup or
         # client construction; the earlier catalog check can become stale.
-        routed_accounts = [acc for acc in raw["accounts"] if acc.get("id") == "kr_mock"]
-        if (selected_ids != {"kr_mock"} or selected_market != "KR"
-                or len(routed_accounts) != 1
-                or str(routed_accounts[0].get("market", "")).upper() != "KR"
-                or (routed_accounts[0].get("mode") or os.environ.get("KIWOOM_ENV", "mock")) != "mock"):
-            raise RuntimeError("routed account loader requires one kr_mock / KR / mock entry")
+        selected_account = next(iter(selected_ids)) if len(selected_ids) == 1 else None
+        if (worker_route_environment_keys(selected_account, selected_market) is None
+                or not isinstance(raw, dict) or not isinstance(raw.get("accounts"), list)
+                or any(not isinstance(acc, dict) for acc in raw["accounts"])):
+            raise RuntimeError("routed account loader requires one supported mock account")
+        routed_accounts = [acc for acc in raw["accounts"] if acc.get("id") == selected_account]
+        if len(routed_accounts) != 1:
+            raise RuntimeError("routed account loader requires one matching mock entry")
+        selected = routed_accounts[0]
+        # US routing requires explicit mock mode in this YAML snapshot.
+        # Preserve the existing KR mode fallback while checking before secrets.
+        mode = selected.get("mode")
+        if selected_account == "kr_mock":
+            mode = mode or os.environ.get("KIWOOM_ENV", "mock")
+        if str(selected.get("market", "")).upper() != selected_market or mode != "mock":
+            raise RuntimeError("routed account loader requires matching market and mock mode")
     contexts: list[AccountContext] = []
     for acc in raw["accounts"]:
         if selected_ids and acc["id"] not in selected_ids:

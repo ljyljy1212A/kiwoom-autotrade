@@ -10,11 +10,12 @@ import pytest
 from src.core import account_catalog, runtime_paths, worker_environment
 
 
-@pytest.fixture
-def routed_environment(tmp_path, monkeypatch):
+@pytest.fixture(params=[("kr_mock", "KR"), ("us_mock", "US")])
+def routed_environment(tmp_path, monkeypatch, request):
     monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
     root = tmp_path / "runtime"
     root.mkdir()
+    account, market = request.param
     launch = {
         "KIWOOM_RUNTIME_ROOT": str(root),
         "KIWOOM_DATA_DIR": str(root / "data"),
@@ -23,7 +24,7 @@ def routed_environment(tmp_path, monkeypatch):
         "KIWOOM_BACKUP_BASE_DIR": str(root / "backups"),
         "KIWOOM_EXPECTED_WORKER_ROOT": str(Path(runtime_paths.__file__).resolve().parents[2]),
         "KIWOOM_EXPECTED_WORKER_REVISION": "a" * 40,
-        "ACCOUNT_FILTER": "kr_mock", "MARKET_INSTANCE": "KR",
+        "ACCOUNT_FILTER": account, "MARKET_INSTANCE": market,
         "KIWOOM_SUPERVISOR_LAUNCH_ID": "synthetic-launch",
         "KIWOOM_ENV": "mock", "AUTO_TRADING_ENABLED": "false",
         "PRICE_FEED_MODE": "auto", "TELEGRAM_APPROVAL_REQUIRED": "false",
@@ -50,13 +51,13 @@ def test_runtime_dotenv_cannot_retarget_launch(routed_environment, monkeypatch):
 
 @pytest.mark.parametrize("fault", ["missing_env", "missing_launch", "wrong_market", "relative_data", "wrong_cwd", "invalid_expected_revision", "wrong_expected_source"])
 def test_invalid_runtime_contract_stops_before_dotenv(routed_environment, monkeypatch, fault):
-    root, _ = routed_environment
+    root, launch = routed_environment
     if fault != "missing_env":
         (root / ".env").write_text("SYNTHETIC_ROUTE_SETTING=unused\n", encoding="utf-8")
     if fault == "missing_launch":
         monkeypatch.delenv("KIWOOM_SUPERVISOR_LAUNCH_ID")
     elif fault == "wrong_market":
-        monkeypatch.setenv("MARKET_INSTANCE", "US")
+        monkeypatch.setenv("MARKET_INSTANCE", "KR" if launch["MARKET_INSTANCE"] == "US" else "US")
     elif fault == "relative_data":
         monkeypatch.setenv("KIWOOM_DATA_DIR", "relative")
     elif fault == "wrong_cwd":
@@ -137,12 +138,13 @@ def test_loader_rejects_changed_scope_before_credentials(tmp_path, monkeypatch, 
     assert credential_calls == []
 
 
-def test_loader_accepts_valid_route_before_synthetic_lookup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("account,market", [("kr_mock", "KR"), ("us_mock", "US")])
+def test_loader_accepts_valid_route_before_synthetic_lookup(tmp_path, monkeypatch, account, market):
     from src.core import account_manager
 
     config = tmp_path / "synthetic_accounts.yaml"
     config.write_text(
-        "accounts:\n  - id: kr_mock\n    market: KR\n    mode: mock\n    env_prefix: SYNTHETIC\n",
+        f"accounts:\n  - id: {account}\n    market: {market}\n    mode: mock\n    env_prefix: SYNTHETIC\n",
         encoding="utf-8",
     )
     class SyntheticLookupReached(Exception):
@@ -154,4 +156,39 @@ def test_loader_accepts_valid_route_before_synthetic_lookup(tmp_path, monkeypatc
 
     monkeypatch.setattr(account_manager, "_env", lookup)
     with pytest.raises(SyntheticLookupReached):
-        account_manager.load_accounts(str(config), "kr_mock", "KR", require_mock_route=True)
+        account_manager.load_accounts(str(config), account, market, require_mock_route=True)
+
+
+@pytest.mark.parametrize("mode,market,count", [
+    ("mock", "US", 1), ("real", "US", 1),
+    ("mock", "KR", 1), ("mock", "US", 2), ("mock", "US", 0),
+])
+def test_us_catalog_requires_one_matching_mock(tmp_path, monkeypatch, mode, market, count):
+    root = tmp_path / "runtime"
+    (root / "config").mkdir(parents=True)
+    monkeypatch.setenv("KIWOOM_RUNTIME_ROOT", str(root))
+    entry = f"  - id: us_mock\n    market: {market}\n    mode: {mode}\n"
+    (root / "config" / "accounts.yaml").write_text("accounts:\n" + entry * count, encoding="utf-8")
+    if (mode, market, count) == ("mock", "US", 1):
+        worker_environment.validate_routed_account("us_mock", "US")
+    else:
+        with pytest.raises(RuntimeError, match="account configuration"):
+            worker_environment.validate_routed_account("us_mock", "US")
+
+
+@pytest.mark.parametrize("document", [
+    "accounts:\n  - id: us_mock\n    market: US\n    mode: real\n",
+    "accounts:\n  - id: us_mock\n    market: KR\n    mode: mock\n",
+    "accounts:\n  - id: us_mock\n    market: US\n",
+    "accounts:\n  - id: us_mock\n    market: US\n    mode: mock\n  - id: us_mock\n    market: US\n    mode: mock\n",
+    "accounts: []\n", "accounts: {}\n", "accounts: [null]\n", "null\n",
+])
+def test_us_loader_rejects_scope_before_credentials(tmp_path, monkeypatch, document):
+    from src.core import account_manager
+    config = tmp_path / "synthetic_accounts.yaml"
+    config.write_text(document, encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(account_manager, "_env", lambda *args: calls.append(args))
+    with pytest.raises(RuntimeError, match="routed account loader"):
+        account_manager.load_accounts(str(config), "us_mock", "US", require_mock_route=True)
+    assert calls == []
