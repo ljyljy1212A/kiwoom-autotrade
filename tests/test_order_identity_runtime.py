@@ -161,7 +161,8 @@ def build_engine(tmp_path, monkeypatch):
 def test_engine_blocks_unverified_us_execution_dates_across_all_query_dates(tmp_path, monkeypatch, fault):
     engine, client = build_engine(tmp_path, monkeypatch)
     try:
-        first, second = add_order(engine.ledger, "20261001"), add_order(engine.ledger, "20261002")
+        first = add_order(engine.ledger, "20261001")
+        add_order(engine.ledger, "20261002")
         calls = []
 
         async def history(symbol, *, order_date):
