@@ -29,6 +29,7 @@ from src.core.worker_launch_routes import (
     WorkerLaunchRouteError,
     resolve_worker_root,
     worker_route_configured,
+    worker_route_environment_keys,
 )
 from src.core.account_catalog import is_real_account
 from src.utils.logger import get_logger
@@ -464,7 +465,8 @@ def start(account: str, market: str) -> tuple[int, dict]:
     if routed:
         # Keep account state and logs in this supervisor's existing data area
         # while loading worker code from the explicitly pinned source root.
-        expected_revision = os.environ.get("KIWOOM_WORKER_REVISION_KR_MOCK", "").strip()
+        route_keys = worker_route_environment_keys(account, market)
+        expected_revision = os.environ.get(route_keys[1], "").strip() if route_keys else ""
         if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_revision):
             return 9, {
                 "account": account,

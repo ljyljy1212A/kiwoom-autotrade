@@ -11,10 +11,10 @@ class WorkerLaunchRouteError(RuntimeError):
     """Raised when an explicit worker launch route cannot be trusted."""
 
 
-_KR_MOCK_ACCOUNT = "kr_mock"
-_KR_MARKET = "KR"
-_ROOT_ENV = "KIWOOM_WORKER_ROOT_KR_MOCK"
-_REVISION_ENV = "KIWOOM_WORKER_REVISION_KR_MOCK"
+_MOCK_ROUTES = {
+    ("kr_mock", "KR"): ("KIWOOM_WORKER_ROOT_KR_MOCK", "KIWOOM_WORKER_REVISION_KR_MOCK"),
+    ("us_mock", "US"): ("KIWOOM_WORKER_ROOT_US_MOCK", "KIWOOM_WORKER_REVISION_US_MOCK"),
+}
 _REVISION_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
@@ -38,16 +38,22 @@ def _git_output(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def worker_route_environment_keys(account: str | None, market: str | None) -> tuple[str, str] | None:
+    """Return source pin keys only for the two supported mock scopes."""
+    return _MOCK_ROUTES.get((account, market))
+
+
 def worker_route_configured(
     account: str,
     market: str,
     environ: dict[str, str] | None = None,
 ) -> bool:
     """Identify an explicit mock route independently of source-path equality."""
-    if account != _KR_MOCK_ACCOUNT or market != _KR_MARKET:
+    keys = worker_route_environment_keys(account, market)
+    if keys is None:
         return False
     values = os.environ if environ is None else environ
-    return bool(values.get(_ROOT_ENV, "").strip() or values.get(_REVISION_ENV, "").strip())
+    return any(values.get(key, "").strip() for key in keys)
 
 
 def resolve_worker_root(
@@ -56,13 +62,19 @@ def resolve_worker_root(
     default_root: Path,
     environ: dict[str, str] | None = None,
 ) -> Path:
-    """Use a pinned KR mock source root when configured; keep other routes local."""
+    """Use an account-scoped mock source pin; keep unconfigured routes local."""
+    keys = worker_route_environment_keys(account, market)
+    if keys is None:
+        for routed_account, routed_market in _MOCK_ROUTES:
+            if account == routed_account and worker_route_configured(account, routed_market, environ):
+                raise WorkerLaunchRouteError("worker launch route account and market mismatch")
+        return default_root
     if not worker_route_configured(account, market, environ):
         return default_root
 
     values = os.environ if environ is None else environ
-    raw_root = values.get(_ROOT_ENV, "").strip()
-    revision = values.get(_REVISION_ENV, "").strip()
+    raw_root = values.get(keys[0], "").strip()
+    revision = values.get(keys[1], "").strip()
     if not raw_root and not revision:
         return default_root
     if not raw_root or not revision:
