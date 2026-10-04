@@ -13,6 +13,7 @@ from src.core import kiwoom_client as client_module
 from src.core.kiwoom_client import KiwoomClient
 from src.core.rate_limit_observability import emit_rate_limit_event
 from src.core.token_manager import TokenManager
+from src.data.trade_ledger import PendingOrder
 from src.utils.exceptions import KiwoomAPIError, OrderRejectedError, RetryableError
 
 
@@ -202,7 +203,7 @@ class RateLimitObservabilityTest(unittest.IsolatedAsyncioTestCase):
         engine.ctx.client.cancel_order.assert_not_awaited()
 
     async def test_successful_cancel_waits_for_execution_history(self):
-        order = SimpleNamespace(
+        order = PendingOrder(
             created_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
             requested_qty=2,
             filled_qty=0,
@@ -210,6 +211,10 @@ class RateLimitObservabilityTest(unittest.IsolatedAsyncioTestCase):
             ord_no="order-cancelled",
             symbol="005930",
             side="BUY",
+            requested_price=10.0,
+            action="BUY",
+            step=1,
+            meta={},
         )
         engine = self._engine(balance_only=False)
         engine.pending_order_cancel_after_sec = 1.0

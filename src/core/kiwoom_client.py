@@ -517,14 +517,77 @@ class KiwoomClient:
         body = {"all_stk_tp": "1" if symbol else "0", "trde_tp": "0", "stk_cd": symbol, "stex_tp": "0"}
         return await self._post("/api/dostk/acnt", "ka10075", body)
 
-    async def get_executed_orders(self, symbol: str = "") -> dict:
+    async def get_us_trade_history(
+        self, symbol: str, *, start_date: str, end_date: str, exchange: str,
+    ) -> dict:
+        """Read complete ust21100 trade pages; this does not attribute orders.
+
+        Explicit dates avoid the server-defined default-date rollover.
+        Exchange is caller-supplied so validation performs no discovery I/O.
+        """
+        if self.market != "US":
+            raise ValueError("US trade history requires market US")
+        from src.core.us_transaction_evidence import validate_us_history_scope
+        ticker = validate_us_history_scope(start_date, end_date, symbol, exchange)
+        body = {"strt_dt": start_date, "end_dt": end_date, "tp": "3",
+                "stex_tp": exchange, "stk_cd": ticker, "krw_repl_skip_yn": "Y"}
+        combined = None
+        continuation, next_key = "N", ""
+        seen_keys: set[str] = set()
+        for _ in range(100):
+            headers: dict = {}
+            page = await self._post(
+                "/api/us/acnt", "ust21100", dict(body),
+                cont_yn=continuation, next_key=next_key, response_headers=headers,
+            )
+            if (not isinstance(page, dict)
+                    or type(page.get("return_code")) not in (int, str)
+                    or page.get("return_code") not in (0, "0")
+                    or not isinstance(page.get("result_list"), list)
+                    or any(not isinstance(row, dict) for row in page["result_list"])):
+                raise ValueError("ust21100 returned an invalid transaction page")
+            if combined is None:
+                combined = dict(page)
+                combined["result_list"] = list(page["result_list"])
+            else:
+                combined["result_list"].extend(page["result_list"])
+            continuation = str(headers.get("cont-yn") or "").upper()
+            response_next_key = str(headers.get("next-key") or "")
+            if continuation == "N":
+                combined.update({
+                    "_transaction_pages_complete": True,
+                    "_query_start_date": start_date, "_query_end_date": end_date,
+                    "_query_symbol": ticker, "_query_exchange": exchange,
+                })
+                return combined
+            if continuation != "Y":
+                raise ValueError("ust21100 returned an invalid continuation indicator")
+            if (not isinstance(headers.get("next-key"), str)
+                    or not response_next_key.strip() or response_next_key in seen_keys):
+                raise ValueError("ust21100 returned an invalid continuation key")
+            seen_keys.add(response_next_key)
+            next_key = response_next_key
+        raise ValueError("ust21100 exceeded the transaction page limit")
+
+
+    async def get_executed_orders(self, symbol: str = "", *, order_date: str = "") -> dict:
         """Return complete execution pages, without inferring order finality."""
         if self.market == "US":
+            if not isinstance(order_date, str):
+                raise ValueError("US execution order_date must be YYYYMMDD")
+            if order_date:
+                from datetime import datetime
+                if len(order_date) != 8 or not order_date.isascii() or not order_date.isdigit():
+                    raise ValueError("US execution order_date must be YYYYMMDD")
+                try:
+                    datetime.strptime(order_date, "%Y%m%d")
+                except ValueError as exc:
+                    raise ValueError("US execution order_date must be YYYYMMDD") from exc
             # Official ust21150 spec: 5 = executed orders in order sequence.
             # An omitted ord_dt requests today, not all historical dates.
             path, api_id, body, rows_key = (
                 "/api/us/acnt", "ust21150",
-                {"stk_cd": symbol, "query_tp": "5", "slby_tp": "0",
+                {"ord_dt": order_date, "stk_cd": symbol, "query_tp": "5", "slby_tp": "0",
                  "stex_tp": await self._resolve_exchange(symbol)}, "result_list",
             )
         else:
@@ -556,6 +619,8 @@ class KiwoomClient:
                 not continuation and not response_next_key and not page[rows_key]
             ):
                 combined["_execution_pages_complete"] = True
+                if self.market == "US":
+                    combined["_query_order_date"] = order_date
                 return combined
             if continuation != "Y":
                 raise ValueError(f"{api_id} returned an invalid continuation indicator")

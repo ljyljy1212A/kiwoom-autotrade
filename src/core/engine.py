@@ -194,6 +194,7 @@ class AccountClearanceResult:
 @dataclass(frozen=True)
 class _ReadOnlyOrderReference:
     ord_no: str
+    order_uid: str | None = None
 
 
 class _ReadOnlyClearanceLedger:
@@ -208,31 +209,45 @@ class _ReadOnlyClearanceLedger:
         )
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA query_only=ON")
+        self.schema_version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        if self.schema_version not in (0, 2):
+            self.db.close()
+            raise ValueError("Unsupported clearance ledger schema")
 
     def close(self) -> None:
         self.db.close()
 
     def pending_orders(self, symbol: str) -> list[_ReadOnlyOrderReference]:
+        uid_column = "order_uid" if self.schema_version == 2 else "NULL AS order_uid"
         rows = self.db.execute(
-            "SELECT ord_no FROM pending_orders "
+            f"SELECT ord_no,{uid_column} FROM pending_orders "
             "WHERE account_id=? AND symbol=? "
             "AND (status='open' "
             "OR (status='filled' AND filled_qty<=0) "
             "OR status='awaiting_execution_history')",
             (self.account_id, symbol),
         ).fetchall()
-        return [_ReadOnlyOrderReference(str(row["ord_no"])) for row in rows]
+        return [_ReadOnlyOrderReference(str(row["ord_no"]), row["order_uid"]) for row in rows]
 
     def execution_recovery_orders(self, symbol: str) -> list[_ReadOnlyOrderReference]:
         return self.pending_orders(symbol)
 
     def quantity_conflict_order_ids(self, symbol: str) -> tuple[str, ...]:
+        column = "order_uid" if self.schema_version == 2 else "ord_no"
         rows = self.db.execute(
-            "SELECT ord_no FROM execution_quantity_conflicts "
-            "WHERE account_id=? AND symbol=? ORDER BY ord_no",
+            f"SELECT {column} FROM execution_quantity_conflicts "
+            f"WHERE account_id=? AND symbol=? ORDER BY {column}",
             (self.account_id, symbol),
         ).fetchall()
-        return tuple(str(row["ord_no"]) for row in rows)
+        return tuple(str(row[0]) for row in rows)
+
+    def identity_conflict_order_ids(self, symbol: str) -> tuple[str, ...]:
+        if self.schema_version != 2:
+            return ()
+        return tuple(str(row[0]) for row in self.db.execute(
+            "SELECT order_uid FROM order_identities WHERE account_id=? AND symbol=? AND identity_status='conflict'",
+            (self.account_id, symbol),
+        ))
 
     def open_tranche_qty(self, symbol: str, step: int) -> float:
         row = self.db.execute(
@@ -635,7 +650,7 @@ class AccountEngine:
         self._balance_gate.engines.add(self)
         # A passive account monitor publishes broker holdings only. It must not
         # open, initialize, or mutate the confirmed-fill ledger.
-        self.ledger = None if balance_only else TradeLedgerStore(self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id)
+        self.ledger = None if balance_only else TradeLedgerStore(self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id, market=ctx.client.market)
         self._tranche_bases_path = self.data_dir / f"tranche_bases_{ctx.account_id}.json"
         self._closure_absence_path = self.data_dir / f"closure_absence_{ctx.account_id}.json"
         try:
@@ -976,11 +991,13 @@ class AccountEngine:
     def _unresolved_reconciliation_order_ids(self, symbol: str, *, ledger=None) -> tuple[str, ...]:
         ledger = self.ledger if ledger is None else ledger
         unresolved = {
-            order.ord_no
+            getattr(order, "order_uid", None) or order.ord_no
             for order in (ledger.pending_orders(symbol) + ledger.execution_recovery_orders(symbol))
             if order.ord_no
         }
         unresolved.update(ledger.quantity_conflict_order_ids(symbol))
+        if hasattr(ledger, "identity_conflict_order_ids"):
+            unresolved.update(ledger.identity_conflict_order_ids(symbol))
         return tuple(sorted(unresolved))
 
     def _reconciliation_open_rows(self, symbol: str, avg_price: float, *, ledger=None) -> list[tuple[int, float, float]]:
@@ -1570,6 +1587,9 @@ class AccountEngine:
             await self._execute_order(intent)
 
     async def _execute_order(self, intent: OrderIntent):
+        if self.ctx.client.market == "US" and getattr(self.ledger, "schema_version", 0) != 2:
+            self.ctx.logger.error("US order blocked: an explicitly prepared identity ledger is required")
+            return
         if self._quantity_conflict_blocks_order(intent.symbol):
             return
         if not getattr(self, "_symbol_key_migration_complete", True) or self._symbol_key_manual_review(intent.symbol):
@@ -1704,19 +1724,45 @@ class AccountEngine:
             if self._quantity_conflict_blocks_order(self.ctx.strategy.symbol):
                 self._balance_sync_blocked = True
                 return False
-            completed_orders = {order.ord_no: order for order in
-                                self.ledger.completed_orders_for_execution_observation(self.ctx.strategy.symbol)}
-            if self.ledger.pending_orders(self.ctx.strategy.symbol) or completed_orders:
+            completed_rows = self.ledger.completed_orders_for_execution_observation(self.ctx.strategy.symbol)
+            pending_rows = self.ledger.pending_orders(self.ctx.strategy.symbol)
+            if self.ctx.client.market == "US" and (pending_rows or completed_rows):
+                tracked_orders = [*pending_rows, *completed_rows]
+                if any(getattr(order, "identity_status", "unresolved") != "confirmed"
+                       or not getattr(order, "broker_order_date", None)
+                       for order in tracked_orders):
+                    self.ctx.logger.error("US execution reconciliation blocked: broker order date identity is unconfirmed")
+                    self._balance_sync_blocked = True
+                    return False
+                order_dates = {str(order.broker_order_date) for order in tracked_orders}
+                query_dates = sorted(order_dates)
+            else:
+                query_dates = [""]
+            completed_orders = {
+                ((str(order.broker_order_date), order.ord_no) if self.ctx.client.market == "US" else order.ord_no): order
+                for order in completed_rows
+            }
+            if pending_rows or completed_orders:
+                execution_rows = []
                 try:
+                    # Fetch every date completely before applying any economic row.
                     async with self._balance_gate.execution_lock:
-                        now = asyncio.get_running_loop().time()
-                        wait_for = self.execution_query_min_interval_sec - (now - self._balance_gate.last_execution_request_at)
-                        if wait_for > 0:
-                            await asyncio.sleep(wait_for)
-                        data = await self.ctx.client.get_executed_orders(self.ctx.strategy.symbol)
-                        completed_at = asyncio.get_running_loop().time()
-                        self._balance_gate.last_execution_request_at = completed_at
-                        self._last_execution_query_at = completed_at
+                        for query_date in query_dates:
+                            now = asyncio.get_running_loop().time()
+                            wait_for = self.execution_query_min_interval_sec - (now - self._balance_gate.last_execution_request_at)
+                            if wait_for > 0:
+                                await asyncio.sleep(wait_for)
+                            if self.ctx.client.market == "US":
+                                data = await self.ctx.client.get_executed_orders(
+                                    self.ctx.strategy.symbol, order_date=query_date,
+                                )
+                                execution_rows.extend(normalize_us_execution_rows(data or {}, query_order_date=query_date))
+                            else:
+                                data = await self.ctx.client.get_executed_orders(self.ctx.strategy.symbol)
+                                execution_rows.extend(_executed_rows(data or {}))
+                            completed_at = asyncio.get_running_loop().time()
+                            self._balance_gate.last_execution_request_at = completed_at
+                            self._last_execution_query_at = completed_at
                     self._last_execution_unavailable_symbol = ""
                 except ValueError as exc:
                     self.ctx.logger.error(f"Incomplete execution history; sync blocked: {exc}")
@@ -1743,24 +1789,76 @@ class AccountEngine:
                     elif exc.api_id == "ust21150" and getattr(exc, "return_code", None) in (7, "7"):
                         # Some US mock symbols (for example SOXL) can be held
                         # and quoted but are not exposed by the execution-history
-                        # endpoint. Do not fail the whole tick; balance polling
-                        # remains authoritative and the query is retried later.
+                        # endpoint. Incomplete dated history blocks this cycle.
+                        # A balance snapshot cannot establish fill attribution.
                         if self._last_execution_unavailable_symbol != self.ctx.strategy.symbol:
                             self.ctx.logger.warning(
                                 f"ust21150 execution history unavailable for {self.ctx.strategy.symbol}; fill reconciliation deferred"
                             )
                             self._last_execution_unavailable_symbol = self.ctx.strategy.symbol
-                        data = None
+                        self._balance_sync_blocked = True
+                        return False
                     else:
                         raise
-                execution_rows = (normalize_us_execution_rows(data or {})
-                                  if self.ctx.client.market == "US" else _executed_rows(data or {}))
-                recovery_orders = {order.ord_no: order for order in self.ledger.execution_recovery_orders(
-                    self.ctx.strategy.symbol
-                )}
+                recovery_rows = self.ledger.execution_recovery_orders(self.ctx.strategy.symbol)
+                recovery_orders = {
+                    ((str(order.broker_order_date), order.ord_no) if self.ctx.client.market == "US" else order.ord_no): order
+                    for order in recovery_rows
+                    if self.ctx.client.market != "US" or getattr(order, "identity_status", "unresolved") == "confirmed"
+                }
                 observation_orders = {**completed_orders, **recovery_orders}
+                if self.ctx.client.market == "US":
+                    incomplete = False
+                    # Observe all quantities and validate dates before any economic write.
+                    for raw in execution_rows:
+                        query_date = raw.get("query_order_date")
+                        response_date = raw.get("broker_order_date")
+                        if response_date and response_date != query_date:
+                            self.ctx.logger.error("US execution reconciliation blocked: response order date conflicts with query")
+                            incomplete = True
+                            continue
+                        key = (str(response_date or query_date or ""), str(raw.get("ord_no", "")))
+                        order = observation_orders.get(key)
+                        if order is None:
+                            continue
+                        total = _number(raw.get("cntr_qty"))
+                        price = _number(raw.get("cntr_pric"))
+                        try:
+                            if math.isfinite(total):
+                                self.ledger.record_fill(order, total, price, _filled_at(raw), observation_only=True)
+                        except FillQuantityExceededError as exc:
+                            self._log_skipped_execution_row(
+                                raw, exc.reason, order=order, total=total,
+                                price=price if math.isfinite(price) else None,
+                                requested_qty=exc.requested_qty, stored_filled_qty=exc.filled_qty,
+                            )
+                            self._balance_sync_blocked = True
+                            return False
+                        except (sqlite3.Error, ValueError) as exc:
+                            self.ctx.logger.error(f"Execution ledger observation failed; sync blocked: {exc}")
+                            self._balance_sync_blocked = True
+                            return False
+                        if (key in recovery_orders and total > order.filled_qty
+                                and not _valid_execution_date(raw.get("execution_date"))):
+                            self._log_skipped_execution_row(
+                                raw, "authoritative_execution_date_missing", order=order,
+                                total=total if math.isfinite(total) else None,
+                                price=price if math.isfinite(price) else None,
+                            )
+                            incomplete = True
+                    if incomplete:
+                        self._balance_sync_blocked = True
+                        return False
                 for raw in execution_rows:
-                    order = observation_orders.get(str(raw.get("ord_no", "")))
+                    raw_order_no = str(raw.get("ord_no", ""))
+                    if (self.ctx.client.market == "US" and raw.get("broker_order_date")
+                            and raw["broker_order_date"] != raw.get("query_order_date")):
+                        self.ctx.logger.error("US execution reconciliation blocked: response order date conflicts with query")
+                        self._balance_sync_blocked = True
+                        return False
+                    row_order_date = str(raw.get("broker_order_date") or raw.get("query_order_date") or "")
+                    order_key = (row_order_date, raw_order_no) if self.ctx.client.market == "US" else raw_order_no
+                    order = observation_orders.get(order_key)
                     if not order:
                         self._log_skipped_execution_row(
                             raw, "no_matching_pending_or_recovery_order"
@@ -1772,8 +1870,19 @@ class AccountEngine:
                             # Persist quantity conflicts before price rejection.
                             # Observation never records an economic fill.
                             self.ledger.record_fill(
-                                order, total, price, _filled_at(raw), observation_only=True,
+                                order, total, price,
+                                _filled_at(raw),
+                                observation_only=True,
                             )
+                        if (self.ctx.client.market == "US" and order_key in recovery_orders
+                                and total > order.filled_qty and not _valid_execution_date(raw.get("execution_date"))):
+                            self._log_skipped_execution_row(
+                                raw, "authoritative_execution_date_missing", order=order,
+                                total=total if math.isfinite(total) else None,
+                                price=price if math.isfinite(price) else None,
+                            )
+                            self._balance_sync_blocked = True
+                            return False
                         if not math.isfinite(total) or not math.isfinite(price):
                             reason = ("non_finite_cumulative_quantity" if not math.isfinite(total)
                                       else "non_finite_execution_price")
@@ -1789,10 +1898,14 @@ class AccountEngine:
                                 order=order, total=total, price=price,
                             )
                             continue
-                        if order.ord_no not in recovery_orders:
+                        if order_key not in recovery_orders:
                             row = None
                         else:
-                            row = self.ledger.record_fill(order, total, price, _filled_at(raw))
+                            row = self.ledger.record_fill(
+                                order, total, price,
+                                _filled_at(raw),
+                                **({"execution_date": raw["execution_date"]} if self.ctx.client.market == "US" else {}),
+                            )
                     except FillQuantityExceededError as exc:
                         self._log_skipped_execution_row(
                             raw, exc.reason, order=order, total=total,
@@ -1804,7 +1917,7 @@ class AccountEngine:
                         # can conceal the unresolved attribution.
                         self._balance_sync_blocked = True
                         return False
-                    except sqlite3.Error as exc:
+                    except (sqlite3.Error, ValueError) as exc:
                         # A failed latch write provides no complete attribution
                         # evidence. Do not retry or turn it into sync success.
                         self.ctx.logger.error(f"Execution ledger write failed; sync blocked: {exc}")
@@ -1989,12 +2102,16 @@ class AccountEngine:
         self._balance_sync_blocked = True
 
     async def _cancel_stale_orders(self) -> None:
-        """Cancel one stale unfilled order, regardless of side, per sync cycle.
+        """Cancel one stale unfilled order under a confirmed cancellation contract.
 
         SELLs need the same recovery discipline as BUYs. Leaving an accepted
         but unconfirmed sell open allowed repeated ticks to submit additional
         orders for the same tranche before the duplicate guard existed.
         """
+        if self.ctx.client.market == "US":
+            if self.ledger.pending_orders(self.ctx.strategy.symbol):
+                self.ctx.logger.warning("US stale cancellation deferred: dated cancellation contract is unconfirmed")
+            return
         now = datetime.now(timezone.utc)
         # Include execution-history rows: once the broker has stopped exposing
         # an accepted order, an unfilled row must not block a symbol forever.
@@ -2053,7 +2170,7 @@ class AccountEngine:
                     # for matching against delayed execution history across
                     # future polls and worker restarts, while blocking a
                     # duplicate order for this side/tranche.
-                    self.ledger.mark_awaiting_execution_history(order.ord_no)
+                    self.ledger.mark_awaiting_execution_history(order.ord_no, **({"order_uid": order.order_uid} if order.order_uid else {}))
                     self.ctx.logger.warning(
                         f"{order.side} cancellation is terminal but fill remains unconfirmed; "
                         f"awaiting execution-history recovery: {order.ord_no}"
@@ -2066,7 +2183,7 @@ class AccountEngine:
             # A successful cancellation response does not establish the
             # final cumulative fill quantity. Keep recovering this order
             # so delayed executions cannot be lost after cancellation.
-            self.ledger.mark_awaiting_execution_history(order.ord_no)
+            self.ledger.mark_awaiting_execution_history(order.ord_no, **({"order_uid": order.order_uid} if order.order_uid else {}))
             self.ctx.logger.info(
                 f"Cancellation accepted for {order.side}; awaiting execution-history reconciliation: {order.ord_no}"
             )
@@ -2075,7 +2192,7 @@ class AccountEngine:
     async def _apply_confirmed_fill(self, order: PendingOrder, row: dict):
         action = Action(order.action)
         meta = dict(order.meta)
-        current = self.ledger.get_pending(order.ord_no)
+        current = self.ledger.get_pending(order.ord_no, **({"order_uid": order.order_uid} if order.order_uid else {}))
         # A partially filled grid sale still owns its step until its tranche is gone.
         if order.side == "SELL":
             meta["sell_only_step"] = bool(current and current.filled_qty >= current.requested_qty)
@@ -3103,6 +3220,8 @@ class AccountEngine:
         try:
             with self._clearance_ledger(symbol) as ledger:
                 conflicts = ledger.quantity_conflict_order_ids(self._symbol_key(symbol))
+                if hasattr(ledger, "identity_conflict_order_ids"):
+                    conflicts += ledger.identity_conflict_order_ids(self._symbol_key(symbol))
         except Exception as exc:
             self.ctx.logger.error(f"Order blocked: quantity-conflict inspection failed: {exc}")
             return True
@@ -3158,8 +3277,19 @@ def _kr_order_price(price: float, side: str) -> float:
         return float(math.ceil(price / tick) * tick)
     return float(math.floor(price / tick) * tick)
 
+def _valid_execution_date(value) -> bool:
+    if not isinstance(value, str) or len(value) != 8 or not value.isascii() or not value.isdigit():
+        return False
+    try:
+        datetime.strptime(value, "%Y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
+
 def _filled_at(row: dict) -> str:
-    value = str(row.get("ord_dt") or "").replace("-", "")
+    value = str(row.get("execution_date") or row.get("ord_dt") or "").replace("-", "")
     return f"{value[:4]}-{value[4:6]}-{value[6:]}" if len(value) == 8 and value.isdigit() else datetime.now().date().isoformat()
 
 def _same_symbol(market: str, value, symbol: str) -> bool:

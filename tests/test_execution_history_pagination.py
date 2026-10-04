@@ -72,3 +72,31 @@ def test_page_limit_rejects_partial_result():
 def test_empty_headerless_response_is_terminal():
     client, _ = _client("KR", [({"cntr": []}, {})])
     assert asyncio.run(client.get_executed_orders())["_execution_pages_complete"] is True
+
+
+def test_us_execution_order_date_is_repeated_and_returned_as_query_context():
+    client, calls = _client("US", [
+        ({"result_list": [{"ord_no": "one"}]}, {"cont-yn": "Y", "next-key": "cursor"}),
+        ({"result_list": [{"ord_no": "two"}]}, {"cont-yn": "N"}),
+    ])
+    data = asyncio.run(client.get_executed_orders("AAPL", order_date="20261003"))
+    assert data["_query_order_date"] == "20261003"
+    assert calls[0][2]["ord_dt"] == "20261003"
+    assert calls[1][2]["ord_dt"] == "20261003"
+
+
+@pytest.mark.parametrize("order_date", ["2026103", "20261301", "20260230", "bad"])
+def test_us_execution_rejects_invalid_explicit_order_date(order_date):
+    client, calls = _client("US", [])
+    with pytest.raises(ValueError, match="YYYYMMDD"):
+        asyncio.run(client.get_executed_orders("AAPL", order_date=order_date))
+    assert calls == []
+
+
+@pytest.mark.parametrize("order_date", [None, 20261003, [], {}])
+def test_us_date_type_is_rejected_before_exchange_or_http(order_date):
+    client, calls = _client("US", [])
+    with pytest.raises(ValueError, match="YYYYMMDD"):
+        asyncio.run(client.get_executed_orders("AAPL", order_date=order_date))
+    assert calls == []
+    client._resolve_exchange.assert_not_awaited()

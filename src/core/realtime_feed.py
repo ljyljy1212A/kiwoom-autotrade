@@ -29,11 +29,13 @@ import os
 import socket
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import websockets
 
 from src.utils.exceptions import FatalError
+from src.data.us_ws_evidence import decode_evidence_json
 
 DEFAULT_WS_REAL = "wss://api.kiwoom.com:10000/api/dostk/websocket"
 DEFAULT_WS_MOCK = "wss://mockapi.kiwoom.com:10000/api/dostk/websocket"
@@ -83,7 +85,7 @@ class KiwoomRealtimeFeed:
     - 수신한 체결가는 메모리 캐시에 (가격, 수신시각)으로 저장되며 get_cached()로 조회합니다.
     """
 
-    def __init__(self, client, logger=None, max_staleness_sec: float = 20.0):
+    def __init__(self, client, logger=None, max_staleness_sec: float = 20.0, *, f5_evidence_journal=None):
         self.client = client
         self.logger = logger
         self.max_staleness_sec = max_staleness_sec
@@ -95,8 +97,40 @@ class KiwoomRealtimeFeed:
         self._stop = asyncio.Event()
         self.connected = asyncio.Event()
         self._doorbell_callbacks: list = []
+        self._f5_evidence_journal = None
+        self._f5_evidence_error = None
+        self.set_f5_evidence_journal(f5_evidence_journal)
         default_events = "F5" if client.market == "US" else "00,04"
         self._doorbell_types = {x.strip() for x in os.environ.get("KIWOOM_WS_DOORBELL_TYPES", default_events).split(",") if x.strip()}
+
+    def set_f5_evidence_journal(self, journal) -> None:
+        """Explicit capture opt-in; attaching creates no database or connection."""
+        if journal is not None and (self.client.market != "US" or not callable(getattr(journal, "record_frame", None))):
+            raise ValueError("F5 capture requires a US evidence journal")
+        self._f5_evidence_journal = journal
+        self._f5_evidence_error = None
+
+    @property
+    def f5_evidence_status(self) -> dict:
+        state = "disabled" if self._f5_evidence_journal is None else "configured"
+        if self._f5_evidence_error is not None:
+            state = "INCOMPLETE"
+        return {"state": state, "error_type": self._f5_evidence_error}
+
+    def _latch_f5_evidence_failure(self, error_type: str) -> None:
+        if self._f5_evidence_journal is not None and self._f5_evidence_error is None:
+            self._f5_evidence_error = error_type
+            if self.logger:
+                self.logger.error("F5 evidence capture failed; evidence state is INCOMPLETE")
+
+    async def _capture_f5_evidence(self, raw, observed_at) -> None:
+        if self._f5_evidence_journal is None or self._f5_evidence_error is not None:
+            return
+        try:
+            await asyncio.to_thread(self._f5_evidence_journal.record_frame, raw, observed_at=observed_at)
+        except Exception as exc:
+            # Latch an evidence gap. Do not log payloads or retry the write.
+            self._latch_f5_evidence_failure(type(exc).__name__)
 
     def add_doorbell_callback(self, callback) -> None:
         """Register a no-payload account event callback.
@@ -289,23 +323,35 @@ class KiwoomRealtimeFeed:
 
     async def _register_loop(self, ws) -> None:
         """새로 구독 요청된 종목이 있으면 REG(실시간 등록) 메시지를 전송."""
+        account_f5_registered = False
         while not self._stop.is_set():
+            capture_f5 = self.client.market == "US" and self._f5_evidence_journal is not None
+            if capture_f5 and not account_f5_registered:
+                # F5 requestIo requires an empty item for all-account events.
+                # Register independently of quote symbols, including idle workers.
+                await ws.send(json.dumps({
+                    "trnm": "REG",
+                    "grp_no": "2",
+                    "refresh": "1",
+                    "data": [{"item": [""], "type": ["F5"]}],
+                }))
+                account_f5_registered = True
             if self._pending_subscribe:
                 symbols = list(self._pending_subscribe)
                 self._pending_subscribe.clear()
+                doorbell_types = self._doorbell_types - {"F5"} if capture_f5 else self._doorbell_types
+                registered_types = [REALTIME_TYPE, *sorted(doorbell_types)]
                 await ws.send(json.dumps({
                     "trnm": "REG",
                     "grp_no": "1",
                     "refresh": "1",
-                    # 00/04 (or F5 for US) are subscribed only as a doorbell.
-                    # Their payload is discarded; REST calls below remain authoritative.
-                    "data": [{"item": symbols, "type": [REALTIME_TYPE, *sorted(self._doorbell_types)]}],
+                    "data": [{"item": symbols, "type": registered_types}],
                 }))
                 self._subscribed.update(symbols)
                 if self.logger:
                     self.logger.info(
                         f"WebSocket REG sent: symbols={symbols}, "
-                        f"types={[REALTIME_TYPE, *sorted(self._doorbell_types)]}"
+                        f"types={registered_types}"
                     )
                 if self.logger:
                     self.logger.info(f"실시간 시세 구독 등록: {symbols} (type={REALTIME_TYPE})")
@@ -318,11 +364,17 @@ class KiwoomRealtimeFeed:
 
     async def _receive_loop(self, ws) -> None:
         async for raw in ws:
+            observed_at = datetime.now(timezone.utc)
             try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
+                decoder = decode_evidence_json if self._f5_evidence_journal is not None else json.loads
+                msg = decoder(raw)
+            except (ValueError, UnicodeDecodeError):
+                self._latch_f5_evidence_failure("MalformedWebSocketFrame")
                 continue
 
+            if not isinstance(msg, dict):
+                self._latch_f5_evidence_failure("MalformedWebSocketFrame")
+                continue
             trnm = msg.get("trnm")
             if trnm == "REG":
                 if self.logger:
@@ -338,7 +390,13 @@ class KiwoomRealtimeFeed:
             if trnm != "REAL":
                 continue
 
-            for item in msg.get("data", []):
+            items = msg.get("data") if self._f5_evidence_journal is not None else msg.get("data", [])
+            if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                self._latch_f5_evidence_failure("MalformedWebSocketFrame")
+                continue
+            if self.client.market == "US" and any(item.get("type") == "F5" for item in items):
+                await self._capture_f5_evidence(raw, observed_at)
+            for item in items:
                 if item.get("type") in self._doorbell_types:
                     for callback in self._doorbell_callbacks:
                         try:
@@ -348,7 +406,10 @@ class KiwoomRealtimeFeed:
                         except Exception as e:
                             if self.logger:
                                 self.logger.warning(f"account WS doorbell callback failed: {e}")
-                    # Never parse account-event fields: REST remains authoritative.
+                    # Evidence capture above does not grant accounting authority.
+                    continue
+                if item.get("type") == "F5":
+                    # Account evidence can never enter the quote cache.
                     continue
                 symbol = item.get("item")
                 values = item.get("values", {}) or {}

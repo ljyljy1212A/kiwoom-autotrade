@@ -16,6 +16,7 @@ from src.core.engine import (
 )
 from src.data.order_attempts import OrderAttemptStore
 from src.data.trade_ledger import FillQuantityExceededError, PendingOrder, TradeLedgerStore
+from src.data.trade_ledger_migration import create_identity_ledger_copy
 from src.utils.exceptions import OrderDispatchBlockedError
 from src.strategy.base import Action, OrderIntent
 from tests.support.telegram_double import make_telegram_double
@@ -53,7 +54,7 @@ def _engine(service, snapshot, *, enabled, data_dir):
     engine._balance_gate = SimpleNamespace(dispatch_clearance_service=service)
     engine._control_authority = control_snapshot.ControlAuthority("us_mock", SESSION)
     engine.telegram = make_telegram_double()
-    engine.ledger = SimpleNamespace(add_pending=Mock(), quantity_conflict_order_ids=lambda _symbol: ())
+    engine.ledger = SimpleNamespace(schema_version=2, add_pending=Mock(), quantity_conflict_order_ids=lambda _symbol: ())
     engine.sync_broker_state = AsyncMock()
     engine._build_reconciliation_clearance_snapshot = AsyncMock(return_value=snapshot)
     control_snapshot.initialize(data_dir, "us_mock", {}, None)
@@ -67,9 +68,23 @@ def _engine(service, snapshot, *, enabled, data_dir):
     return engine
 
 
+def _identity_ledger(path):
+    """Prepare a real v2 ledger from an empty synthetic legacy store."""
+    source = path.with_suffix(".legacy.db")
+    legacy = TradeLedgerStore(source, "us_mock")
+    legacy.close()
+    create_identity_ledger_copy(source, path, account_markets={"us_mock": "US"})
+    return TradeLedgerStore(path, "us_mock", market="US")
+
+
 def _persist_quantity_conflict(store, symbol="SOXL"):
     order = PendingOrder("CONFLICT", symbol, "BUY", 2, 10, "BUY", 1, {})
     store.add_pending(order)
+    if store.schema_version == 2:
+        store.confirm_us_order_date(order.order_uid, "20261001", evidence={
+            "source_tr": "synthetic", "record_ref": "quantity-conflict-fixture",
+            "verified_at_utc": "2026-10-01T00:00:00+00:00",
+        })
     with pytest.raises(FillQuantityExceededError):
         store.record_fill(order, 3, 10, "2026-10-01")
     return order
@@ -79,19 +94,20 @@ def _persist_quantity_conflict(store, symbol="SOXL"):
 @pytest.mark.parametrize("action", [Action.BUY, Action.SELL])
 def test_persisted_conflict_blocks_dispatch_after_reopen_with_clearance_on_or_off(tmp_path, enabled, action):
     path = tmp_path / "trades_us_mock.db"
-    store = TradeLedgerStore(path, "us_mock")
+    store = _identity_ledger(path)
     try:
         order = _persist_quantity_conflict(store)
-        store.record_fill(order, 2, 10, "2026-10-01")
+        with pytest.raises(ValueError, match="Durable order conflict blocks fill attribution"):
+            store.record_fill(order, 2, 10, "2026-10-01", execution_date="20261001")
     finally:
         store.close()
     engine = _engine(None, _snapshot(clear=True), enabled=enabled, data_dir=tmp_path)
-    engine.ledger = TradeLedgerStore(path, "us_mock")
+    engine.ledger = TradeLedgerStore(path, "us_mock", market="US")
     try:
         with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
             asyncio.run(engine._execute_order(OrderIntent(action, "SOXL", 1, 10.0)))
         engine.ctx.client.place_order.assert_not_awaited()
-        assert engine.ledger.quantity_conflict_order_ids("SOXL") == ("CONFLICT",)
+        assert engine.ledger.quantity_conflict_order_ids("SOXL") == (order.order_uid,)
     finally:
         engine.ledger.close()
 
@@ -104,7 +120,7 @@ def test_conflict_inspection_failure_blocks_dispatch(tmp_path):
 
 
 def test_conflict_created_during_clearance_blocks_at_final_submission_boundary(tmp_path):
-    store = TradeLedgerStore(tmp_path / "trades_us_mock.db", "us_mock")
+    store = _identity_ledger(tmp_path / "trades_us_mock.db")
 
     async def check(_engine_arg, _symbol):
         _persist_quantity_conflict(store)
@@ -252,12 +268,14 @@ def test_attempt_confirmation_failure_keeps_order_unresolved_after_pending_write
         ord_no="ORDER-1", attempt_id=attempt.attempt_id,
     )
     ledger_path = tmp_path / "trades_us_mock.db"
-    engine.ledger = TradeLedgerStore(ledger_path, "us_mock")
+    engine.ledger = _identity_ledger(ledger_path)
 
     def fail_after_pending_commit(result):
-        reader = TradeLedgerStore(ledger_path, "us_mock")
+        reader = TradeLedgerStore(ledger_path, "us_mock", market="US")
         try:
-            pending = reader.get_pending(result.ord_no)
+            orders = reader.pending_orders("SOXL")
+            assert len(orders) == 1
+            pending = reader.get_pending(result.ord_no, order_uid=orders[0].order_uid)
             assert pending is not None
             assert pending.symbol == "SOXL"
         finally:
@@ -271,7 +289,9 @@ def test_attempt_confirmation_failure_keeps_order_unresolved_after_pending_write
         with patch.dict(os.environ, {"US_PAPER_ORDER_SUBMISSION_ENABLED": "true"}, clear=False):
             asyncio.run(engine._execute_order(intent))
 
-        pending = engine.ledger.get_pending("ORDER-1")
+        orders = engine.ledger.pending_orders("SOXL")
+        assert len(orders) == 1
+        pending = engine.ledger.get_pending("ORDER-1", order_uid=orders[0].order_uid)
         assert pending is not None
         assert pending.symbol == "SOXL"
         engine.ctx.client.mark_order_pending_recorded.assert_called_once()

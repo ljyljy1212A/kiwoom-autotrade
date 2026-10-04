@@ -32,6 +32,10 @@ from src.core.runtime_paths import DATA_DIR, LOG_DIR, RUNTIME_ROOT
 from src.core.account_manager import load_accounts
 from src.core.engine import AccountEngine, DispatchClearanceService
 from src.core.realtime_feed import PriceFeed
+from src.core.us_ws_evidence_activation import (
+    attach_us_mock_f5_journal,
+    configure_us_mock_f5_environment,
+)
 from src.calendar_utils.market_calendar import MarketCalendar, _FALLBACK_HOURS
 from src.strategy.base import PositionState
 from src.strategy.infinite_grid import InfiniteGridStrategy
@@ -415,6 +419,7 @@ async def make_price_feed(ctx):
     mode = os.environ.get("PRICE_FEED_MODE", "auto").lower()
     max_staleness = float(os.environ.get("KIWOOM_PRICE_MAX_STALENESS_SEC", "20"))
     feed = PriceFeed(ctx.client, logger=ctx.logger, mode=mode, max_staleness_sec=max_staleness)
+    attach_us_mock_f5_journal(feed, ctx, os.environ, data_dir=DATA_DIR)
     feed.start()
     ctx.price_feed_obj = feed  # main()에서 종료 시 정리(WS 연결 해제)하기 위해 ctx에 보관
     return feed.get_price
@@ -773,6 +778,9 @@ async def main():
         # Defense in depth for future account-loader changes.
         raise RuntimeError("KR worker launch refused: account filter did not resolve to exactly one account.")
     worker_account_id = contexts[0].account_id
+    configure_us_mock_f5_environment(
+        worker_account_id, worker_market, os.environ, data_dir=DATA_DIR,
+    )
     worker_lock = _worker_lock(worker_account_id)
     worker_heartbeat: asyncio.Task | None = None
     stop_watcher: asyncio.Task | None = None
