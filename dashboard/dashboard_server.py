@@ -26,6 +26,7 @@ from src.core.atomic_write import atomic_write_json, atomic_write_text
 from src.core.orphan_cleanup import account_cleanup_lock
 from src.core import dashboard_control_snapshot as control_snapshot
 from src.core.runtime_paths import DATA_DIR
+from src.core.symbol_keys import canonical_symbol_key
 
 ROOT = Path(__file__).resolve().parents[1]
 _CONTROL_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,11}$")
@@ -605,6 +606,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self._reject_real_account(account):
                     return
                 profile_ids = set()
+                profile_symbols = set()
                 for profile in profiles:
                     if not isinstance(profile, dict):
                         raise ValueError("profile must be an object")
@@ -617,6 +619,15 @@ class Handler(BaseHTTPRequestHandler):
                     if "enabled" in profile and type(profile["enabled"]) is not bool:
                         raise ValueError("profile enabled must be a boolean")
                     _validate_market_config(account, profile.get("config"))
+                    config = profile.get("config")
+                    if isinstance(config, dict):
+                        symbol_key = canonical_symbol_key(
+                            _account_market(account), config.get("symbol")
+                        )
+                        if symbol_key:
+                            if symbol_key in profile_symbols:
+                                raise ValueError("profile symbols must be unique")
+                            profile_symbols.add(symbol_key)
                 selected_id = str(payload.get("selected_profile_id", ""))
                 with account_cleanup_lock(ROOT / "data", account):
                     settings_path = ROOT / "data" / f"dashboard_settings_{account}.json"

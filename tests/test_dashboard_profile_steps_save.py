@@ -374,6 +374,42 @@ class DashboardProfileStepsSaveTests(unittest.TestCase):
         self.assertEqual(responses[0][1], 200)
         self.assertEqual(persisted["profiles"], [incoming])
 
+    def test_active_profile_side_disable_reaches_engine_control_state(self):
+        existing = _profile(enabled=True, buy_steps=[])
+        existing["config"]["auto_buy"]["enabled"] = True
+        existing["config"]["auto_sell"]["enabled"] = True
+        incoming = json.loads(json.dumps(existing))
+        incoming["config"]["auto_buy"]["enabled"] = False
+        control = {
+            "symbol": "SOXL",
+            "auto_buy": False,
+            "auto_sell": True,
+            "config": incoming["config"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            data.mkdir()
+            (data / "dashboard_settings_us_mock.json").write_text(
+                json.dumps({"profiles": [existing]}), encoding="utf-8"
+            )
+
+            settings_response = self._post_settings(root, {"profiles": [incoming]})
+            control_snapshot.initialize(data, "us_mock", {}, None)
+            with patch.object(dashboard_server, "_control_worker_instance", return_value=SESSION):
+                control_response = self._post_control(root, control)
+            engine = self._dashboard_engine(data)
+            asyncio.run(engine._refresh_dashboard_controls())
+            persisted_control = control_snapshot.load(data, "us_mock")
+
+        self.assertEqual(settings_response[0][1], 200)
+        self.assertEqual(control_response[0][1], 200)
+        self.assertFalse(persisted_control["controls"]["SOXL"]["auto_buy"])
+        self.assertTrue(persisted_control["controls"]["SOXL"]["auto_sell"])
+        self.assertFalse(engine._dashboard_auto_buy)
+        self.assertTrue(engine._dashboard_auto_sell)
+        self.assertTrue(engine._dashboard_profile_allowed)
+
     def test_enabled_profile_can_be_disabled_without_changing_strategy(self):
         existing = _profile(enabled=True, buy_steps=[])
         incoming = json.loads(json.dumps(existing))

@@ -108,18 +108,27 @@ def us_balance_recognized(data: dict) -> bool:
     return any(key in data for key in ("acnt_evlt_remn_indv_tot", "stk_cntr_remn", "result_list", "holdings", "acnt_bal"))
 
 
-def normalize_us_execution_rows(data: dict) -> list[dict]:
+def normalize_us_execution_rows(data: dict, *, query_order_date: str = "") -> list[dict]:
     rows = _rows(data, ("cntr", "result_list", "acnt_ord_cntr_prps_dtl", "ord_cntr_list", "ordr_cntr"))
     normalized = []
     for row in rows:
         ord_no = _first(row, ("ord_no", "odno", "ordr_no"))
         if not ord_no:
             continue
+        broker_order_date = _first(row, ("ord_dt", "ordr_dt")) or ""
+        # ust21150/ust21180/ust21510 define no actual execution date.
+        # Extra response fields, order dates and ticker dates cannot establish
+        # an account execution date. Keep attribution unresolved until a
+        # separately reviewed broker-evidence adapter supplies that contract.
+        execution_date = ""
         normalized.append({
             "ord_no": str(ord_no),
             "cntr_qty": number(_first(row, ("cntr_qty", "tot_ccld_qty", "exec_qty", "filled_qty"))),
             "cntr_pric": usd_price(_first(row, ("cntr_pric", "cntr_uv", "exec_price", "filled_price"))),
-            "ord_dt": _first(row, ("ord_dt", "ordr_dt", "cntr_dt", "exec_date")) or "",
+
+            "broker_order_date": broker_order_date,
+            "query_order_date": str(query_order_date or data.get("_query_order_date") or ""),
+            "execution_date": execution_date,
         })
     return normalized
 

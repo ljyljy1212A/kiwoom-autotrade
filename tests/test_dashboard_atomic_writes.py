@@ -132,6 +132,24 @@ def test_settings_post_rejects_duplicate_incoming_profile_ids_before_write(tmp_p
     write.assert_not_called()
 
 
+@pytest.mark.parametrize("symbols", [("SOXL", "SOXL"), ("soxl", " SOXL ")])
+def test_settings_post_rejects_duplicate_incoming_profile_symbols_before_write(
+    tmp_path: Path, symbols: tuple[str, str],
+) -> None:
+    profiles = [
+        {
+            "id": f"profile-{index}",
+            "enabled": False,
+            "config": {"symbol": symbol, "market": "US", "mode": "mock"},
+        }
+        for index, symbol in enumerate(symbols)
+    ]
+    with patch.object(dashboard_server, "atomic_write_json") as write:
+        responses = _post(tmp_path, "/api/settings", {"profiles": profiles})
+
+    assert responses == [({"error": "Invalid settings payload"}, 400)]
+    write.assert_not_called()
+
 @pytest.mark.parametrize(
     "headers,body",
     [
@@ -166,6 +184,46 @@ def test_settings_post_rejects_oversized_body_before_read_or_write(tmp_path: Pat
     assert responses == [({"error": "Invalid settings payload"}, 400)]
     write.assert_not_called()
 
+
+@pytest.mark.parametrize(
+    "path,error",
+    [
+        ("/api/settings", "Invalid settings payload"),
+        ("/api/control", "Invalid control payload"),
+        ("/api/start", "Invalid start payload"),
+        ("/api/stop", "Invalid stop payload"),
+    ],
+)
+@pytest.mark.parametrize(
+    "headers,body",
+    [
+        ({"Content-Type": "text/plain"}, b"{}"),
+        ({"Origin": "http://evil.example:8765"}, b"{}"),
+        ({"Host": "evil.example:8765", "Origin": "http://evil.example:8765"}, b"{}"),
+        ({}, b"[]"),
+        ({"Content-Length": str(dashboard_server.MAX_DASHBOARD_POST_BYTES + 1)}, b"{}"),
+    ],
+)
+def test_all_write_endpoints_reject_shared_request_boundary_before_side_effects(
+    tmp_path: Path,
+    path: str,
+    error: str,
+    headers: dict[str, str],
+    body: bytes,
+) -> None:
+    with (
+        patch.object(dashboard_server, "atomic_write_json") as settings_write,
+        patch.object(control_snapshot, "update") as control_write,
+        patch.object(dashboard_server, "_supervisor") as supervisor,
+    ):
+        responses = _post(
+            tmp_path, path, {}, header_overrides=headers, raw_body=body,
+        )
+
+    assert responses == [({"error": error}, 400)]
+    settings_write.assert_not_called()
+    control_write.assert_not_called()
+    supervisor.assert_not_called()
 
 def test_settings_post_uses_atomic_write(tmp_path: Path) -> None:
     with patch.object(dashboard_server, "atomic_write_json") as write:
