@@ -802,12 +802,12 @@ class AccountEngine:
         # Dashboard controls are an explicit execution authority, independent
         # of the worker-wide environment switch. Read them before reporting
         # startup mode so the log cannot falsely claim submissions are off.
-        if not self._us_observation_only:
+        if not getattr(self, "_us_observation_only", False):
             self._backup_ledger_at_startup()
             self._restore_from_ledger()
             self._refresh_runtime_control()
             await self._refresh_dashboard_controls()
-        if self._us_observation_only:
+        if getattr(self, "_us_observation_only", False):
             mode = "operational observation only; economic ingestion and order dispatch blocked"
         elif self._auto_trading_enabled:
             mode = "worker-wide Auto Trading enabled"
@@ -821,7 +821,7 @@ class AccountEngine:
         # including when the regular market is closed.
         try:
             await self.sync_broker_state(force_balance=True)
-            if self._us_observation_only:
+            if getattr(self, "_us_observation_only", False):
                 self.ctx.logger.info("US observation startup pass finished; balance synchronization remains blocked")
             else:
                 self.ctx.logger.info("Startup broker balance synchronization completed")
@@ -1274,7 +1274,7 @@ class AccountEngine:
         return self.data_dir / f"dashboard_control_{self.ctx.account_id}{suffix}.json"
 
     async def _tick(self):
-        if self._us_observation_only:
+        if getattr(self, "_us_observation_only", False):
             await self.sync_broker_state()
             return
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
@@ -1904,7 +1904,7 @@ class AccountEngine:
         if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
             self._balance_sync_blocked = True
             return False
-        if not self._us_observation_only:
+        if not getattr(self, "_us_observation_only", False):
             await self._apply_reconciliation_clear_event()
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
             # Clearance and lock acquisition can yield; recovery must still be
@@ -2003,7 +2003,7 @@ class AccountEngine:
                             return False
                         if not self._observe_us_execution_cycle(tracked_orders, observation_responses):
                             return False
-                        if self._us_observation_only:
+                        if getattr(self, "_us_observation_only", False):
                             # Persistence success cannot authorize the legacy
                             # economic path or clear an operational order gate.
                             self._record_us_observation_state("OBSERVED_ONLY")

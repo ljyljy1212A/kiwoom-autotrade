@@ -801,7 +801,7 @@ async def main():
     try:
         observation_session = open_us_observation_session(
             account_id=worker_account_id, market=worker_market,
-            mode=contexts[0].client.mode, environment=os.environ,
+            mode=getattr(contexts[0].client, "mode", None), environment=os.environ,
             identity_ledger_path=DATA_DIR / f"trades_{worker_account_id}.db",
         )
         worker_lock.acquire()
