@@ -8,9 +8,9 @@ import pytest
 
 from src.data.us_synthetic_bridge import SyntheticCumulativeGenerationBridge
 from src.data.us_synthetic_checkpoint_store import SyntheticCheckpointStore, initialize_synthetic_checkpoint_store
-from tests.test_us_cumulative_execution import STAMP, NEXT
-from tests.test_us_synthetic_bridge import bridge, proof  # noqa: F401 -- fixture
-from tests.test_us_synthetic_ledger import db, dump, observe  # noqa: F401 -- fixture
+from tests.test_us_cumulative_execution import NEXT
+from tests.test_us_synthetic_bridge import bridge as bridge, proof
+from tests.test_us_synthetic_ledger import db as db, dump, observe
 
 
 @pytest.fixture

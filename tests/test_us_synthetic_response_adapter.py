@@ -9,8 +9,8 @@ from src.data.us_synthetic_response_adapter import (
     SyntheticResponseBinding, SyntheticUsResponseAdapter,
 )
 from tests.test_us_cumulative_execution import DATE, STAMP, NEXT, NUMBER
-from tests.test_us_synthetic_bridge import SCOPE, bridge, proof  # noqa: F401 -- fixture
-from tests.test_us_synthetic_ledger import db, dump  # noqa: F401 -- fixture
+from tests.test_us_synthetic_bridge import SCOPE, bridge as bridge, proof
+from tests.test_us_synthetic_ledger import db as db, dump
 
 
 def response(quantity="2", average="100.0000", **changes):

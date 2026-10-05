@@ -7,7 +7,7 @@ import pytest
 
 from src.data.us_synthetic_snapshot import SyntheticTrancheSettings, read_synthetic_lifecycle_snapshot
 from tests.test_us_synthetic_cost import CYCLE, apply, new_order
-from tests.test_us_synthetic_ledger import db, dump, observe  # noqa: F401 -- imported fixture
+from tests.test_us_synthetic_ledger import db as db, dump, observe
 
 SETTINGS = tuple(SyntheticTrancheSettings(step, "-3" if step < 3 else None, "4", "0")
                  for step in range(1, 4))

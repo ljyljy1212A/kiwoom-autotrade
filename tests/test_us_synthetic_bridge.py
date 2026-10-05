@@ -16,7 +16,7 @@ from src.data.us_synthetic_generations import (
 )
 from tests.test_us_cumulative_execution import DATE, STAMP, NEXT
 from tests.test_us_synthetic_cost import CYCLE, new_order
-from tests.test_us_synthetic_ledger import db, dump, observe  # noqa: F401 -- imported fixture
+from tests.test_us_synthetic_ledger import db as db, dump, observe
 
 SCOPE = dict(account_id="us_mock", market="US", symbol="AAPL", lifecycle_id=CYCLE)
 

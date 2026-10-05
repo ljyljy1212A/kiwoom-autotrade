@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from src.data.us_synthetic_transition import SyntheticLegacyFillProof, assess_synthetic_transition
-from tests.test_us_synthetic_ledger import db, dump  # noqa: F401 -- imported fixture
+from tests.test_us_synthetic_ledger import db as db, dump
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ from src.data.us_synthetic_observation_journal import SyntheticJournalIdentity, 
 from src.data.us_synthetic_observation_recovery import SyntheticObservationRecoveryReader
 from src.data.us_synthetic_observation_sink import SyntheticObservationSink
 from src.strategy.base import Action, OrderIntent
-from tests.test_engine_us_observation_hook import adapter, factory, history
+from tests.test_engine_us_observation_hook import adapter, factory as factory, history
 from tests.test_order_identity_runtime import add_order, dump as dump_ledger
 from tests.test_us_synthetic_observation_recovery import dump, seed
 

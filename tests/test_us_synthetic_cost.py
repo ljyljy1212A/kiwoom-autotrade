@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 
 from src.data.us_synthetic_ledger import apply_synthetic_cumulative, restore_synthetic_tranche_cost
-from tests.test_us_synthetic_ledger import db, dump, evidence, observe  # noqa: F401 -- imported fixture
+from tests.test_us_synthetic_ledger import db as db, dump, evidence, observe
 from tests.test_us_cumulative_execution import DATE, STAMP
 
 CYCLE = "synthetic-cycle-1"

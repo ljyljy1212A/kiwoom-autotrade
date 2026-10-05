@@ -6,7 +6,7 @@ import pytest
 
 from src.data.us_synthetic_strategy import project_synthetic_strategy
 from tests.test_us_synthetic_cost import CYCLE, apply, new_order
-from tests.test_us_synthetic_ledger import db, dump, observe  # noqa: F401 -- imported fixture
+from tests.test_us_synthetic_ledger import db as db, dump, observe
 
 
 def projection(db, **changes):

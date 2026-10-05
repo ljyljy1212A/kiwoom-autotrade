@@ -8,10 +8,10 @@ from src.data.us_synthetic_checkpoint_prices import read_synthetic_checkpoint_pr
 from src.data.us_synthetic_generations import SyntheticGenerationClosure, SyntheticOrderFinality
 from src.data.us_synthetic_snapshot import SyntheticTrancheSettings
 from tests.test_us_cumulative_execution import STAMP, NEXT
-from tests.test_us_synthetic_bridge import bridge, proof  # noqa: F401 -- fixture
-from tests.test_us_synthetic_checkpoint_store import store  # noqa: F401 -- fixture
+from tests.test_us_synthetic_bridge import bridge as bridge, proof
+from tests.test_us_synthetic_checkpoint_store import store as store
 from tests.test_us_synthetic_cost import new_order
-from tests.test_us_synthetic_ledger import db, dump, observe  # noqa: F401 -- fixture
+from tests.test_us_synthetic_ledger import db as db, dump, observe
 
 SETTINGS = tuple(SyntheticTrancheSettings(step, "-10" if step < 3 else None, "10", "0")
                  for step in (1, 2, 3))
