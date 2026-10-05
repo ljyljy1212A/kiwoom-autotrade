@@ -31,6 +31,7 @@ from src.core.symbol_keys import canonical_symbol_key
 from src.core.runtime_paths import DATA_DIR, LOG_DIR, RUNTIME_ROOT
 from src.core.account_manager import load_accounts
 from src.core.engine import AccountEngine, DispatchClearanceService
+from src.core.us_observation_startup import open_us_observation_session
 from src.core.realtime_feed import PriceFeed
 from src.core.us_ws_evidence_activation import (
     attach_us_mock_f5_journal,
@@ -609,7 +610,8 @@ def _current_profile_for_monitor(account_id: str, market: str) -> tuple[str, boo
     return None
 
 
-async def run_symbol_engines(ctx, telegram: TelegramController, registry: SymbolEngineRegistry) -> None:
+async def run_symbol_engines(ctx, telegram: TelegramController, registry: SymbolEngineRegistry,
+                             *, observation_session=None) -> None:
     """Keep one isolated engine/task per enabled symbol on an account."""
     price_feed = await make_price_feed(ctx)
     quote_health_monitor = asyncio.create_task(
@@ -633,8 +635,14 @@ async def run_symbol_engines(ctx, telegram: TelegramController, registry: Symbol
         engine = AccountEngine(symbol_ctx, telegram, None,
                                 price_feed, control_symbol=symbol,
                                 control_authority=getattr(ctx, "dashboard_control_authority", None),
-                                dispatch_clearance_service=dispatch_clearance_service)
-        await engine.run()
+                                dispatch_clearance_service=dispatch_clearance_service,
+                                us_observation_adapter=(observation_session.adapter
+                                                        if observation_session is not None else None))
+        try:
+            await engine.run()
+        finally:
+            if observation_session is not None:
+                await engine.stop_us_observation_tasks()
 
     def release_registered_symbol(symbol: str, task: asyncio.Task) -> None:
         registry.release_from_task(ctx.account_id, ctx.client.market, symbol, task)
@@ -789,7 +797,12 @@ async def main():
     telegram: TelegramController | None = None
     worker_identity: WorkerIdentity | None = None
     lock_acquired = False
+    observation_session = None
     try:
+        observation_session = open_us_observation_session(
+            account_id=worker_account_id, market=worker_market,
+            mode=contexts[0].client.mode, environment=os.environ,
+        )
         worker_lock.acquire()
         lock_acquired = True
         authority = AccountOrderAuthority(worker_account_id, worker_lock)
@@ -841,7 +854,9 @@ async def main():
         asyncio.create_task(telegram.notify_worker_started(worker_identity.account_id, worker_identity.market))
 
         async def _run_engines():
-            await asyncio.gather(*(run_symbol_engines(ctx, telegram, registry) for ctx in contexts))
+            await asyncio.gather(*(run_symbol_engines(
+                ctx, telegram, registry, observation_session=observation_session,
+            ) for ctx in contexts))
 
         engines_task = asyncio.create_task(_run_engines(), name=f"{worker_identity.account_id}-engines")
         done, _ = await asyncio.wait((engines_task, stop_watcher), return_when=asyncio.FIRST_COMPLETED)
@@ -856,6 +871,8 @@ async def main():
         if engines_task is not None and not engines_task.done():
             engines_task.cancel()
             await asyncio.gather(engines_task, return_exceptions=True)
+        if observation_session is not None:
+            observation_session.close()
         if stop_watcher is not None:
             stop_watcher.cancel()
             await asyncio.gather(stop_watcher, return_exceptions=True)
