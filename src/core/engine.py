@@ -42,6 +42,7 @@ from src.core.us_observation_interface import (
     UsObservationAdapter, UsObservationDecision, UsObservationResponse, UsTrackedObservationOrder,
 )
 from src.core.us_synthetic_recovery_gate import SyntheticRecoveryDecision, SyntheticRecoveryGate
+from src.core.us_observation_coordinator import UsObservationCoordinator
 from src.data.us_synthetic_observation_sink import SyntheticObservationSink
 from src.core.us_market import (
     extract_us_fx_rate,
@@ -588,6 +589,11 @@ class AccountEngine:
                 raise ValueError("Observation injection requires an explicit US mock strategy engine")
         self.ctx, self.telegram = ctx, telegram
         self._us_observation_adapter = us_observation_adapter
+        self._us_observation_bound_sink = us_observation_adapter.sink if us_observation_adapter else None
+        self._us_observation_only = (
+            us_observation_adapter is not None and us_observation_adapter.enabled is True
+            and type(us_observation_adapter.sink) is UsObservationCoordinator
+        )
         self._us_observation_enabled = us_observation_adapter is not None and us_observation_adapter.enabled is True
         self._us_observation_owner = uuid.uuid4().hex
         self._us_recovery_gate = us_recovery_gate
@@ -691,7 +697,10 @@ class AccountEngine:
         self._balance_gate.engines.add(self)
         # A passive account monitor publishes broker holdings only. It must not
         # open, initialize, or mutate the confirmed-fill ledger.
-        self.ledger = None if balance_only else TradeLedgerStore(self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id, market=ctx.client.market)
+        self.ledger = None if balance_only else TradeLedgerStore(
+            self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id,
+            market=ctx.client.market, read_only=self._us_observation_only,
+        )
         self._tranche_bases_path = self.data_dir / f"tranche_bases_{ctx.account_id}.json"
         self._closure_absence_path = self.data_dir / f"closure_absence_{ctx.account_id}.json"
         try:
@@ -790,14 +799,17 @@ class AccountEngine:
         return isinstance(symbols, (set, frozenset, list, tuple)) and self._symbol_key(symbol) in symbols
 
     async def run(self):
-        self._backup_ledger_at_startup()
-        self._restore_from_ledger()
-        self._refresh_runtime_control()
         # Dashboard controls are an explicit execution authority, independent
         # of the worker-wide environment switch. Read them before reporting
         # startup mode so the log cannot falsely claim submissions are off.
-        await self._refresh_dashboard_controls()
-        if self._auto_trading_enabled:
+        if not getattr(self, "_us_observation_only", False):
+            self._backup_ledger_at_startup()
+            self._restore_from_ledger()
+            self._refresh_runtime_control()
+            await self._refresh_dashboard_controls()
+        if getattr(self, "_us_observation_only", False):
+            mode = "operational observation only; economic ingestion and order dispatch blocked"
+        elif self._auto_trading_enabled:
             mode = "worker-wide Auto Trading enabled"
         elif self._dashboard_auto_buy or self._dashboard_auto_sell:
             mode = "dashboard-controlled trading enabled (per-side controls will be refreshed before each intent)"
@@ -809,7 +821,10 @@ class AccountEngine:
         # including when the regular market is closed.
         try:
             await self.sync_broker_state(force_balance=True)
-            self.ctx.logger.info("Startup broker balance synchronization completed")
+            if getattr(self, "_us_observation_only", False):
+                self.ctx.logger.info("US observation startup pass finished; balance synchronization remains blocked")
+            else:
+                self.ctx.logger.info("Startup broker balance synchronization completed")
         except Exception as exc:
             self.ctx.logger.warning(f"Startup broker balance synchronization deferred: {exc}")
         try:
@@ -1259,6 +1274,9 @@ class AccountEngine:
         return self.data_dir / f"dashboard_control_{self.ctx.account_id}{suffix}.json"
 
     async def _tick(self):
+        if getattr(self, "_us_observation_only", False):
+            await self.sync_broker_state()
+            return
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
         # never a source of silently stale financial state.
         self._refresh_runtime_control()
@@ -1756,6 +1774,9 @@ class AccountEngine:
             owners[owner] = state
 
     def _us_observation_blocks_order(self, symbol: str) -> bool:
+        if getattr(self, "_us_observation_only", False):
+            self.ctx.logger.error("Order blocked: operational US observations do not grant trading authority")
+            return True
         if self._us_recovery_blocks_order(symbol):
             return True
         gate = getattr(self, "_balance_gate", None)
@@ -1825,6 +1846,7 @@ class AccountEngine:
             if ((self.ctx.account_id, self.ctx.client.market, self.ctx.client.mode) != ("us_mock", "US", "mock")
                     or type(adapter) is not UsObservationAdapter or adapter.enabled is not True
                     or adapter.account_id != self.ctx.account_id or adapter.market != self.ctx.client.market
+                    or adapter.sink is not self._us_observation_bound_sink
                     or getattr(self.ledger, "schema_version", 0) != 2):
                 raise ValueError("Invalid observation scope or identity ledger")
             identities = OrderIdentityStore(self.ledger.db)
@@ -1859,17 +1881,31 @@ class AccountEngine:
 
     def request_sync(self) -> None:
         """WebSocket doorbell target: do not parse/accept its payload."""
+        if getattr(self, "_us_observation_stopping", False):
+            return
         # Many broker events can arrive in one burst. One in-flight REST sync is
         # enough because it always asks the broker for the latest full balance.
         if self._sync_task is None or self._sync_task.done():
             self._sync_task = asyncio.create_task(self.sync_broker_state(force_balance=True))
+
+    async def stop_us_observation_tasks(self) -> None:
+        """Drain operational observation tasks before their shared DB closes."""
+        if not getattr(self, "_us_observation_only", False):
+            return
+        self._us_observation_stopping = True
+        task = self._sync_task
+        if task is not None and task is not asyncio.current_task():
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def sync_broker_state(self, force_balance: bool = False) -> bool:
         """Apply cumulative REST fills as idempotent deltas, then reconcile balance."""
         if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
             self._balance_sync_blocked = True
             return False
-        await self._apply_reconciliation_clear_event()
+        if not getattr(self, "_us_observation_only", False):
+            await self._apply_reconciliation_clear_event()
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
             # Clearance and lock acquisition can yield; recovery must still be
             # valid before this pass reads history or mutates legacy state.
@@ -1966,6 +2002,12 @@ class AccountEngine:
                             self._balance_sync_blocked = True
                             return False
                         if not self._observe_us_execution_cycle(tracked_orders, observation_responses):
+                            return False
+                        if getattr(self, "_us_observation_only", False):
+                            # Persistence success cannot authorize the legacy
+                            # economic path or clear an operational order gate.
+                            self._record_us_observation_state("OBSERVED_ONLY")
+                            self._balance_sync_blocked = True
                             return False
                         observation_succeeded = True
                         for supplied in observation_responses:

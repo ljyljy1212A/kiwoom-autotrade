@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from src.core.account_catalog import account_catalog
 from src.core.runtime_paths import RUNTIME_ROOT
 from src.core.worker_launch_routes import worker_route_environment_keys
+from src.core.us_observation_startup import OBSERVATION_KEYS
 
 
 _LAUNCH_KEYS = (
@@ -41,6 +42,7 @@ def load_worker_environment() -> None:
         return
 
     launch = {key: os.environ.get(key) for key in _LAUNCH_KEYS}
+    observation_launch = {key: os.environ.get(key) for key in OBSERVATION_KEYS}
     if any(value is None or not value.strip() for value in launch.values()):
         raise RuntimeError("routed worker launch environment is incomplete")
     if (worker_route_environment_keys(launch["ACCOUNT_FILTER"], launch["MARKET_INSTANCE"]) is None
@@ -71,3 +73,8 @@ def load_worker_environment() -> None:
     finally:
         # Settings may rotate credentials, but cannot retarget this launch.
         os.environ.update(launch)
+        for key, value in observation_launch.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

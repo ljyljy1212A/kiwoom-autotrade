@@ -51,16 +51,27 @@ class FillQuantityExceededError(ValueError):
 
 
 class TradeLedgerStore:
-    def __init__(self, path: str, account_id: str, *, market: str | None = None):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: str, account_id: str, *, market: str | None = None, read_only: bool = False):
+        if type(read_only) is not bool:
+            raise ValueError("Explicit read-only policy required")
+        if read_only:
+            candidate = Path(path)
+            if not candidate.is_absolute() or not candidate.is_file():
+                raise ValueError("Existing absolute identity ledger required")
+            self.db = sqlite3.connect(candidate.as_uri() + "?mode=ro", uri=True, timeout=0)
+            self.db.execute("PRAGMA query_only=ON")
+        else:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            self.db = sqlite3.connect(path, timeout=1.0)
         self.account_id = account_id
         # WAL lets the dashboard's read-only reporting connection run beside
         # confirmed-fill writes without readers taking a blocking read lock.
-        self.db = sqlite3.connect(path, timeout=1.0)
         self.db.row_factory = sqlite3.Row
         self.schema_version = self.db.execute("PRAGMA user_version").fetchone()[0]
         self.market = market
         try:
+            if read_only and self.schema_version != 2:
+                raise ValueError("Read-only observation requires a prepared identity ledger")
             if self.schema_version not in (0, 2):
                 raise ValueError("Unsupported ledger schema")
             if self.schema_version == 2:
@@ -83,8 +94,9 @@ class TradeLedgerStore:
         except Exception:
             self.db.close()
             raise
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=1000")
+        if not read_only:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA busy_timeout=1000")
         # Runtime recovery supplies this boundary. Historical rows stay in
         # SQLite for reports but cannot be re-attributed to a new lifecycle.
         self._lifecycle_started_at: str | None = None
