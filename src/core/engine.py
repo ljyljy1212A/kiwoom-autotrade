@@ -37,6 +37,12 @@ from pathlib import Path
 from src.calendar_utils.market_calendar import MarketCalendar
 from src.data.trade_ledger import FillQuantityExceededError, PendingOrder, TradeLedgerStore
 from src.data.order_attempts import unattributed_attempt_ids
+from src.data.order_identity import OrderIdentityStore
+from src.core.us_observation_interface import (
+    UsObservationAdapter, UsObservationDecision, UsObservationResponse, UsTrackedObservationOrder,
+)
+from src.core.us_synthetic_recovery_gate import SyntheticRecoveryDecision, SyntheticRecoveryGate
+from src.data.us_synthetic_observation_sink import SyntheticObservationSink
 from src.core.us_market import (
     extract_us_fx_rate,
     normalize_us_symbol,
@@ -100,6 +106,11 @@ class _AccountBalanceGate:
         self.orphan_balance_generation = ""
         self.orphan_fetch_started_at = ""
         self.execution_lock = asyncio.Lock()
+        # Process-local observation blockers, shared by account/symbol engines.
+        # Durable conflict recovery remains the explicitly injected backend's job.
+        self.us_observation_states: dict[str, dict[str, str]] = {}
+        self.us_recovery_states: dict[str, dict[str, str]] = {}
+        self.us_recovery_account_blocked = False
         # All symbol engines for one account share this gate.  A buy decision
         # must remain serial from its final duplicate check through pending
         # order recording, otherwise two concurrent engines can both submit
@@ -555,8 +566,33 @@ class AccountEngine:
     def __init__(self, ctx, telegram, report_store, price_feed, poll_interval_sec: int = 5,
                  control_symbol: str | None = None, balance_only: bool = False,
                  dispatch_clearance_service: DispatchClearanceService | None = None,
-                 control_authority: control_snapshot.ControlAuthority | None = None):
+                 control_authority: control_snapshot.ControlAuthority | None = None,
+                 us_observation_adapter: UsObservationAdapter | None = None,
+                 us_recovery_gate: SyntheticRecoveryGate | None = None):
+        if us_recovery_gate is not None:
+            if (type(us_recovery_gate) is not SyntheticRecoveryGate
+                    or (ctx.account_id, ctx.client.market, ctx.client.mode) != ("us_mock", "US", "mock")
+                    or (us_recovery_gate._account_id, us_recovery_gate._market) != (ctx.account_id, ctx.client.market)
+                    or type(us_recovery_gate._enabled) is not bool
+                    or (us_recovery_gate._enabled and (balance_only
+                        or type(us_observation_adapter) is not UsObservationAdapter
+                        or us_observation_adapter.enabled is not True))):
+                raise ValueError("Recovery injection requires an explicit US mock observation engine")
+        if us_observation_adapter is not None:
+            if (type(us_observation_adapter) is not UsObservationAdapter
+                    or (ctx.account_id, ctx.client.market, ctx.client.mode) != ("us_mock", "US", "mock")
+                    or us_observation_adapter.account_id != ctx.account_id
+                    or us_observation_adapter.market != ctx.client.market
+                    or type(us_observation_adapter.enabled) is not bool
+                    or (balance_only and us_observation_adapter.enabled)):
+                raise ValueError("Observation injection requires an explicit US mock strategy engine")
         self.ctx, self.telegram = ctx, telegram
+        self._us_observation_adapter = us_observation_adapter
+        self._us_observation_enabled = us_observation_adapter is not None and us_observation_adapter.enabled is True
+        self._us_observation_owner = uuid.uuid4().hex
+        self._us_recovery_gate = us_recovery_gate
+        self._us_recovery_bound_gate = us_recovery_gate
+        self._us_recovery_enabled = us_recovery_gate is not None and us_recovery_gate._enabled is True
         self._control_authority = control_authority
         self.report_store, self.price_feed, self.poll_interval_sec = report_store, price_feed, poll_interval_sec
         self.data_dir = DATA_DIR
@@ -616,6 +652,11 @@ class AccountEngine:
         # broker balance is account-wide. Share its fresh response so startup
         # and normal ticks do not multiply kt00018/ust21070 requests.
         self._balance_gate = _balance_gate(ctx.account_id)
+        if self._us_recovery_enabled:
+            self._balance_gate.us_recovery_states.setdefault(self._symbol_key(ctx.strategy.symbol), {})[
+                self._us_observation_owner] = "INCOMPLETE"
+        if self._us_observation_active():
+            self._record_us_observation_state("INCOMPLETE")
         if dispatch_clearance_service is not None:
             self._balance_gate.dispatch_clearance_service = dispatch_clearance_service
         self._dispatch_clearance_enabled = (
@@ -1256,6 +1297,8 @@ class AccountEngine:
             # valid basis for an order decision. Fail closed until a complete
             # broker snapshot succeeds.
             return
+        if self._us_observation_blocks_order(self.ctx.strategy.symbol):
+            return
         if self._balance_gate.reconciliation_blocked:
             return
         self._dashboard_strategy_changed = False
@@ -1490,6 +1533,8 @@ class AccountEngine:
             )
 
     async def _handle_intent(self, intent: OrderIntent, price: float):
+        if self._us_observation_blocks_order(intent.symbol):
+            return
         # Kiwoom accepts only valid domestic price increments.  Quotes can be
         # an arbitrary last-trade value (for example 20,675), so normalize at
         # the single order-intent boundary before any target/risk/submission
@@ -1587,6 +1632,8 @@ class AccountEngine:
             await self._execute_order(intent)
 
     async def _execute_order(self, intent: OrderIntent):
+        if self._us_observation_blocks_order(intent.symbol):
+            return
         if self.ctx.client.market == "US" and getattr(self.ledger, "schema_version", 0) != 2:
             self.ctx.logger.error("US order blocked: an explicitly prepared identity ledger is required")
             return
@@ -1644,6 +1691,10 @@ class AccountEngine:
         if self._quantity_conflict_blocks_order(intent.symbol):
             return
         try:
+            # Clearance may await I/O while another engine observes a conflict.
+            # Recheck the shared gate immediately before broker submission.
+            if self._us_observation_blocks_order(intent.symbol):
+                return
             result = await self.ctx.client.place_order(side=side, symbol=intent.symbol, qty=intent.qty,
                                                        price=intent.price, order_type=intent.order_type)
         except (OrderRejectedError, RetryableError) as exc:
@@ -1692,6 +1743,120 @@ class AccountEngine:
             return True
         return self.ledger.has_pending_buy_at_price(symbol, price, tolerance)
 
+    def _us_observation_active(self) -> bool:
+        # Constructor-time activation is fixed. Mutating the injected adapter
+        # cannot silently disable a blocker or activate a disabled hook.
+        return getattr(self, "_us_observation_enabled", False)
+
+    def _record_us_observation_state(self, state: str) -> None:
+        symbol = self._symbol_key(self.ctx.strategy.symbol)
+        owners = self._balance_gate.us_observation_states.setdefault(symbol, {})
+        owner = self._us_observation_owner
+        if owners.get(owner) != "CONFLICT":
+            owners[owner] = state
+
+    def _us_observation_blocks_order(self, symbol: str) -> bool:
+        if self._us_recovery_blocks_order(symbol):
+            return True
+        gate = getattr(self, "_balance_gate", None)
+        states = getattr(gate, "us_observation_states", {}).get(self._symbol_key(symbol), {})
+        if self._us_observation_active():
+            adapter = self._us_observation_adapter
+            if ((self.ctx.account_id, self.ctx.client.market, self.ctx.client.mode) != ("us_mock", "US", "mock")
+                    or type(adapter) is not UsObservationAdapter or adapter.enabled is not True
+                    or adapter.account_id != self.ctx.account_id or adapter.market != self.ctx.client.market
+                    or states.get(self._us_observation_owner) != "OBSERVED"):
+                self.ctx.logger.error("Order blocked: US observation cycle is incomplete or conflicted")
+                return True
+        if any(state != "OBSERVED" for state in states.values()):
+            self.ctx.logger.error("Order blocked: shared US observation cycle is incomplete or conflicted")
+            return True
+        return False
+
+    def _us_recovery_blocks_order(self, symbol: str) -> bool:
+        """Fresh scratch recovery can add blockers, never trading authority."""
+        shared = getattr(self, "_balance_gate", None)
+        canonical = self._symbol_key(symbol)
+        if getattr(self, "_us_recovery_enabled", False):
+            try:
+                recovery = self._us_recovery_gate
+                adapter = self._us_observation_adapter
+                if (recovery is not self._us_recovery_bound_gate
+                        or type(recovery) is not SyntheticRecoveryGate or recovery._enabled is not True
+                        or (self.ctx.account_id, self.ctx.client.market, self.ctx.client.mode) != ("us_mock", "US", "mock")
+                        or canonical != self._symbol_key(self.ctx.strategy.symbol)
+                        or type(adapter) is not UsObservationAdapter or adapter.enabled is not True
+                        or (adapter.account_id, adapter.market) != ("us_mock", "US")
+                        or type(adapter.sink) is not SyntheticObservationSink
+                        or adapter.sink.journal is not recovery._journal):
+                    raise ValueError("Scratch recovery binding changed")
+                decision = recovery.check_scope(canonical)
+                if (type(decision) is not SyntheticRecoveryDecision
+                        or (decision.account_id, decision.market, decision.symbol) != ("us_mock", "US", canonical)
+                        or type(decision.account_blocked) is not bool or type(decision.symbol_blocked) is not bool
+                        or type(decision.check_complete) is not bool
+                        or decision.economic_ingestion_allowed is not False
+                        or decision.operational_trading_allowed is not False):
+                    raise ValueError("Invalid scratch recovery decision")
+                owners = shared.us_recovery_states.setdefault(canonical, {})
+                if decision.account_blocked or not decision.check_complete:
+                    shared.us_recovery_account_blocked = True
+                elif decision.state == "CONFLICT" and decision.symbol_blocked and decision.conflicts:
+                    owners[self._us_observation_owner] = "CONFLICT"
+                elif (decision.state == "RECOVERY_CHECKED" and not decision.symbol_blocked
+                      and not decision.conflicts and not decision.reasons):
+                    if owners.get(self._us_observation_owner) != "CONFLICT":
+                        owners[self._us_observation_owner] = "RECOVERY_CHECKED"
+                else:
+                    raise ValueError("Inconsistent scratch recovery decision")
+            except Exception:
+                shared.us_recovery_account_blocked = True
+        states = getattr(shared, "us_recovery_states", {}).get(canonical, {})
+        if (getattr(shared, "us_recovery_account_blocked", False)
+                or any(state != "RECOVERY_CHECKED" for state in states.values())):
+            self.ctx.logger.error("Order/sync blocked: scratch US recovery is incomplete or conflicted")
+            return True
+        return False
+
+    def _observe_us_execution_cycle(self, tracked_orders, responses) -> bool:
+        """Use existing raw REST results only; never create/select a backend."""
+        try:
+            adapter = self._us_observation_adapter
+            if ((self.ctx.account_id, self.ctx.client.market, self.ctx.client.mode) != ("us_mock", "US", "mock")
+                    or type(adapter) is not UsObservationAdapter or adapter.enabled is not True
+                    or adapter.account_id != self.ctx.account_id or adapter.market != self.ctx.client.market
+                    or getattr(self.ledger, "schema_version", 0) != 2):
+                raise ValueError("Invalid observation scope or identity ledger")
+            identities = OrderIdentityStore(self.ledger.db)
+            snapshots = []
+            for order in tracked_orders:
+                requested = order.requested_qty
+                if (type(requested) not in (int, float) or not math.isfinite(requested)
+                        or not 0 < requested <= 2 ** 53 or int(requested) != requested):
+                    raise ValueError("Explicit integer requested quantity is required")
+                identity = identities.get(order.order_uid)
+                if (identity.account_id, identity.market, identity.ord_no, identity.symbol, identity.side,
+                        identity.broker_order_date, identity.identity_status) != (
+                        self.ctx.account_id, self.ctx.client.market, order.ord_no, order.symbol, order.side,
+                        order.broker_order_date, order.identity_status):
+                    raise ValueError("Observation identity snapshot differs from tracked order")
+                snapshots.append(UsTrackedObservationOrder(identity, str(int(requested))))
+            decision = adapter.observe_cycle(orders=tuple(snapshots), responses=tuple(responses))
+            if isinstance(decision, UsObservationDecision) and decision.state == "CONFLICT":
+                self._record_us_observation_state("CONFLICT")
+            elif (isinstance(decision, UsObservationDecision) and decision.state == "OBSERVED"
+                  and decision.allow_sync_continue is True and decision.persistence_confirmed is True
+                  and decision.economic_ingestion_allowed is False and decision.operational_trading_allowed is False):
+                self._record_us_observation_state("OBSERVED_PENDING_SYNC")
+                states = self._balance_gate.us_observation_states[self._symbol_key(self.ctx.strategy.symbol)]
+                if states[self._us_observation_owner] != "CONFLICT":
+                    return True
+        except Exception:
+            # Do not expose response bodies, account evidence or backend errors.
+            self.ctx.logger.error("US observation cycle failed; synchronization blocked")
+        self._balance_sync_blocked = True
+        return False
+
     def request_sync(self) -> None:
         """WebSocket doorbell target: do not parse/accept its payload."""
         # Many broker events can arrive in one burst. One in-flight REST sync is
@@ -1701,8 +1866,27 @@ class AccountEngine:
 
     async def sync_broker_state(self, force_balance: bool = False) -> bool:
         """Apply cumulative REST fills as idempotent deltas, then reconcile balance."""
+        if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
+            self._balance_sync_blocked = True
+            return False
         await self._apply_reconciliation_clear_event()
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
+            # Clearance and lock acquisition can yield; recovery must still be
+            # valid before this pass reads history or mutates legacy state.
+            if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
+                self._balance_sync_blocked = True
+                return False
+            observation_enabled = self._us_observation_active()
+            observation_succeeded = False
+            if observation_enabled:
+                self._record_us_observation_state("INCOMPLETE")
+                adapter = self._us_observation_adapter
+                if ((self.ctx.account_id, self.ctx.client.market, self.ctx.client.mode) != ("us_mock", "US", "mock")
+                        or type(adapter) is not UsObservationAdapter or adapter.enabled is not True
+                        or adapter.account_id != self.ctx.account_id or adapter.market != self.ctx.client.market
+                        or getattr(self.ledger, "schema_version", 0) != 2):
+                    self._balance_sync_blocked = True
+                    return False
             # A broker-confirmed fill changes the durable tranche ledger.  The
             # broker balance snapshot and its dashboard event must follow that
             # transition in this same synchronization pass; otherwise the UI
@@ -1726,6 +1910,11 @@ class AccountEngine:
                 return False
             completed_rows = self.ledger.completed_orders_for_execution_observation(self.ctx.strategy.symbol)
             pending_rows = self.ledger.pending_orders(self.ctx.strategy.symbol)
+            if observation_enabled and not (pending_rows or completed_rows):
+                # The interface requires explicit tracked identities. An empty
+                # tracking set cannot clear a restart blocker or prove finality.
+                self._balance_sync_blocked = True
+                return False
             if self.ctx.client.market == "US" and (pending_rows or completed_rows):
                 tracked_orders = [*pending_rows, *completed_rows]
                 if any(getattr(order, "identity_status", "unresolved") != "confirmed"
@@ -1744,6 +1933,7 @@ class AccountEngine:
             }
             if pending_rows or completed_orders:
                 execution_rows = []
+                observation_responses = []
                 try:
                     # Fetch every date completely before applying any economic row.
                     async with self._balance_gate.execution_lock:
@@ -1756,13 +1946,32 @@ class AccountEngine:
                                 data = await self.ctx.client.get_executed_orders(
                                     self.ctx.strategy.symbol, order_date=query_date,
                                 )
-                                execution_rows.extend(normalize_us_execution_rows(data or {}, query_order_date=query_date))
+                                if observation_enabled:
+                                    observation_responses.append(UsObservationResponse(
+                                        query_date, datetime.now(timezone.utc).isoformat(), copy.deepcopy(data),
+                                    ))
+                                else:
+                                    execution_rows.extend(normalize_us_execution_rows(data or {}, query_order_date=query_date))
                             else:
                                 data = await self.ctx.client.get_executed_orders(self.ctx.strategy.symbol)
                                 execution_rows.extend(_executed_rows(data or {}))
                             completed_at = asyncio.get_running_loop().time()
                             self._balance_gate.last_execution_request_at = completed_at
                             self._last_execution_query_at = completed_at
+                    if observation_enabled:
+                        # History retrieval can yield while historical conflicts
+                        # or the injected backend binding change. Recheck before
+                        # the observation sink or legacy ledger receives rows.
+                        if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
+                            self._balance_sync_blocked = True
+                            return False
+                        if not self._observe_us_execution_cycle(tracked_orders, observation_responses):
+                            return False
+                        observation_succeeded = True
+                        for supplied in observation_responses:
+                            execution_rows.extend(normalize_us_execution_rows(
+                                supplied.body, query_order_date=supplied.query_order_date,
+                            ))
                     self._last_execution_unavailable_symbol = ""
                 except ValueError as exc:
                     self.ctx.logger.error(f"Incomplete execution history; sync blocked: {exc}")
@@ -1936,7 +2145,14 @@ class AccountEngine:
             if confirmed_fill or force_balance or now - self._last_balance_reconciliation >= self.balance_reconcile_sec:
                 if not await self._run_balance_reconciliation_cycle(flush_dashboard_fills=True):
                     return False
+            # Balance reconciliation and fill callbacks can yield. A newly
+            # latched blocker must prevent publication of sync success.
+            if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
+                self._balance_sync_blocked = True
+                return False
             self._balance_sync_blocked = False
+            if observation_succeeded:
+                self._record_us_observation_state("OBSERVED")
             return True
 
     async def _run_balance_reconciliation_cycle(self, *, flush_dashboard_fills: bool) -> bool:
