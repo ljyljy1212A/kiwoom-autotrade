@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.core.us_observation_coordinator import UsObservationCoordinator
 from src.core.us_observation_interface import UsObservationAdapter
+from src.data.trade_ledger import TradeLedgerStore
 from src.data.us_observation_checkpoint import ObservationCheckpointFile, _regular
 from src.data.us_operational_observation_store import OperationalUsObservationStore, _identifier
 
@@ -32,7 +33,7 @@ class UsObservationSession:
             self._connection = None
 
 
-def open_us_observation_session(*, account_id, market, mode, environment):
+def open_us_observation_session(*, account_id, market, mode, environment, identity_ledger_path=None):
     """Validate existing files and their independent head before worker startup.
 
     No defaults for storage paths or identity, mkdir, schema preparation,
@@ -59,6 +60,17 @@ def open_us_observation_session(*, account_id, market, mode, environment):
             path=checkpoint_path, journal_id=journal, binding_id=binding,
         )
         before = _regular(database)
+        if identity_ledger_path is None:
+            raise ValueError("Prepared identity ledger required")
+        identity_path = Path(identity_ledger_path)
+        _regular(identity_path)
+        if identity_path.resolve(strict=True) in (
+            database.resolve(strict=True), checkpoint.path.resolve(strict=True),
+            checkpoint.lock_path.resolve(strict=True),
+        ):
+            raise ValueError("Distinct identity ledger required")
+        identity = TradeLedgerStore(identity_path, account_id, market=market, read_only=True)
+        identity.close()
         if database.resolve(strict=True) in (
             checkpoint.path.resolve(strict=True), checkpoint.lock_path.resolve(strict=True),
         ):

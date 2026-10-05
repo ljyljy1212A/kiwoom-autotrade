@@ -35,7 +35,10 @@ the external head. Missing, mismatched, corrupt or conflicted evidence refuses
 startup without repair, retry or automatic head adoption. The worker owns one
 connection until its engine tasks have stopped, then closes it.
 
-Per-symbol engines also need the already prepared version 2 identity ledger
+Startup also validates the existing runtime `trades_us_mock.db` in SQLite
+read-only mode. Per-symbol engines open that ledger with `mode=ro` and
+`query_only=ON`, without creating files, setting WAL or changing schemas.
+They need the already prepared version 2 identity ledger
 and confirmed order/date identities required by the existing observation hook.
 No ledger migration or identity authentication is supplied by this wiring.
 No tracked orders means no validated cycle; it does not prove finality.
@@ -49,6 +52,10 @@ legacy economic normalization, fill application, cancellation or balance
 reconciliation. New Engine order dispatch remains blocked even after a
 successful receipt or attempted backend replacement. Other explicitly
 injected synthetic test sinks retain their existing behavior.
+
+Operational observation startup skips economic ledger backup/link repair and
+runtime/dashboard trading-control refresh. Its tick only requests observation
+synchronization. SQLite rejects economic writes through the engine connection.
 
 This mode collects evidence; it does not allocate execution dates, authorize
 economic ingestion, or enable trading. F5 receipt/persistence is a separate

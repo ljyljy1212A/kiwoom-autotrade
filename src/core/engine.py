@@ -697,7 +697,10 @@ class AccountEngine:
         self._balance_gate.engines.add(self)
         # A passive account monitor publishes broker holdings only. It must not
         # open, initialize, or mutate the confirmed-fill ledger.
-        self.ledger = None if balance_only else TradeLedgerStore(self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id, market=ctx.client.market)
+        self.ledger = None if balance_only else TradeLedgerStore(
+            self.data_dir / f"trades_{ctx.account_id}.db", ctx.account_id,
+            market=ctx.client.market, read_only=self._us_observation_only,
+        )
         self._tranche_bases_path = self.data_dir / f"tranche_bases_{ctx.account_id}.json"
         self._closure_absence_path = self.data_dir / f"closure_absence_{ctx.account_id}.json"
         try:
@@ -796,13 +799,14 @@ class AccountEngine:
         return isinstance(symbols, (set, frozenset, list, tuple)) and self._symbol_key(symbol) in symbols
 
     async def run(self):
-        self._backup_ledger_at_startup()
-        self._restore_from_ledger()
-        self._refresh_runtime_control()
         # Dashboard controls are an explicit execution authority, independent
         # of the worker-wide environment switch. Read them before reporting
         # startup mode so the log cannot falsely claim submissions are off.
-        await self._refresh_dashboard_controls()
+        if not self._us_observation_only:
+            self._backup_ledger_at_startup()
+            self._restore_from_ledger()
+            self._refresh_runtime_control()
+            await self._refresh_dashboard_controls()
         if self._us_observation_only:
             mode = "operational observation only; economic ingestion and order dispatch blocked"
         elif self._auto_trading_enabled:
@@ -1270,6 +1274,9 @@ class AccountEngine:
         return self.data_dir / f"dashboard_control_{self.ctx.account_id}{suffix}.json"
 
     async def _tick(self):
+        if self._us_observation_only:
+            await self.sync_broker_state()
+            return
         # Baseline polling makes a wrong/silent WS subscription a latency issue,
         # never a source of silently stale financial state.
         self._refresh_runtime_control()
@@ -1897,7 +1904,8 @@ class AccountEngine:
         if self._us_recovery_blocks_order(self.ctx.strategy.symbol):
             self._balance_sync_blocked = True
             return False
-        await self._apply_reconciliation_clear_event()
+        if not self._us_observation_only:
+            await self._apply_reconciliation_clear_event()
         async with _diagnostic_lock(self._sync_lock, "AccountEngine._sync_lock", self.ctx.logger):
             # Clearance and lock acquisition can yield; recovery must still be
             # valid before this pass reads history or mutates legacy state.

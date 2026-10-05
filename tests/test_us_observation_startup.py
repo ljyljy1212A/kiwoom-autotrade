@@ -11,6 +11,8 @@ import pytest
 from src.core import us_observation_startup as module, worker_environment
 from src.core.us_observation_startup import OBSERVATION_KEYS, open_us_observation_session
 from src.data.us_observation_checkpoint import LOCK_CONTENT, checkpoint_bytes
+from src.data.trade_ledger import TradeLedgerStore
+from src.data.trade_ledger_migration import create_identity_ledger_copy
 from tests.test_us_operational_observation_store import (
     BINDING, JOURNAL, count, empty_head, inputs,
     db as db,
@@ -38,11 +40,16 @@ def deny_network(monkeypatch, async_runner):
 
 @pytest.fixture
 def prepared(db, tmp_path):
+    source = tmp_path / "legacy.db"
+    TradeLedgerStore(source, "us_mock").close()
+    identity = tmp_path / "trades_us_mock.db"
+    create_identity_ledger_copy(source, identity, account_markets={"us_mock": "US"})
     checkpoint = tmp_path / "checkpoint.json"
     checkpoint.write_bytes(checkpoint_bytes(empty_head()))
     checkpoint.with_name(checkpoint.name + ".lock").write_bytes(LOCK_CONTENT)
     return {
         "KIWOOM_RUNTIME_ROOT": str(tmp_path),
+        "synthetic_identity_path": str(identity),
         OBSERVATION_KEYS[0]: "true",
         OBSERVATION_KEYS[1]: db.execute("PRAGMA database_list").fetchone()[2],
         OBSERVATION_KEYS[2]: str(checkpoint),
@@ -54,6 +61,7 @@ def opened(environment, **scope):
     return open_us_observation_session(
         account_id=scope.get("account", "us_mock"), market=scope.get("market", "US"),
         mode=scope.get("mode", "mock"), environment=environment,
+        identity_ledger_path=environment.get("synthetic_identity_path"),
     )
 
 
@@ -125,10 +133,28 @@ def test_failed_head_validation_closes_connection_without_repair(prepared, db, m
     monkeypatch.setattr(module.sqlite3, "connect", tracked)
     with pytest.raises(RuntimeError):
         opened(prepared)
-    assert len(connections) == 1 and count(db) == 0
+    assert len(connections) == 2 and count(db) == 0
     assert checkpoint.read_bytes() == b"invalid\n"
     with pytest.raises(sqlite3.ProgrammingError):
         connections[0].execute("SELECT 1")
+    with pytest.raises(sqlite3.ProgrammingError):
+        connections[1].execute("SELECT 1")
+
+
+@pytest.mark.parametrize("kind", ["missing", "legacy"])
+def test_identity_ledger_is_required_without_creation_or_migration(prepared, tmp_path, kind):
+    target = tmp_path / "unprepared.db"
+    if kind == "legacy":
+        TradeLedgerStore(target, "us_mock").close()
+    prepared["synthetic_identity_path"] = str(target)
+    with pytest.raises(RuntimeError, match="startup refused"):
+        opened(prepared)
+    if kind == "missing":
+        assert not target.exists()
+    else:
+        connection = sqlite3.connect(target)
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+        connection.close()
 
 
 @pytest.mark.parametrize("pinned", [False, True])
