@@ -798,7 +798,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.object(account_catalog, "PROJECT_ROOT", root), \
-                 patch.dict(os.environ, {}, clear=False), \
+                 patch.dict(os.environ, {"KIWOOM_RUNTIME_ROOT": str(root)}, clear=False), \
                  patch.object(supervisor, "status") as status_mock, \
                  patch.object(supervisor.subprocess, "run") as taskkill_mock:
                 os.environ.pop("ALLOW_LIVE_SUPERVISOR", None)
@@ -821,7 +821,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.object(account_catalog, "PROJECT_ROOT", root), \
-                 patch.dict(os.environ, {}, clear=False), \
+                 patch.dict(os.environ, {"KIWOOM_RUNTIME_ROOT": str(root)}, clear=False), \
                  patch.object(supervisor, "status") as status_mock, \
                  patch.object(supervisor.subprocess, "Popen") as popen_mock:
                 os.environ.pop("ALLOW_LIVE_SUPERVISOR", None)
@@ -871,7 +871,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.object(account_catalog, "PROJECT_ROOT", root), \
-                 patch.dict(os.environ, {}, clear=False), \
+                 patch.dict(os.environ, {"KIWOOM_RUNTIME_ROOT": str(root)}, clear=False), \
                  patch.object(supervisor, "status") as status_mock, \
                  patch.object(supervisor.subprocess, "run") as taskkill_mock:
                 os.environ.pop("ALLOW_LIVE_SUPERVISOR", None)

@@ -19,7 +19,8 @@ def _verify_source(source: Path, revision: str) -> None:
         ("rev-parse", "--show-toplevel"),
         ("rev-parse", "HEAD"),
         ("status", "--porcelain", "--untracked-files=all", "--", "src", "src.py",
-         "tools/worker_watchdog.py", "tools/us_mock_launch_policy.py"),
+         "tools/worker_watchdog.py", "tools/us_mock_launch_policy.py",
+         "tools/mock_worker_watchdog_dispatcher.py", "dashboard/dashboard_server.py"),
     )
     outputs = []
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -39,7 +40,7 @@ def _verify_source(source: Path, revision: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("status", "pause", "resume", "start", "watchdog"))
+    parser.add_argument("action", choices=("status", "pause", "resume", "start", "stop", "watchdog"))
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--revision", required=True)
@@ -57,7 +58,8 @@ def main() -> int:
     source = args.source_root.resolve(strict=True)
     if runtime != args.runtime_root or source != args.source_root:
         parser.error("runtime/source roots must be canonical paths")
-    if not runtime.is_dir() or source != Path(__file__).resolve(strict=True).parents[1]:
+    if (not runtime.is_dir() or runtime == source
+            or source != Path(__file__).resolve(strict=True).parents[1]):
         parser.error("bootstrap source or runtime root mismatch")
     if any(name == "src" or name.startswith("src.") for name in sys.modules):
         parser.error("source modules were loaded before bootstrap binding")
@@ -67,6 +69,11 @@ def main() -> int:
         print(json.dumps({"account": "us_mock", "market": "US",
                           "reason": "bootstrap-source-verification-failed"}))
         return 9
+    # Only the runtime owns settings. Fill missing settings before imports;
+    # the explicit bindings below retain authority over source and state paths.
+    from dotenv import load_dotenv
+
+    load_dotenv(runtime / ".env", override=False)
     os.environ.update({
         "KIWOOM_RUNTIME_ROOT": str(runtime),
         "KIWOOM_DATA_DIR": str(runtime / "data"),
@@ -74,6 +81,9 @@ def main() -> int:
         "KIWOOM_DIAGNOSTICS_DIR": str(runtime / "diagnostics"),
         "KIWOOM_WORKER_ROOT_US_MOCK": str(source),
         "KIWOOM_WORKER_REVISION_US_MOCK": args.revision,
+        "ACCOUNT_FILTER": "us_mock",
+        "MARKET_INSTANCE": "US",
+        "KIWOOM_ENV": "mock",
         "AUTO_TRADING_ENABLED": "false",
     })
     sys.path.insert(0, str(source))
@@ -97,6 +107,10 @@ def main() -> int:
         )
     elif args.action == "status":
         code, payload = 0, supervisor.status("us_mock")
+    elif args.action == "stop":
+        # Keep the supervisor's existing ownership checks and stop protocol.
+        # A PAUSED record prevents new launches, not a requested shutdown.
+        code, payload = supervisor.stop("us_mock")
     else:
         controls = importlib.import_module("src.core.control_state")
         if controls.read_auto_trading_enabled("us_mock") is not False:

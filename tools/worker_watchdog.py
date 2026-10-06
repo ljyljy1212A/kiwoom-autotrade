@@ -38,7 +38,9 @@ def _initialize_watchdog_dependencies():
 
     from dotenv import load_dotenv
 
-    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    # A routed US sweep owns state/settings in the runtime, not the source.
+    dotenv_root = Path(os.environ.get("KIWOOM_RUNTIME_ROOT", "") or PROJECT_ROOT)
+    load_dotenv(dotenv_root / ".env", override=False)
 
     from src.core.atomic_write import atomic_write_json
     from src import worker_supervisor

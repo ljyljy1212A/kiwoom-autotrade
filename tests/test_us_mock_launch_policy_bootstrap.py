@@ -28,6 +28,7 @@ def bound_bootstrap(tmp_path, monkeypatch):
     supervisor = SimpleNamespace(
         __file__=str(SOURCE / "src/worker_supervisor.py"), ROOT=SOURCE,
         start=Mock(return_value=(0, {"started": True})),
+        stop=Mock(return_value=(0, {"stopped": True})),
         maintenance=Mock(return_value=(0, {"changed": True, "workerAction": "none"})),
         status=Mock(return_value={"running": False}),
     )
@@ -95,7 +96,7 @@ def test_start_requires_explicit_boolean_false(bound_bootstrap, action, value):
     bound.watchdog.check_and_restart.assert_not_called()
 
 
-@pytest.mark.parametrize("action", ["status", "start", "watchdog"])
+@pytest.mark.parametrize("action", ["status", "start", "stop", "watchdog"])
 def test_exact_us_dispatch(bound_bootstrap, action):
     bound = bound_bootstrap
     code, payload, _ = bound.invoke(action)
@@ -105,6 +106,10 @@ def test_exact_us_dispatch(bound_bootstrap, action):
         bound.supervisor.start.assert_not_called()
     elif action == "start":
         bound.supervisor.start.assert_called_once_with("us_mock", "US")
+    elif action == "stop":
+        bound.supervisor.stop.assert_called_once_with("us_mock")
+        bound.supervisor.start.assert_not_called()
+        bound.controls.read_auto_trading_enabled.assert_not_called()
     else:
         bound.watchdog.check_and_restart.assert_called_once_with("us_mock", "US")
         assert payload["action"] == "watchdog-sweep-completed"
@@ -197,9 +202,38 @@ def test_source_verification_contract(tmp_path, monkeypatch, fault):
             args, kwargs = run.call_args
             assert "tools/worker_watchdog.py" in args[0]
             assert "tools/us_mock_launch_policy.py" in args[0]
+            assert "tools/mock_worker_watchdog_dispatcher.py" in args[0]
+            assert "dashboard/dashboard_server.py" in args[0]
             assert not any(key.startswith("GIT_") for key in kwargs["env"])
         else:
             with pytest.raises((ValueError, subprocess.TimeoutExpired)):
                 bootstrap._verify_source(tmp_path, revision)
             if fault == "bad_revision":
                 run.assert_not_called()
+
+
+def test_runtime_dotenv_cannot_retarget_bootstrap(bound_bootstrap):
+    bound = bound_bootstrap
+
+    def substitute(path, override):
+        assert path == bound.runtime / ".env"
+        assert override is False
+        bootstrap.os.environ.update({
+            "KIWOOM_RUNTIME_ROOT": "synthetic-other-runtime",
+            "KIWOOM_DATA_DIR": "synthetic-other-data",
+            "KIWOOM_WORKER_ROOT_US_MOCK": "synthetic-other-source",
+            "KIWOOM_WORKER_REVISION_US_MOCK": "c" * 40,
+            "ACCOUNT_FILTER": "synthetic-other-account",
+            "MARKET_INSTANCE": "KR", "KIWOOM_ENV": "real",
+            "AUTO_TRADING_ENABLED": "true",
+        })
+
+    with patch("dotenv.load_dotenv", side_effect=substitute):
+        code, _, env = bound.invoke("status")
+    assert code == 0
+    assert env["KIWOOM_RUNTIME_ROOT"] == str(bound.runtime)
+    assert env["KIWOOM_DATA_DIR"] == str(bound.runtime / "data")
+    assert env["KIWOOM_WORKER_ROOT_US_MOCK"] == str(SOURCE)
+    assert env["KIWOOM_WORKER_REVISION_US_MOCK"] == REVISION
+    assert env["ACCOUNT_FILTER"] == "us_mock" and env["MARKET_INSTANCE"] == "US"
+    assert env["KIWOOM_ENV"] == "mock" and env["AUTO_TRADING_ENABLED"] == "false"
