@@ -62,7 +62,9 @@ def resolve_worker_root(
     default_root: Path,
     environ: dict[str, str] | None = None,
 ) -> Path:
-    """Use an account-scoped mock source pin; keep unconfigured routes local."""
+    """Require US mock pins; retain local defaults for other unconfigured routes."""
+    if account == "us_mock" and market != "US":
+        raise WorkerLaunchRouteError("worker launch route account and market mismatch")
     keys = worker_route_environment_keys(account, market)
     if keys is None:
         for routed_account, routed_market in _MOCK_ROUTES:
@@ -70,12 +72,16 @@ def resolve_worker_root(
                 raise WorkerLaunchRouteError("worker launch route account and market mismatch")
         return default_root
     if not worker_route_configured(account, market, environ):
+        if (account, market) == ("us_mock", "US"):
+            raise WorkerLaunchRouteError("US mock worker launch requires both root and revision")
         return default_root
 
     values = os.environ if environ is None else environ
     raw_root = values.get(keys[0], "").strip()
     revision = values.get(keys[1], "").strip()
     if not raw_root and not revision:
+        if (account, market) == ("us_mock", "US"):
+            raise WorkerLaunchRouteError("US mock worker launch requires both root and revision")
         return default_root
     if not raw_root or not revision:
         raise WorkerLaunchRouteError("worker launch route requires both root and revision")

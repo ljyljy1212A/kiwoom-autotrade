@@ -6,6 +6,7 @@ import tempfile
 import textwrap
 import unittest
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -475,6 +476,8 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                  patch.object(supervisor, "backup_dir", return_value=runtime / "backups"), \
                  patch.object(supervisor, "_reject_real_account", return_value=None), \
                  patch.object(supervisor, "resolve_worker_root", return_value=source), \
+                 patch.object(supervisor, "require_launch_resumed", return_value={"state": "RESUMED"}) as policy_check, \
+                 patch.object(supervisor, "launch_policy_lock", side_effect=lambda _: nullcontext()), \
                  patch.object(supervisor, "status", side_effect=[{"running": False}, running]), \
                  patch.object(supervisor, "read_auto_trading_enabled", return_value=False), \
                  patch.object(supervisor, "_is_started_child", return_value=True), \
@@ -485,6 +488,7 @@ class WorkerSupervisorStopTests(unittest.TestCase):
                 code, payload = supervisor.start("us_mock", "US")
             self.assertEqual(code, 0)
             self.assertTrue(payload["started"])
+            self.assertEqual(policy_check.call_count, 2)
             self.assertEqual(popen.call_args.args[0][1:], ["-P", "-m", "src.main", "--market", "US"])
             self.assertEqual(popen.call_args.kwargs["cwd"], runtime)
             env = popen.call_args.kwargs["env"]

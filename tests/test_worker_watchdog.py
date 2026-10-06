@@ -157,6 +157,9 @@ class WorkerWatchdogTests(unittest.TestCase):
     def test_dead_classification_relaunches_once_without_kill_path(self):
         state_patch, status_patch = self._patch_paths()
         with state_patch, status_patch, \
+             patch.object(watchdog, "require_launch_resumed", return_value={"state": "RESUMED"}), \
+             patch.object(watchdog, "resolve_worker_root", return_value=watchdog.worker_supervisor.ROOT), \
+             patch.object(watchdog, "enumerate_worker_processes", return_value=[]), \
              patch.object(watchdog.worker_supervisor, "status", return_value={"running": False, "pid": 333}), \
              patch.object(watchdog.worker_supervisor, "start", return_value=(0, {"started": True})) as start, \
              patch.object(watchdog, "_send_notification"):
