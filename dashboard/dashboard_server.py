@@ -25,10 +25,14 @@ import yaml
 from src.core.atomic_write import atomic_write_json, atomic_write_text
 from src.core.orphan_cleanup import account_cleanup_lock
 from src.core import dashboard_control_snapshot as control_snapshot
-from src.core.runtime_paths import DATA_DIR
+from src.core.runtime_paths import DATA_DIR, runtime_root
 from src.core.symbol_keys import canonical_symbol_key
+from src.core.us_mock_launch_command import USMockCommandError, bootstrap_command
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = runtime_root(Path(__file__).resolve().parents[1])
+_US_ROUTE_KEYS = ("KIWOOM_WORKER_ROOT_US_MOCK", "KIWOOM_WORKER_REVISION_US_MOCK")
+_RUNTIME_KEYS = ("KIWOOM_RUNTIME_ROOT", "KIWOOM_DATA_DIR", "KIWOOM_LOG_DIR",
+                 "KIWOOM_DIAGNOSTICS_DIR", "KIWOOM_BACKUP_BASE_DIR")
 _CONTROL_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,11}$")
 
 
@@ -37,6 +41,10 @@ def _load_dotenv() -> None:
     env_file = ROOT / ".env"
     if not env_file.exists():
         return
+    protected_keys = _US_ROUTE_KEYS
+    if os.environ.get("KIWOOM_RUNTIME_ROOT", "").strip():
+        protected_keys += _RUNTIME_KEYS
+    protected = {key: os.environ.get(key) for key in protected_keys}
     for raw in env_file.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -45,6 +53,13 @@ def _load_dotenv() -> None:
         # A newly edited project .env must replace values inherited by an old
         # PowerShell/dashboard process after credentials are rotated.
         os.environ[key.strip()] = value.strip().strip('"').strip("'")
+    # Deployment pins and runtime ownership belong to the launch environment.
+    # A runtime dotenv may rotate settings, but cannot establish or change them.
+    for key, value in protected.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 _load_dotenv()
@@ -69,6 +84,18 @@ def _supervisor(action: str, account: str, market: str) -> tuple[int, dict]:
     command = [sys.executable, "-m", "src.worker_supervisor", action,
                "--account", account, "--market", market]
     env = os.environ.copy()
+    if account == "us_mock":
+        if market != "US":
+            return 9, {"account": account, "market": market,
+                       "reason": "US mock account/market mismatch"}
+        try:
+            command = bootstrap_command(
+                sys.executable, action, ROOT,
+                env.get(_US_ROUTE_KEYS[0], ""), env.get(_US_ROUTE_KEYS[1], ""),
+            )
+        except USMockCommandError as exc:
+            return 9, {"account": account, "market": market, "reason": str(exc)}
+        timeout = {"start": 120, "status": 60, "stop": 90}[action]
     if (
         action == "start"
         and env.get("ALLOW_LIVE_DASHBOARD", "false").lower() == "true"
@@ -628,7 +655,6 @@ class Handler(BaseHTTPRequestHandler):
                             if symbol_key in profile_symbols:
                                 raise ValueError("profile symbols must be unique")
                             profile_symbols.add(symbol_key)
-                selected_id = str(payload.get("selected_profile_id", ""))
                 with account_cleanup_lock(ROOT / "data", account):
                     settings_path = ROOT / "data" / f"dashboard_settings_{account}.json"
                     try:
