@@ -42,13 +42,14 @@ class TestWorkerLaunchRoutes:
         default = Path("C:/legacy-checkout")
         assert resolve_worker_root("kr_mock", "KR", default) == default
 
-    def test_route_environment_does_not_change_us_or_other_accounts(self):
+    def test_kr_route_cannot_supply_required_us_pins(self):
         default = Path("C:/legacy-checkout")
         env = {
             "KIWOOM_WORKER_ROOT_KR_MOCK": "C:/candidate",
             "KIWOOM_WORKER_REVISION_KR_MOCK": "invalid",
         }
-        assert resolve_worker_root("us_mock", "US", default, env) == default
+        with pytest.raises(WorkerLaunchRouteError, match="requires both root and revision"):
+            resolve_worker_root("us_mock", "US", default, env)
         assert resolve_worker_root("other_mock", "KR", default, env) == default
 
     def test_partial_route_fails_closed(self):

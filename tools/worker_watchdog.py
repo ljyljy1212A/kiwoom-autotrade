@@ -29,18 +29,41 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
-from dotenv import load_dotenv
 
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+def _initialize_watchdog_dependencies():
+    """Bind the checkout and dotenv before importing runtime-dependent modules."""
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.core.atomic_write import atomic_write_json
-from src import worker_supervisor
-from src.core.process_inventory import query_win32_processes
-from src.core.runtime_paths import DATA_DIR, LOG_DIR
-from src.utils.logger import get_logger
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+    from src.core.atomic_write import atomic_write_json
+    from src import worker_supervisor
+    from src.core.worker_launch_policy import (
+        WorkerLaunchPolicyError,
+        maintenance_scope,
+        require_launch_resumed,
+    )
+    from src.core.worker_launch_routes import WorkerLaunchRouteError, resolve_worker_root
+    from src.core.process_inventory import query_win32_processes
+    from src.core.runtime_paths import DATA_DIR, LOG_DIR
+    from src.utils.logger import get_logger
+
+    return (
+        atomic_write_json, worker_supervisor, WorkerLaunchPolicyError,
+        maintenance_scope, require_launch_resumed, WorkerLaunchRouteError,
+        resolve_worker_root, query_win32_processes, DATA_DIR, LOG_DIR, get_logger,
+    )
+
+
+(
+    atomic_write_json, worker_supervisor, WorkerLaunchPolicyError,
+    maintenance_scope, require_launch_resumed, WorkerLaunchRouteError,
+    resolve_worker_root, query_win32_processes, DATA_DIR, LOG_DIR, get_logger,
+) = _initialize_watchdog_dependencies()
 
 WATCHDOG_LOG = get_logger("watchdog", str(LOG_DIR / "watchdog.log"))
 WATCHDOG_STATE = DATA_DIR / "watchdog_state.json"
@@ -311,6 +334,15 @@ def check_and_restart(account: str, market: str) -> None:
     if MONITORED_ACCOUNTS.get(account) != market:
         WATCHDOG_LOG.error(f"[{account}] rejected unallowlisted watchdog target for market {market!r}")
         return
+    if maintenance_scope(account, market):
+        try:
+            require_launch_resumed(DATA_DIR)
+            resolve_worker_root(account, market, worker_supervisor.ROOT)
+        except (WorkerLaunchPolicyError, WorkerLaunchRouteError) as exc:
+            # Maintenance is launch eligibility, not a worker crash. Preserve
+            # counters/incidents and avoid notifications or repair attempts.
+            WATCHDOG_LOG.info(f"[{account}] relaunch policy blocked: {exc}")
+            return
     state = _load_state()
     account_state = _account_state(state, account)
     try:

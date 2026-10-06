@@ -32,6 +32,13 @@ from src.core.worker_launch_routes import (
     worker_route_environment_keys,
 )
 from src.core.account_catalog import is_real_account
+from src.core.worker_launch_policy import (
+    WorkerLaunchPolicyError,
+    change_maintenance,
+    launch_policy_lock,
+    maintenance_scope,
+    require_launch_resumed,
+)
 from src.utils.logger import get_logger
 
 
@@ -420,9 +427,18 @@ def start(account: str, market: str) -> tuple[int, dict]:
     guard = _reject_real_account(account)
     if guard is not None:
         return guard
+    launch_environment = os.environ.copy() if maintenance_scope(account, market) else None
+    if maintenance_scope(account, market):
+        try:
+            require_launch_resumed(DATA_DIR)
+        except WorkerLaunchPolicyError as exc:
+            return 10, {
+                "account": account, "market": market, "started": False,
+                "reason": "worker-launch-policy-blocked", "detail": str(exc),
+            }
     try:
-        worker_root = resolve_worker_root(account, market, ROOT)
-        routed = worker_root != ROOT or worker_route_configured(account, market)
+        worker_root = resolve_worker_root(account, market, ROOT, environ=launch_environment)
+        routed = worker_root != ROOT or worker_route_configured(account, market, launch_environment)
     except WorkerLaunchRouteError as exc:
         return 9, {
             "account": account,
@@ -440,7 +456,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
         return 3, {**current, "started": False, "reason": "already-running"}
 
     launch_id = uuid.uuid4().hex
-    env = os.environ.copy()
+    env = launch_environment.copy() if launch_environment is not None else os.environ.copy()
     env["ACCOUNT_FILTER"] = account
     env["MARKET_INSTANCE"] = market
     env["KIWOOM_SUPERVISOR_LAUNCH_ID"] = launch_id
@@ -466,7 +482,7 @@ def start(account: str, market: str) -> tuple[int, dict]:
         # Keep account state and logs in this supervisor's existing data area
         # while loading worker code from the explicitly pinned source root.
         route_keys = worker_route_environment_keys(account, market)
-        expected_revision = os.environ.get(route_keys[1], "").strip() if route_keys else ""
+        expected_revision = env.get(route_keys[1], "").strip() if route_keys else ""
         if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_revision):
             return 9, {
                 "account": account,
@@ -504,10 +520,31 @@ def start(account: str, market: str) -> tuple[int, dict]:
         # -P removes cwd from the module search path; explicit PYTHONPATH selects
         # the verified code while retaining the existing worker process signature.
         command = [sys.executable, "-P", "-m", "src.main", "--market", market]
-    child = subprocess.Popen(
-        command,
-        **popen_kwargs,
-    )
+    child = None
+    try:
+        if maintenance_scope(account, market):
+            # Serialize the final policy/route check and spawn with pause/resume.
+            # Release before waiting for the child's startup acknowledgement.
+            with launch_policy_lock(DATA_DIR):
+                require_launch_resumed(DATA_DIR)
+                verified_root = resolve_worker_root(account, market, ROOT, environ=env)
+                if verified_root != worker_root:
+                    raise WorkerLaunchRouteError("worker launch route changed before spawn")
+                child = subprocess.Popen(command, **popen_kwargs)
+        else:
+            child = subprocess.Popen(command, **popen_kwargs)
+    except WorkerLaunchPolicyError as exc:
+        return 10, {
+            "account": account, "market": market, "started": False,
+            "reason": "worker-launch-policy-blocked", "detail": str(exc),
+            "spawned": child is not None,
+            "pid": child.pid if child is not None else None,
+        }
+    except WorkerLaunchRouteError as exc:
+        return 9, {
+            "account": account, "market": market, "started": False,
+            "reason": "worker-launch-route-invalid", "detail": str(exc),
+        }
     # ``src.main`` claims its OS account mutex and publishes PID/status
     # metadata before the launcher can acknowledge success.  Imports,
     # configuration loading, and a prior worker's shutdown can make that
@@ -708,21 +745,53 @@ def kill(account: str):
     final_st = status(account)
     return (0 if stopped else 6), {**final_st, "mode": "killed", "stopped": stopped}
             
+def maintenance(
+    account: str, market: str, *, paused: bool,
+    reason: str, expected_generation: str | None = None,
+) -> tuple[int, dict]:
+    """Change launch eligibility only; never start or stop an existing worker."""
+    if not maintenance_scope(account, market):
+        return 10, {"account": account, "market": market, "changed": False,
+                    "reason": "maintenance-action-scope-invalid"}
+    try:
+        payload = change_maintenance(
+            account, market, DATA_DIR, state="PAUSED" if paused else "RESUMED",
+            reason=reason, expected_generation=expected_generation,
+        )
+    except (WorkerLaunchPolicyError, OSError) as exc:
+        return 10, {"account": account, "market": market, "changed": None,
+                    "reason": "maintenance-action-unresolved",
+                    "detail": str(exc) if isinstance(exc, WorkerLaunchPolicyError) else type(exc).__name__}
+    return 0, {**payload, "changed": True, "workerAction": "none"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Single-account Kiwoom worker supervisor")
-    parser.add_argument("action", choices=("start", "stop", "kill", "status"))
+    parser.add_argument("action", choices=("start", "stop", "kill", "status", "pause", "resume"))
     parser.add_argument("--account", required=True)
     parser.add_argument("--market", choices=("KR", "US"), required=True)
+    parser.add_argument("--reason")
+    parser.add_argument("--expected-generation")
     args = parser.parse_args()
     account = args.account.strip()
     if not account:
         parser.error("--account must not be empty")
+    if args.action not in ("pause", "resume") and (
+        args.reason is not None or args.expected_generation is not None
+    ):
+        parser.error("maintenance options require pause or resume")
     if args.action == "status":
         code, payload = 0, status(account)
     elif args.action == "start":
         code, payload = start(account, args.market)
     elif args.action == "stop":
         code, payload = stop(account)
+    elif args.action in ("pause", "resume"):
+        code, payload = maintenance(
+            account, args.market, paused=args.action == "pause",
+            reason=args.reason or "operator-maintenance",
+            expected_generation=args.expected_generation,
+        )
     else:
         code, payload = kill(account)
 
